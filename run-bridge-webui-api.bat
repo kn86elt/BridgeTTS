@@ -1,4 +1,5 @@
 @echo off
+@chcp 932 >nul
 set PORT=8001
 echo [INFO] ポート %PORT% で起動します...
 
