@@ -851,6 +851,79 @@ def post_tts_config_api(data: dict = Body(...)):
 
 
 # ══════════════════════════════════════════════════════
+#  吹き出し再生成 API (文章分割 + バッチTTS)
+# ══════════════════════════════════════════════════════
+
+class TtsRegenRequest(BaseModel):
+    text: str
+
+@app.post("/tts_regen")
+def tts_regen(req: TtsRegenRequest):
+    """テキストをsettingsの文章数に従って分割・バッチキューに積み req_id を返す。
+    フロントエンドは /audio_poll/{req_id} でポーリングして音声を受け取る。"""
+    if not state.selected:
+        raise HTTPException(400, "キャラクターが選択されていません")
+    voice_path = state.selected.get("voice_path")
+    if not voice_path:
+        raise HTTPException(400, "音声ファイルが設定されていません")
+
+    text = req.text.strip()
+    if not text:
+        raise HTTPException(400, "テキストが空です")
+
+    settings = load_settings()
+    tts_batch_size: int = settings.get("tts_batch_size", 0)
+
+    req_id = f"regen_{int(time.time() * 1000)}"
+    with finished_audios_lock:
+        finished_audios[req_id] = {"audios": [], "queued": 0, "completed": 0}
+
+    # ── 文章分割 (stream_llm_with_tts と同じロジック) ──
+    split_pat = re.compile(r'(?<=[。！？\?!])(?!\s*' + EMOJI_PAT.pattern + r')')
+    parts = split_pat.split(text)
+    sentences: list[str] = []
+    if len(parts) > 1:
+        merged: list[str] = []
+        for i, part in enumerate(parts[:-1]):
+            suffix_match = re.match(r'\s*' + EMOJI_PAT.pattern, parts[i + 1]) if i + 1 < len(parts) else None
+            if suffix_match and suffix_match.group().strip():
+                part = part + suffix_match.group()
+                parts[i + 1] = parts[i + 1][suffix_match.end():]
+            merged.append(part)
+        sentences = [s for s in merged if s.strip()]
+        if parts[-1].strip():
+            sentences.append(parts[-1])
+    else:
+        sentences = [text]
+
+    # ── バッチキューに積む ──
+    def enqueue_batch(chunk: list[str]):
+        combined = "".join(chunk)
+        s = clean_for_tts(combined)
+        if len(s) > 1:
+            enqueue_tts(s, voice_path, req_id)
+
+    if tts_batch_size == 0:
+        enqueue_batch(sentences)
+    else:
+        while len(sentences) >= tts_batch_size:
+            enqueue_batch(sentences[:tts_batch_size])
+            sentences = sentences[tts_batch_size:]
+        if sentences:
+            enqueue_batch(sentences)
+
+    with finished_audios_lock:
+        queued = finished_audios[req_id]["queued"]
+
+    if queued == 0:
+        with finished_audios_lock:
+            finished_audios.pop(req_id, None)
+        raise HTTPException(500, "TTSキューへの登録に失敗しました")
+
+    return JSONResponse({"req_id": req_id})
+
+
+# ══════════════════════════════════════════════════════
 #  音声エクスポート / ファイルを場所で開く API
 # ══════════════════════════════════════════════════════
 

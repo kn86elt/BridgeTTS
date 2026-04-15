@@ -1698,29 +1698,21 @@ function finalizeReplayBtn(footer, spinner, collectedAudio, textEl, hasVoice = f
     const text = textEl ? textEl.textContent.trim() : '';
     if (!text) return;
     regenBtn.disabled = true;
+    exportCache.data = null;        // エクスポートキャッシュを無効化
+    collectedAudio.length = 0;      // 旧音声をクリア
     if (spinner) spinner.style.display = 'flex';
     try {
-      const res = await fetch(`${API}/tts_direct`, {
+      const res = await fetch(`${API}/tts_regen`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
       });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const data = await res.json();
-      if (data.audio) {
-        exportCache.data = null;  // 再生成でキャッシュを無効化
-        const url = 'data:audio/wav;base64,' + data.audio;
-        collectedAudio.length = 0;
-        collectedAudio.push(url);
-        unlockAudio();
-        audioQueue.push(url);
-        playNextAudio();
-        // 失敗から回復した場合: ⋯ と ▶ を追加
-        if (failMode) _appendMenuAndPlay(footer, collectedAudio, textEl, exportCache);
-      }
+      if (!res.ok) { const d = await res.json().catch(()=>({})); throw new Error(d.detail || 'HTTP '+res.status); }
+      const { req_id } = await res.json();
+      // ポーリングで音声を受け取る（完了後にspinner非表示・ボタン再有効化）
+      _pollRegenAudio(req_id, collectedAudio, spinner, regenBtn, footer, textEl, failMode, exportCache);
     } catch(e) {
       showErrorToast('\u518D\u751F\u6210\u30A8\u30E9\u30FC: ' + e.message);
-    } finally {
       regenBtn.disabled = false;
       if (spinner) spinner.style.display = 'none';
     }
@@ -1757,6 +1749,35 @@ function startAudioPolling(reqId, footer, spinner, collectedAudio, textEl, hasVo
   }
 
   activePolls.set(reqId, null);
+  poll();
+}
+
+/* ↻ 再生成専用ポーリング
+   既存ボタンはそのまま残し、音声だけ入れ替える。
+   failMode=true かつ成功時は ⋯ と ▶ を追加する。 */
+function _pollRegenAudio(reqId, collectedAudio, spinner, regenBtn, footer, textEl, wasFailMode, exportCache) {
+  async function poll() {
+    try {
+      const res  = await fetch(`${API}/audio_poll/${reqId}`);
+      const data = await res.json();
+      for (const b64 of data.audios) {
+        const url = 'data:audio/wav;base64,' + b64;
+        collectedAudio.push(url);
+        audioQueue.push(url);
+        playNextAudio();
+      }
+      if (data.finished) {
+        regenBtn.disabled = false;
+        if (spinner) spinner.style.display = 'none';
+        // 失敗→回復: ⋯ と ▶ を追加
+        if (wasFailMode && collectedAudio.length > 0) {
+          _appendMenuAndPlay(footer, collectedAudio, textEl, exportCache);
+        }
+        return;
+      }
+    } catch(e) { console.warn('regen poll error:', e); }
+    setTimeout(poll, 300);
+  }
   poll();
 }
 
