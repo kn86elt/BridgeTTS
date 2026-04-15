@@ -27,7 +27,7 @@ TTS_CONFIG_FILE = "tts_config.json"   # TTS詳細設定の外部ファイル
 PROMPTS_DIR = "prompts"
 
 DEFAULT_SETTINGS = {
-    "tts_batch_size": 2,      # TTSに投げる文章数 (0=すべて)
+    "tts_batch_size": 0,      # TTSに投げる文章数 (0=すべて)
     "dark_mode": False,
     "blur_mode": True,
     "tts_enabled": True,
@@ -63,6 +63,11 @@ LLM_API_KEY = "lm-studio"
 
 # irodori.TTSの設定
 TTS_API_URL = os.getenv("TTS_API_URL", "http://localhost:7862/")
+
+# ── ランタイム接続設定 (再起動で失われる一時設定) ──────────────────────────
+# 起動時のデフォルト値を保持しておく
+_DEFAULT_LLM_API_URL = LLM_API_URL
+_DEFAULT_TTS_API_URL = TTS_API_URL
 
 # その他の設定
 CHAR_DIR        = "characters"
@@ -576,7 +581,7 @@ def stream_llm_with_tts(messages: list, tts_enabled: bool):
         finished_audios[req_id] = {"audios": [], "queued": 0, "completed": 0}
 
     settings = load_settings()
-    tts_batch_size: int = settings.get("tts_batch_size", 2)  # 0=すべて
+    tts_batch_size: int = settings.get("tts_batch_size", 0)  # 0=すべて
 
     full_answer = ""
     llm_buffer = ""
@@ -843,6 +848,121 @@ def post_tts_config_api(data: dict = Body(...)):
     global TTS_CONFIG
     TTS_CONFIG = current
     return JSONResponse({"status": "ok"})
+
+
+# ══════════════════════════════════════════════════════
+#  音声エクスポート / ファイルを場所で開く API
+# ══════════════════════════════════════════════════════
+
+EXPORTS_DIR = "exports"
+
+class TtsExportRequest(BaseModel):
+    text: str
+
+@app.post("/tts_export")
+def tts_export(req: TtsExportRequest):
+    """テキストをTTSで一括生成しWAVファイルとして保存。音声b64・ファイルパス・ファイル名を返す。"""
+    if not state.selected:
+        raise HTTPException(400, "キャラクターが選択されていません")
+    voice_path = state.selected.get("voice_path")
+    if not voice_path:
+        raise HTTPException(400, "音声ファイルが設定されていません")
+
+    text = clean_for_tts(req.text.strip())
+    if not text:
+        raise HTTPException(400, "テキストが空です")
+
+    audio_b64 = generate_and_encode_tts(text, voice_path)
+    if audio_b64 is None:
+        raise HTTPException(500, "TTS生成に失敗しました")
+
+    os.makedirs(EXPORTS_DIR, exist_ok=True)
+    char_name = re.sub(r'[\\/:*?"<>| ]', '_', state.selected.get("name", "unknown"))
+    timestamp  = int(time.time() * 1000)
+    filename   = f"{char_name}_{timestamp}.wav"
+    filepath   = os.path.join(EXPORTS_DIR, filename)
+
+    wav_bytes = base64.b64decode(audio_b64)
+    with open(filepath, "wb") as f:
+        f.write(wav_bytes)
+
+    abs_path = os.path.abspath(filepath)
+    return JSONResponse({"audio": audio_b64, "filename": filename, "filepath": abs_path})
+
+
+@app.get("/tts_export/{filename}")
+def download_tts_export(filename: str):
+    """保存済みエクスポートWAVをブラウザにダウンロードさせる"""
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(400, "Invalid filename")
+    filepath = os.path.join(EXPORTS_DIR, filename)
+    if not os.path.exists(filepath):
+        raise HTTPException(404, "File not found")
+    return FileResponse(filepath, media_type="audio/wav", filename=filename)
+
+
+class OpenLocationRequest(BaseModel):
+    filepath: str
+
+@app.post("/open_file_location")
+def open_file_location(req: OpenLocationRequest):
+    """サーバーホスト上のOSファイルマネージャーで指定ファイルを選択した状態で開く"""
+    filepath = req.filepath
+    if not os.path.exists(filepath):
+        raise HTTPException(404, "File not found")
+    try:
+        import platform
+        system = platform.system()
+        if system == "Windows":
+            subprocess.Popen(f'explorer /select,"{filepath}"', shell=True)
+        elif system == "Darwin":
+            subprocess.Popen(["open", "-R", filepath])
+        else:
+            subprocess.Popen(["xdg-open", os.path.dirname(filepath)])
+        return JSONResponse({"status": "ok"})
+    except Exception as e:
+        raise HTTPException(500, f"Failed to open file location: {e}")
+
+
+# ══════════════════════════════════════════════════════
+#  接続設定 API (一時的・再起動で失われる)
+# ══════════════════════════════════════════════════════
+
+@app.get("/api_config")
+def get_api_config():
+    """現在のランタイム接続設定を返す (デフォルト値も含む)"""
+    return JSONResponse({
+        "llm_api_url":         LLM_API_URL,
+        "tts_api_url":         TTS_API_URL,
+        "default_llm_api_url": _DEFAULT_LLM_API_URL,
+        "default_tts_api_url": _DEFAULT_TTS_API_URL,
+    })
+
+
+@app.post("/api_config")
+def post_api_config(data: dict = Body(...)):
+    """接続先URLをランタイムで変更する。ファイルには保存しない。"""
+    global LLM_API_URL, TTS_API_URL, client, tts_client
+
+    changed = []
+
+    new_llm = data.get("llm_api_url", "").strip()
+    if new_llm and new_llm != LLM_API_URL:
+        LLM_API_URL = new_llm
+        # OpenAI クライアントを再生成
+        client = OpenAI(base_url=LLM_API_URL, api_key=LLM_API_KEY)
+        changed.append("llm_api_url")
+        print(f"[API Config] LLM_API_URL -> {LLM_API_URL}")
+
+    new_tts = data.get("tts_api_url", "").strip()
+    if new_tts and new_tts != TTS_API_URL:
+        TTS_API_URL = new_tts
+        # TTS クライアントをリセット (次回 get_tts_client() 呼び出しで再接続)
+        tts_client = None
+        changed.append("tts_api_url")
+        print(f"[API Config] TTS_API_URL -> {TTS_API_URL}")
+
+    return JSONResponse({"status": "ok", "changed": changed})
 
 
 # ══════════════════════════════════════════════════════

@@ -299,22 +299,48 @@ body { background: var(--body-gradient); }
 .tts-spinner span:nth-child(2) { animation-delay: .15s; }
 .tts-spinner span:nth-child(3) { animation-delay: .30s; }
 
-/* 再生ボタン */
-.replay-btn {
+/* 再生ボタン / 再生成ボタン / メニューボタン 共通 */
+.replay-btn, .regen-btn, .bubble-menu-btn {
   width: 18px; height: 18px; border-radius: 50%;
   border: 1px solid var(--accent2);
   background: transparent;
   color: var(--accent2);
   cursor: pointer;
   display: flex; align-items: center; justify-content: center;
-  font-size: 8px;
+  font-size: 9px;
   padding: 0;
   opacity: 0.7;
   transition: opacity .2s, background .2s;
   flex-shrink: 0;
   line-height: 1;
 }
-.replay-btn:hover { opacity: 1; background: rgba(249,168,212,0.2); }
+.replay-btn { font-size: 8px; }
+.replay-btn:hover, .regen-btn:hover, .bubble-menu-btn:hover {
+  opacity: 1; background: rgba(249,168,212,0.2);
+}
+.regen-btn:disabled { opacity: 0.3; cursor: default; pointer-events: none; }
+
+/* 吹き出しドロップダウン */
+.bubble-dropdown {
+  position: fixed;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.35);
+  z-index: 500;
+  overflow: hidden;
+  min-width: 160px;
+}
+.bubble-dropdown-item {
+  padding: 9px 14px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px; color: var(--text);
+  cursor: pointer;
+  transition: background .15s;
+  display: flex; align-items: center; gap: 8px;
+  white-space: nowrap;
+}
+.bubble-dropdown-item:hover { background: var(--card-hover); color: var(--accent2); }
 
 .cursor {
   display: inline-block; width: 2px; height: 1em;
@@ -780,10 +806,144 @@ body { background: var(--body-gradient); }
   #messages { padding: 12px; gap: 12px; }
   #char-image-area { display: none; }
 }
+
+/* ══════════════════════════════
+   サイドバーフッター (環境設定ボタン)
+══════════════════════════════ */
+#sidebar-footer {
+  flex-shrink: 0;
+  height: var(--input-h);
+  padding: 0 12px;
+  border-top: 1px solid var(--border);
+  background: var(--sidebar-bg);
+  display: flex; align-items: center;
+}
+#env-btn {
+  width: 100%; text-align: left;
+  background: none; border: 1px solid var(--border);
+  border-radius: 6px; padding: 7px 10px;
+  color: var(--muted); font-size: 11px; cursor: pointer;
+  font-family: 'Share Tech Mono', monospace; letter-spacing: .05em;
+  transition: border-color .2s, color .2s, background .2s;
+}
+#env-btn:hover { border-color: var(--accent2); color: var(--accent2); background: var(--card-hover); }
+
+/* ══════════════════════════════
+   接続設定モーダル (一時的)
+══════════════════════════════ */
+
+#api-config-backdrop {
+  display: none; position: fixed; inset: 0; z-index: 200;
+  background: rgba(0,0,0,0.55); backdrop-filter: blur(4px);
+  align-items: center; justify-content: center;
+}
+#api-config-backdrop.open { display: flex; }
+
+#api-config-modal {
+  width: min(480px, 95vw);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px; overflow: hidden;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.4);
+}
+#api-config-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 13px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--header-bg);
+}
+#api-config-header .modal-title {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 13px; color: var(--accent2); letter-spacing: .1em;
+}
+#api-config-close {
+  background: none; border: none; cursor: pointer;
+  color: var(--muted); font-size: 18px; line-height: 1;
+  padding: 2px 6px; border-radius: 4px; transition: color .2s;
+}
+#api-config-close:hover { color: var(--text); }
+
+#api-config-body {
+  padding: 20px 20px 8px;
+  display: flex; flex-direction: column; gap: 16px;
+}
+.api-field-label {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px; color: var(--muted); letter-spacing: .1em;
+  margin-bottom: 5px; text-transform: uppercase;
+}
+.api-field-note {
+  font-size: 10px; color: var(--muted); margin-top: 4px;
+}
+.api-field-input {
+  width: 100%;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px; padding: 8px 10px;
+  color: var(--text);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 12px; outline: none;
+  transition: border-color .2s;
+}
+.api-field-input:focus { border-color: var(--accent2); }
+.api-field-row {
+  display: flex; gap: 8px; align-items: flex-end;
+}
+.api-field-row .api-field-input { flex: 1; }
+.api-port-input { width: 80px; flex-shrink: 0; }
+
+#api-config-notice {
+  font-size: 10px; color: var(--muted);
+  padding: 0 20px 12px;
+  border-top: none;
+  line-height: 1.7;
+}
+
+#api-config-footer {
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+  display: flex; justify-content: flex-end; gap: 8px;
+  background: var(--sidebar-bg);
+}
 </style>
 </head>
 <body>
 <div id="toast-container"></div>
+
+<!-- ══════════════════════════════
+     接続設定モーダル (一時的・再起動で失われる)
+══════════════════════════════ -->
+<div id="api-config-backdrop">
+  <div id="api-config-modal">
+    <div id="api-config-header">
+      <span class="modal-title">🔌 API接続設定 (一時的)</span>
+      <button id="api-config-close">✕</button>
+    </div>
+    <div id="api-config-body">
+      <!-- LLM API URL -->
+      <div>
+        <div class="api-field-label">LLM API URL</div>
+        <input class="api-field-input" id="ac-llm-url" type="text" placeholder="http://localhost:1234/v1">
+        <div class="api-field-note">例: http://localhost:1234/v1 &nbsp;/&nbsp; http://192.168.1.10:1234/v1</div>
+      </div>
+      <!-- TTS API URL -->
+      <div>
+        <div class="api-field-label">TTS API URL</div>
+        <input class="api-field-input" id="ac-tts-url" type="text" placeholder="http://localhost:7862/">
+        <div class="api-field-note">例: http://localhost:7862/ &nbsp;/&nbsp; http://192.168.1.10:7862/</div>
+      </div>
+    </div>
+    <div id="api-config-notice">
+      ⚠ この設定は <strong>再起動すると失われます</strong>。永続化が必要な場合は環境変数
+      <code>LLM_API_URL</code> / <code>TTS_API_URL</code> を設定してください。
+    </div>
+    <div id="api-config-footer">
+      <button class="modal-btn secondary" id="ac-reset-btn">デフォルトに戻す</button>
+      <button class="modal-btn secondary" id="ac-cancel-btn">キャンセル</button>
+      <button class="modal-btn primary" id="ac-apply-btn">適用</button>
+    </div>
+  </div>
+</div>
 
 <!-- ══════════════════════════════
      キャラクター作成/編集 モーダル
@@ -886,18 +1046,16 @@ body { background: var(--body-gradient); }
   <!-- Sidebar -->
   <aside id="sidebar">
     <div id="char-panel">
-      <div class="sidebar-label">キャラクター</div>
       <div class="sidebar-controls">
 
         <!-- ── システムプロンプトセクション ── -->
-        <div class="sidebar-section-label">システムプロンプト</div>
         <button id="sys-prompt-btn">
           ⚙ プロンプト設定
           <span class="sys-active-name" id="sys-active-label"></span>
         </button>
 
         <!-- ── 音声セクション ── -->
-        <div class="sidebar-section-label" style="border-top:none; margin-top:0; padding-top:2px;">音声</div>
+        <div class="sidebar-section-label">音声</div>
         <label class="ctrl-label" id="tts-ctrl-label">
           <input type="checkbox" id="tts-toggle" checked>
           <span>音声出力</span>
@@ -926,11 +1084,15 @@ body { background: var(--body-gradient); }
         </div>
 
       </div>
+      <div class="sidebar-label">キャラクター</div>
       <div id="char-list"></div>
       <button id="new-char-btn">＋ 新規キャラクター...</button>
     </div>
     <div id="char-image-area">
       <img id="char-big-img" alt="character">
+    </div>
+    <div id="sidebar-footer">
+      <button id="env-btn">⚙ 環境設定</button>
     </div>
   </aside>
 
@@ -971,6 +1133,7 @@ const API = '';  // 同一オリジン
 let selectedIndex    = null;
 let selectedName     = '';
 let selectedImageUrl = null;
+let selectedHasVoice = false;
 let isGenerating     = false;
 let audioQueue       = [];
 let isAudioPlaying   = false;
@@ -1425,28 +1588,152 @@ function playNextAudio() {
 const activePolls = new Map();
 
 /* ══════════════════════════════
-   再生ボタンの確定 (スピナー → ▶ ボタン)
+   再生ボタンの確定 (スピナー → ボタン群)
+   ボタン順(左→右): ⋯ メニュー / ↻ 再生成 / ▶ 再生
+   ttsAttempted=true かつ音声ゼロ → 失敗扱いで ↻ のみ表示
 ══════════════════════════════ */
-function finalizeReplayBtn(footer, spinner, collectedAudio) {
-  if (!footer) return;
-  if (spinner) spinner.style.display = 'none';
 
-  if (collectedAudio.length === 0) return;  // 音声なし → ボタン不要
+// ── エクスポート実行ヘルパー (データ受け取り型) ──
+async function _doDownload(data) {
+  if (!data || !data.audio || !data.filename) return;
+  const wav  = Uint8Array.from(atob(data.audio), c => c.charCodeAt(0));
+  const blob = new Blob([wav], { type: 'audio/wav' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = data.filename; a.click();
+  URL.revokeObjectURL(url);
+  showErrorToast('\u2713 \u30C0\u30A6\u30F3\u30ED\u30FC\u30C9\u5B8C\u4E86', 'success');
+}
+async function _doOpenLocation(data) {
+  if (!data || !data.filepath) return;
+  const res = await fetch(`${API}/open_file_location`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filepath: data.filepath }),
+  });
+  if (!res.ok) { const d = await res.json().catch(()=>({})); throw new Error(d.detail || 'HTTP '+res.status); }
+  showErrorToast('\u2713 \u30D5\u30A1\u30A4\u30EB\u3092\u958B\u304D\u307E\u3057\u305F', 'success');
+}
 
-  const btn = document.createElement('button');
-  btn.className = 'replay-btn';
-  btn.title = '音声を再生';
-  btn.textContent = '\u25B6';  // ▶
-  btn.addEventListener('click', () => {
+// ⋯ メニューと ▶ 再生ボタンを footer に追加するヘルパー
+// exportCache = { data: null } を吹き出しごとに共有し、生成済みなら再利用する
+function _appendMenuAndPlay(footer, collectedAudio, textEl, exportCache) {
+  // ⋯ メニューボタン
+  const menuBtn = document.createElement('button');
+  menuBtn.className = 'bubble-menu-btn';
+  menuBtn.title = 'その他';
+  menuBtn.textContent = '\u22EF';
+  let activeBubbleDd = null;
+
+  // キャッシュ付きエクスポート取得
+  async function getExport() {
+    if (exportCache.data) return exportCache.data;  // キャッシュヒット
+    exportCache.data = await _generateExport(textEl);
+    return exportCache.data;
+  }
+
+  menuBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    if (activeBubbleDd) { activeBubbleDd.remove(); activeBubbleDd = null; return; }
+    const dd = document.createElement('div');
+    dd.className = 'bubble-dropdown';
+    const items = [
+      { icon: '\u2B07',       label: '\u30C0\u30A6\u30F3\u30ED\u30FC\u30C9',
+        action: async () => { try { await _doDownload(await getExport()); } catch(e) { showErrorToast('\u30A8\u30E9\u30FC: '+e.message); } } },
+      { icon: '\uD83D\uDCC2', label: '\u30D5\u30A1\u30A4\u30EB\u306E\u5834\u6240\u3092\u958B\u304F',
+        action: async () => { try { await _doOpenLocation(await getExport()); } catch(e) { showErrorToast('\u30A8\u30E9\u30FC: '+e.message); } } },
+    ];
+    items.forEach(item => {
+      const el = document.createElement('div');
+      el.className = 'bubble-dropdown-item';
+      el.innerHTML = `<span>${item.icon}</span><span>${item.label}</span>`;
+      el.addEventListener('click', ev => {
+        ev.stopPropagation();
+        dd.remove(); activeBubbleDd = null;
+        item.action();
+      });
+      dd.appendChild(el);
+    });
+    const rect = menuBtn.getBoundingClientRect();
+    dd.style.right  = (window.innerWidth  - rect.right)  + 'px';
+    dd.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
+    document.body.appendChild(dd);
+    activeBubbleDd = dd;
+    const close = () => { if (dd.parentNode) { dd.remove(); activeBubbleDd = null; } document.removeEventListener('click', close); };
+    setTimeout(() => document.addEventListener('click', close), 0);
+  });
+  footer.insertBefore(menuBtn, footer.firstChild);  // 先頭に挿入
+
+  // ▶ 再生ボタン
+  const playBtn = document.createElement('button');
+  playBtn.className = 'replay-btn';
+  playBtn.title = '音声を再生';
+  playBtn.textContent = '\u25B6';
+  playBtn.addEventListener('click', () => {
     unlockAudio();
-    // 音声を全部キューに積んで再生
     for (const url of collectedAudio) audioQueue.push(url);
     playNextAudio();
   });
-  footer.appendChild(btn);
+  footer.appendChild(playBtn);
 }
 
-function startAudioPolling(reqId, footer, spinner, collectedAudio) {
+function finalizeReplayBtn(footer, spinner, collectedAudio, textEl, hasVoice = false) {
+  if (!footer) return;
+  if (spinner) spinner.style.display = 'none';
+
+  // 音声なしモデル かつ 音声未生成 → ボタン不要
+  if (collectedAudio.length === 0 && !hasVoice) return;
+
+  // この吹き出し専用のエクスポートキャッシュ
+  const exportCache = { data: null };
+
+  // ── ↻ 再生成ボタン (常に追加) ──
+  const regenBtn = document.createElement('button');
+  regenBtn.className = 'regen-btn';
+  regenBtn.title = '音声を再生成 (一括)';
+  regenBtn.textContent = '\u21BB';
+  const failMode = collectedAudio.length === 0;  // 音声なし(失敗 or TTS無効)時は ↻ のみ
+
+  regenBtn.addEventListener('click', async () => {
+    const text = textEl ? textEl.textContent.trim() : '';
+    if (!text) return;
+    regenBtn.disabled = true;
+    if (spinner) spinner.style.display = 'flex';
+    try {
+      const res = await fetch(`${API}/tts_direct`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      if (data.audio) {
+        exportCache.data = null;  // 再生成でキャッシュを無効化
+        const url = 'data:audio/wav;base64,' + data.audio;
+        collectedAudio.length = 0;
+        collectedAudio.push(url);
+        unlockAudio();
+        audioQueue.push(url);
+        playNextAudio();
+        // 失敗から回復した場合: ⋯ と ▶ を追加
+        if (failMode) _appendMenuAndPlay(footer, collectedAudio, textEl, exportCache);
+      }
+    } catch(e) {
+      showErrorToast('\u518D\u751F\u6210\u30A8\u30E9\u30FC: ' + e.message);
+    } finally {
+      regenBtn.disabled = false;
+      if (spinner) spinner.style.display = 'none';
+    }
+  });
+  footer.appendChild(regenBtn);
+
+  // 音声あり → ⋯ と ▶ も追加 (同じキャッシュを共有)
+  if (collectedAudio.length > 0) {
+    _appendMenuAndPlay(footer, collectedAudio, textEl, exportCache);
+  }
+}
+
+function startAudioPolling(reqId, footer, spinner, collectedAudio, textEl, hasVoice = true) {
   if (!reqId || activePolls.has(reqId)) return;
 
   async function poll() {
@@ -1462,7 +1749,7 @@ function startAudioPolling(reqId, footer, spinner, collectedAudio) {
       }
       if (data.finished) {
         activePolls.delete(reqId);
-        finalizeReplayBtn(footer, spinner, collectedAudio);
+        finalizeReplayBtn(footer, spinner, collectedAudio, textEl, true /* hasVoice */);
         return;
       }
     } catch(e) { console.warn('poll error:', e); }
@@ -1560,6 +1847,7 @@ async function selectCharacter(idx, name, hasImage, hasVoice) {
   selectedIndex    = idx;
   selectedName     = name;
   selectedImageUrl = hasImage ? `${API}/characters/${idx}/image` : null;
+  selectedHasVoice = !!hasVoice;
 
   if (!hasVoice) {
     $ttsToggle.checked  = false;
@@ -1737,6 +2025,7 @@ async function sendMessage() {
   $input.value = '';
 
   const ttsEnabled = $ttsToggle ? $ttsToggle.checked : false;
+  const hasVoice   = selectedHasVoice;  // 生成開始時点でキャプチャ
 
   // ── 直接TTSモード ──
   if ($directTtsToggle.checked) {
@@ -1749,7 +2038,6 @@ async function sendMessage() {
       setStatus('loading', 'TTS生成中...');
       if (charRefs.spinner) charRefs.spinner.style.display = 'flex';
 
-      const req_id = `direct_${Date.now()}`;
       try {
         const res = await fetch(`${API}/tts_direct`, {
           method: 'POST',
@@ -1762,19 +2050,22 @@ async function sendMessage() {
             const url = 'data:audio/wav;base64,' + data.audio;
             audioQueue.push(url);
             playNextAudio();
-            finalizeReplayBtn(charRefs.footer, charRefs.spinner, [url]);
+            finalizeReplayBtn(charRefs.footer, charRefs.spinner, [url], charRefs.textEl, hasVoice);
           } else {
-            if (charRefs.spinner) charRefs.spinner.style.display = 'none';
+            finalizeReplayBtn(charRefs.footer, charRefs.spinner, [], charRefs.textEl, hasVoice);
           }
         } else {
-          if (charRefs.spinner) charRefs.spinner.style.display = 'none';
+          finalizeReplayBtn(charRefs.footer, charRefs.spinner, [], charRefs.textEl, hasVoice);
         }
       } catch(e) {
         showErrorToast('直接TTS失敗: ' + e.message);
-        if (charRefs.spinner) charRefs.spinner.style.display = 'none';
+        finalizeReplayBtn(charRefs.footer, charRefs.spinner, [], charRefs.textEl, hasVoice);
       }
       isGenerating = false;
       setStatus('active', `${selectedName} と接続中`);
+    } else {
+      // TTS無効でも音声ありモデルなら ↻ 表示
+      finalizeReplayBtn(charRefs.footer, charRefs.spinner, [], charRefs.textEl, hasVoice);
     }
     return;
   }
@@ -1811,9 +2102,9 @@ async function sendMessage() {
     $input.focus();
 
     if (reqId) {
-      startAudioPolling(reqId, footer, spinner, collectedAudio);
+      startAudioPolling(reqId, footer, spinner, collectedAudio, charRefs.textEl, hasVoice);
     } else {
-      finalizeReplayBtn(footer, spinner, collectedAudio);
+      finalizeReplayBtn(footer, spinner, collectedAudio, charRefs.textEl, hasVoice);
       $ttsInd.classList.remove('show');
     }
   } catch(e) {
@@ -1835,6 +2126,7 @@ async function runInitialGreeting(ttsEnabled) {
 
   isGenerating = true;
   setStatus('loading', '挨拶生成中...');
+  const hasVoice = selectedHasVoice;  // キャプチャ
 
   const charRefs = appendMessage('char', selectedName, selectedImageUrl);
   const cursor = document.createElement('span');
@@ -1849,9 +2141,9 @@ async function runInitialGreeting(ttsEnabled) {
     $sendBtn.disabled = false;
     setStatus('active', `${selectedName} と接続中`);
     if (reqId) {
-      startAudioPolling(reqId, footer, spinner, collectedAudio);
+      startAudioPolling(reqId, footer, spinner, collectedAudio, charRefs.textEl, hasVoice);
     } else {
-      finalizeReplayBtn(footer, spinner, collectedAudio);
+      finalizeReplayBtn(footer, spinner, collectedAudio, charRefs.textEl, hasVoice);
       $ttsInd.classList.remove('show');
     }
   } catch(e) {
@@ -2046,6 +2338,111 @@ async function duplicateChar(idx) {
     showErrorToast('複製エラー: ' + e.message);
   }
 }
+
+/* ══════════════════════════════
+   音声エクスポート関数
+══════════════════════════════ */
+async function _generateExport(textEl) {
+  const text = textEl ? textEl.textContent.trim() : '';
+  if (!text) { showErrorToast('テキストがありません'); return null; }
+  showErrorToast('WAV生成中...');
+  try {
+    const res = await fetch(`${API}/tts_export`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.detail || 'HTTP ' + res.status);
+    }
+    return await res.json();  // { audio, filename, filepath }
+  } catch(e) {
+    showErrorToast('エクスポートエラー: ' + e.message);
+    return null;
+  }
+}
+
+
+/* ══════════════════════════════
+   接続設定モーダル (一時的)
+══════════════════════════════ */
+const $apiConfigBackdrop = document.getElementById('api-config-backdrop');
+const $apiConfigClose    = document.getElementById('api-config-close');
+const $acLlmUrl          = document.getElementById('ac-llm-url');
+const $acTtsUrl          = document.getElementById('ac-tts-url');
+const $acApplyBtn        = document.getElementById('ac-apply-btn');
+const $acCancelBtn       = document.getElementById('ac-cancel-btn');
+const $acResetBtn        = document.getElementById('ac-reset-btn');
+
+// デフォルト値キャッシュ (最初のGETで取得)
+let _apiConfigDefaults = { llm_api_url: '', tts_api_url: '' };
+
+async function openApiConfigModal() {
+  try {
+    const res = await fetch(`${API}/api_config`);
+    if (res.ok) {
+      const d = await res.json();
+      _apiConfigDefaults = { llm_api_url: d.default_llm_api_url, tts_api_url: d.default_tts_api_url };
+      $acLlmUrl.value = d.llm_api_url || '';
+      $acTtsUrl.value = d.tts_api_url || '';
+      // プレースホルダーにデフォルト値を反映
+      $acLlmUrl.placeholder = d.default_llm_api_url || 'http://localhost:1234/v1';
+      $acTtsUrl.placeholder = d.default_tts_api_url || 'http://localhost:7862/';
+    }
+  } catch(e) {
+    console.warn('[ApiConfig] Failed to load:', e);
+  }
+  $apiConfigBackdrop.classList.add('open');
+}
+
+function closeApiConfigModal() {
+  $apiConfigBackdrop.classList.remove('open');
+}
+
+document.getElementById('env-btn').addEventListener('click', () => {
+  closeSidebar();
+  openApiConfigModal();
+});
+$apiConfigClose.addEventListener('click', closeApiConfigModal);
+$acCancelBtn.addEventListener('click', closeApiConfigModal);
+$apiConfigBackdrop.addEventListener('click', e => { if (e.target === $apiConfigBackdrop) closeApiConfigModal(); });
+
+// デフォルトに戻す
+$acResetBtn.addEventListener('click', () => {
+  $acLlmUrl.value = _apiConfigDefaults.llm_api_url || '';
+  $acTtsUrl.value = _apiConfigDefaults.tts_api_url || '';
+});
+
+// 適用
+$acApplyBtn.addEventListener('click', async () => {
+  const llm = $acLlmUrl.value.trim();
+  const tts = $acTtsUrl.value.trim();
+  if (!llm && !tts) { closeApiConfigModal(); return; }
+
+  const payload = {};
+  if (llm) payload.llm_api_url = llm;
+  if (tts) payload.tts_api_url = tts;
+
+  try {
+    const res = await fetch(`${API}/api_config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const d = await res.json();
+    const changed = d.changed || [];
+    if (changed.length > 0) {
+      showErrorToast(`✓ 接続先を変更しました (${changed.join(', ')})`, 'success');
+    } else {
+      showErrorToast('変更なし', 'success');
+    }
+    closeApiConfigModal();
+  } catch(e) {
+    showErrorToast('適用エラー: ' + e.message);
+  }
+});
 </script>
 </body>
 </html>
