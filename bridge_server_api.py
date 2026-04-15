@@ -66,7 +66,7 @@ TTS_API_URL = os.getenv("TTS_API_URL", "http://localhost:7862/")
 
 # その他の設定
 CHAR_DIR        = "characters"
-BASE_PROMPT_FILE = "base_system_prompt.txt"
+BASE_PROMPT_FILE = os.path.join(PROMPTS_DIR, "base_system_prompt.txt")
 MAX_HISTORY     = 10
 WINDOW_WIDTH    = 300
 
