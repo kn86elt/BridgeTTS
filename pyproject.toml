@@ -1,0 +1,18 @@
+[project]
+name = "bridge-webui"
+version = "0.1.0"
+description = "LM Studio + Irodori-TTS WebUI チャットアプリ"
+requires-python = ">=3.10"
+
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
+    "openai>=1.30.0",
+    "gradio-client>=0.16.0",
+    "Pillow>=10.0.0",
+    "pydantic>=2.0.0",
+    "pygame>=2.5.0",
+]
+
+[dependency-groups]
+dev = []
