@@ -572,7 +572,14 @@ body { background: var(--body-gradient); }
   font-size: 11px; color: var(--accent); cursor: pointer;
   user-select: none; flex: 1;
 }
-#sys-after-char-label input { accent-color: var(--accent); width: 13px; height: 13px; }
+#sys-after-char-label input,
+#sys-slot-and-file-label input { accent-color: var(--accent); width: 13px; height: 13px; }
+#sys-slot-and-file-label {
+  display: flex; align-items: center; gap: 6px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px; color: var(--accent); cursor: pointer;
+  user-select: none;
+}
 .modal-btn {
   padding: 7px 18px; border-radius: 6px;
   font-family: 'Share Tech Mono', monospace;
@@ -604,6 +611,155 @@ body { background: var(--body-gradient); }
 @keyframes bar    { 0%,100%{height:4px} 50%{height:12px} }
 
 /* ══════════════════════════════
+   キャラクター作成/編集 モーダル
+══════════════════════════════ */
+#char-edit-backdrop {
+  display: none;
+  position: fixed; inset: 0; z-index: 300;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(4px);
+  align-items: center; justify-content: center;
+}
+#char-edit-backdrop.open { display: flex; }
+#char-edit-modal {
+  width: min(480px, 95vw);
+  max-height: 90vh;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.5);
+}
+#char-edit-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--header-bg);
+  flex-shrink: 0;
+}
+#char-edit-header .modal-title {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 13px; color: var(--accent); letter-spacing: .1em;
+}
+#char-edit-close {
+  background: none; border: none; cursor: pointer;
+  color: var(--muted); font-size: 18px; line-height: 1;
+  padding: 2px 6px; border-radius: 4px; transition: color .2s;
+}
+#char-edit-close:hover { color: var(--text); }
+#char-edit-body {
+  flex: 1; overflow-y: auto;
+  padding: 18px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.ce-field { display: flex; flex-direction: column; gap: 5px; }
+.ce-label {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px; color: var(--accent); letter-spacing: .08em;
+}
+.ce-input {
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: 'Noto Sans JP', sans-serif;
+  font-size: 13px;
+  padding: 8px 10px;
+  outline: none;
+  transition: border-color .2s;
+  width: 100%;
+}
+.ce-input:focus { border-color: var(--accent); }
+.ce-textarea {
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 12px; line-height: 1.6;
+  padding: 10px 12px;
+  resize: vertical; outline: none;
+  min-height: 120px;
+  transition: border-color .2s;
+  width: 100%;
+}
+.ce-textarea:focus { border-color: var(--accent); }
+.ce-file-row {
+  display: flex; align-items: center; gap: 8px;
+}
+.ce-file-label {
+  flex: 1;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ce-file-btn {
+  padding: 5px 12px; border-radius: 5px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px; cursor: pointer;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  transition: all .2s; flex-shrink: 0;
+}
+.ce-file-btn:hover { border-color: var(--accent); color: var(--accent); }
+#char-edit-footer {
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+  display: flex; justify-content: flex-end; gap: 8px;
+  background: var(--sidebar-bg); flex-shrink: 0;
+}
+
+/* キャラカードの … ボタン */
+.char-card-menu-btn {
+  margin-left: auto;
+  background: none; border: none;
+  color: var(--muted); cursor: pointer;
+  font-size: 14px; padding: 2px 5px;
+  border-radius: 4px; flex-shrink: 0;
+  line-height: 1; transition: color .2s, background .2s;
+  display: none;
+}
+.char-card:hover .char-card-menu-btn,
+.char-card.active .char-card-menu-btn { display: block; }
+.char-card-menu-btn:hover { color: var(--accent); background: var(--card-hover); }
+
+/* キャラカードドロップダウン */
+.char-card-dropdown {
+  position: absolute; z-index: 100;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+  overflow: hidden;
+  min-width: 120px;
+}
+.char-card-dropdown-item {
+  padding: 9px 14px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px; color: var(--text);
+  cursor: pointer; transition: background .15s;
+  display: flex; align-items: center; gap: 7px;
+}
+.char-card-dropdown-item:hover { background: var(--card-hover); color: var(--accent); }
+
+/* 新規キャラボタン */
+#new-char-btn {
+  width: 100%; padding: 8px 10px;
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px; letter-spacing: .08em;
+  cursor: pointer; text-align: center;
+  transition: all .2s;
+  margin-top: 4px;
+}
+#new-char-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--card-hover); }
+
+/* ══════════════════════════════
    モバイル対応 (600px 以下)
 ══════════════════════════════ */
 @media (max-width: 600px) {
@@ -630,6 +786,48 @@ body { background: var(--body-gradient); }
 <div id="toast-container"></div>
 
 <!-- ══════════════════════════════
+     キャラクター作成/編集 モーダル
+══════════════════════════════ -->
+<div id="char-edit-backdrop">
+  <div id="char-edit-modal">
+    <div id="char-edit-header">
+      <span class="modal-title" id="char-edit-title">✦ NEW CHARACTER</span>
+      <button id="char-edit-close" style="display:none">✕</button>
+    </div>
+    <div id="char-edit-body">
+      <div class="ce-field">
+        <label class="ce-label">キャラクター名</label>
+        <input type="text" class="ce-input" id="ce-name" placeholder="例: Alice">
+      </div>
+      <div class="ce-field">
+        <label class="ce-label">プロンプト</label>
+        <textarea class="ce-textarea" id="ce-prompt" placeholder="キャラクターの性格・設定を入力..."></textarea>
+      </div>
+      <div class="ce-field">
+        <label class="ce-label">画像ファイル (.png / .jpg / .webp)</label>
+        <div class="ce-file-row">
+          <span class="ce-file-label" id="ce-image-label">未選択</span>
+          <button class="ce-file-btn" id="ce-image-btn">選択</button>
+          <input type="file" id="ce-image-input" accept="image/png,image/jpeg,image/webp" style="display:none">
+        </div>
+      </div>
+      <div class="ce-field">
+        <label class="ce-label">音声ファイル (.wav) — 話者サンプル</label>
+        <div class="ce-file-row">
+          <span class="ce-file-label" id="ce-voice-label">未選択</span>
+          <button class="ce-file-btn" id="ce-voice-btn">選択</button>
+          <input type="file" id="ce-voice-input" accept="audio/wav" style="display:none">
+        </div>
+      </div>
+    </div>
+    <div id="char-edit-footer">
+      <button class="modal-btn secondary" id="char-edit-cancel">キャンセル</button>
+      <button class="modal-btn primary" id="char-edit-ok">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════
      システムプロンプト モーダル
 ══════════════════════════════ -->
 <div id="sys-modal-backdrop">
@@ -653,10 +851,16 @@ body { background: var(--body-gradient); }
       </div>
     </div>
     <div id="sys-modal-footer">
-      <label id="sys-after-char-label">
-        <input type="checkbox" id="sys-after-char">
-        <span>キャラクタープロンプトの後ろにシステムプロンプトを読み込ませる</span>
-      </label>
+      <div style="display:flex;flex-direction:column;gap:6px;flex:1;">
+        <label id="sys-after-char-label">
+          <input type="checkbox" id="sys-after-char">
+          <span>キャラクタープロンプトの後ろにシステムプロンプトを読み込ませる</span>
+        </label>
+        <label id="sys-slot-and-file-label">
+          <input type="checkbox" id="sys-slot-and-file">
+          <span>スロットとファイルを同時に適用する</span>
+        </label>
+      </div>
       <button class="modal-btn save-slot" id="sys-save-slot-btn">スロット保存</button>
       <button class="modal-btn secondary" id="sys-cancel-btn">キャンセル</button>
       <button class="modal-btn primary" id="sys-ok-btn">OK</button>
@@ -723,6 +927,7 @@ body { background: var(--body-gradient); }
 
       </div>
       <div id="char-list"></div>
+      <button id="new-char-btn">＋ 新規キャラクター...</button>
     </div>
     <div id="char-image-area">
       <img id="char-big-img" alt="character">
@@ -803,9 +1008,10 @@ const $sysFileItems  = document.getElementById('sys-file-items');
 const $sysSlotItems  = document.getElementById('sys-slot-items');
 const $sysPreviewFn  = document.getElementById('sys-preview-filename');
 const $sysPreviewTxt = document.getElementById('sys-preview-text');
-const $sysAfterChar  = document.getElementById('sys-after-char');
-const $sysSaveSlot   = document.getElementById('sys-save-slot-btn');
-const $sysActiveLabel= document.getElementById('sys-active-label');
+const $sysAfterChar    = document.getElementById('sys-after-char');
+const $sysSlotAndFile  = document.getElementById('sys-slot-and-file');
+const $sysSaveSlot     = document.getElementById('sys-save-slot-btn');
+const $sysActiveLabel  = document.getElementById('sys-active-label');
 
 /* ══════════════════════════════
    iOS Audio Unlock
@@ -897,6 +1103,9 @@ function applySettings(s) {
     $ttsBatch.value = s.tts_batch_size;
   }
   // システムプロンプト設定の反映
+  if (s.slot_and_file !== undefined) {
+    $sysSlotAndFile.checked = !!s.slot_and_file;
+  }
   updateSysActiveLabel(s);
 }
 
@@ -955,15 +1164,27 @@ $directTtsToggle.addEventListener('change', () => {
 let sysModalSelection = { type: null, value: null }; // type: 'file'|'slot', value: filename|slotIndex
 let sysModalSlotDirty = false;
 
+function fileDisplayName(fname) {
+  if (fname === '__base__') return 'base (default)';
+  return (fname || '').replace(/\.txt$/, '');
+}
+
 function updateSysActiveLabel(s) {
   if (!s) return;
-  const slot = s.active_user_slot;
+  const slot  = s.active_user_slot;
   const slots = s.user_slots || [];
   const fname = s.system_prompt_file || '';
-  if (typeof slot === 'number' && slot >= 0 && slots[slot] && slots[slot].trim()) {
+  const slotAndFile = !!s.slot_and_file;
+
+  const hasSlot = typeof slot === 'number' && slot >= 0 && slots[slot] && slots[slot].trim();
+  const hasFile = !!fname;
+
+  if (slotAndFile && hasSlot && hasFile) {
+    $sysActiveLabel.textContent = `${fileDisplayName(fname)} + [スロット${slot + 1}]`;
+  } else if (hasSlot) {
     $sysActiveLabel.textContent = `[スロット${slot + 1}]`;
-  } else if (fname) {
-    $sysActiveLabel.textContent = fname.replace(/\.txt$/, '');
+  } else if (hasFile) {
+    $sysActiveLabel.textContent = fileDisplayName(fname);
   } else {
     $sysActiveLabel.textContent = '';
   }
@@ -977,7 +1198,8 @@ async function openSysModal() {
     settings = await r.json();
   } catch(e) {}
 
-  $sysAfterChar.checked = !!settings.system_prompt_after_char;
+  $sysAfterChar.checked    = !!settings.system_prompt_after_char;
+  $sysSlotAndFile.checked   = !!settings.slot_and_file;
 
   // ファイル一覧
   let files = [];
@@ -994,7 +1216,8 @@ async function openSysModal() {
   files.forEach(fname => {
     const el = document.createElement('div');
     el.className = 'sys-file-item';
-    el.textContent = fname;
+    el.textContent = fileDisplayName(fname);
+    el.dataset.fname = fname;
     const isActive = settings.active_user_slot === -1 && settings.system_prompt_file === fname;
     if (isActive) {
       el.classList.add('selected');
@@ -1006,7 +1229,7 @@ async function openSysModal() {
       try {
         const r = await fetch(`${API}/prompts/${encodeURIComponent(fname)}`);
         const d = await r.json();
-        $sysPreviewFn.textContent = fname;
+        $sysPreviewFn.textContent = fileDisplayName(fname);
         $sysPreviewTxt.value = d.content;
         $sysPreviewTxt.setAttribute('readonly', '');
         $sysSaveSlot.style.display = 'none';
@@ -1041,8 +1264,24 @@ async function openSysModal() {
     $sysSlotItems.appendChild(el);
   });
 
-  // 選択なし状態の場合プレビューリセット
-  if (!sysModalSelection.type) {
+  // 選択済みアイテムのプレビューを即表示
+  if (sysModalSelection.type === 'file') {
+    // 選択中ファイルの内容を即ロード
+    try {
+      const r = await fetch(`${API}/prompts/${encodeURIComponent(sysModalSelection.value)}`);
+      const d = await r.json();
+      $sysPreviewFn.textContent = fileDisplayName(sysModalSelection.value);
+      $sysPreviewTxt.value = d.content;
+      $sysPreviewTxt.setAttribute('readonly', '');
+      $sysSaveSlot.style.display = 'none';
+    } catch(e) { $sysPreviewTxt.value = '[読み込み失敗]'; }
+  } else if (sysModalSelection.type === 'slot') {
+    const slotIdx = sysModalSelection.value;
+    $sysPreviewFn.textContent = `ユーザースロット ${slotIdx + 1}`;
+    $sysPreviewTxt.value = slots[slotIdx] || '';
+    $sysPreviewTxt.removeAttribute('readonly');
+    $sysSaveSlot.style.display = '';
+  } else {
     $sysPreviewFn.textContent = 'ファイルを選択してください';
     $sysPreviewTxt.value = '';
     $sysPreviewTxt.setAttribute('readonly', '');
@@ -1064,25 +1303,30 @@ async function commitSysModal() {
     await saveCurrentSlot();
   }
 
-  const afterChar = $sysAfterChar.checked;
+  const afterChar    = $sysAfterChar.checked;
+  const slotAndFile  = $sysSlotAndFile.checked;
   await saveSetting('system_prompt_after_char', afterChar);
+  await saveSetting('slot_and_file', slotAndFile);
 
   if (sysModalSelection.type === 'file') {
     await saveSetting('system_prompt_file', sysModalSelection.value);
     await saveSetting('active_user_slot', -1);
   } else if (sysModalSelection.type === 'slot') {
     await saveSetting('active_user_slot', sysModalSelection.value);
-    await saveSetting('system_prompt_file', '');
+    // slot_and_file=true の場合はファイル選択を維持、false の場合はクリア
+    if (!slotAndFile) {
+      await saveSetting('system_prompt_file', '');
+    }
   } else {
     await saveSetting('system_prompt_file', '');
     await saveSetting('active_user_slot', -1);
   }
 
-  $sysActiveLabel.textContent = sysModalSelection.type === 'file'
-    ? (sysModalSelection.value || '').replace(/\.txt$/, '')
-    : sysModalSelection.type === 'slot'
-    ? `[スロット${sysModalSelection.value + 1}]`
-    : '';
+  // ラベル更新のため設定を再取得
+  try {
+    const r = await fetch(`${API}/settings`);
+    updateSysActiveLabel(await r.json());
+  } catch(e) { updateSysActiveLabel({}); }
 
   $sysBackdrop.classList.remove('open');
 
@@ -1271,6 +1515,7 @@ async function loadCharacters() {
       const card = document.createElement('div');
       card.className = 'char-card';
       card.dataset.index = c.index;
+      card.style.position = 'relative';
 
       const avatarHtml = c.has_image
         ? `<img src="${API}/characters/${c.index}/image" alt="${c.name}">`
@@ -1278,12 +1523,24 @@ async function loadCharacters() {
 
       card.innerHTML = `
         <div class="char-avatar">${avatarHtml}</div>
-        <div style="display:flex;flex-direction:column;justify-content:center;">
+        <div style="display:flex;flex-direction:column;justify-content:center;flex:1;min-width:0;">
           <div class="char-name">${c.name}</div>
           <div class="${subClass}">${subText}</div>
-        </div>`;
+        </div>
+        <button class="char-card-menu-btn" title="オプション" data-idx="${c.index}">•••</button>`;
 
-      card.addEventListener('click', () => selectCharacter(c.index, c.name, c.has_image, hasVoice));
+      card.addEventListener('click', e => {
+        if (e.target.closest('.char-card-menu-btn')) return;
+        selectCharacter(c.index, c.name, c.has_image, hasVoice);
+      });
+
+      // … ボタンクリック
+      const menuBtn = card.querySelector('.char-card-menu-btn');
+      menuBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        openCharCardMenu(e, c.index);
+      });
+
       $charList.appendChild(card);
     });
 
@@ -1531,8 +1788,10 @@ async function sendMessage() {
   isGenerating = true;
   setStatus('loading', '生成中...');
 
-  const { textEl: userTextEl } = appendMessage('user', 'あなた', null);
-  userTextEl.textContent = text.trim() || '（空送信）';
+  if (text.trim()) {
+    const { textEl: userTextEl } = appendMessage('user', 'あなた', null);
+    userTextEl.textContent = text.trim();
+  }
 
   const charRefs = appendMessage('char', selectedName, selectedImageUrl);
   const cursor = document.createElement('span');
@@ -1629,10 +1888,11 @@ $sendBtn.addEventListener('click', () => { unlockAudio(); sendMessage(); });
 /* ══════════════════════════════
    Toast
 ══════════════════════════════ */
-function showErrorToast(message) {
+function showErrorToast(message, type = 'error') {
   const container = document.getElementById('toast-container');
   const toast = document.createElement('div');
   toast.className = 'toast';
+  if (type === 'success') toast.style.background = 'rgba(34,197,94,0.9)';
   toast.textContent = message;
   container.appendChild(toast);
   requestAnimationFrame(() => toast.classList.add('show'));
@@ -1646,6 +1906,151 @@ function showErrorToast(message) {
    起動
 ══════════════════════════════ */
 loadSettings().then(() => loadCharacters());
+
+/* ══════════════════════════════
+   キャラクター作成/編集モーダル
+══════════════════════════════ */
+let charEditMode   = 'create'; // 'create' | 'edit'
+let charEditTarget = null;     // 編集対象のindex
+
+const $ceBackdrop = document.getElementById('char-edit-backdrop');
+const $ceTitle    = document.getElementById('char-edit-title');
+const $ceName     = document.getElementById('ce-name');
+const $cePrompt   = document.getElementById('ce-prompt');
+const $ceImageLbl = document.getElementById('ce-image-label');
+const $ceImageInp = document.getElementById('ce-image-input');
+const $ceVoiceLbl = document.getElementById('ce-voice-label');
+const $ceVoiceInp = document.getElementById('ce-voice-input');
+
+document.getElementById('ce-image-btn').addEventListener('click', () => $ceImageInp.click());
+document.getElementById('ce-voice-btn').addEventListener('click', () => $ceVoiceInp.click());
+$ceImageInp.addEventListener('change', () => {
+  $ceImageLbl.textContent = $ceImageInp.files[0]?.name || '未選択';
+});
+$ceVoiceInp.addEventListener('change', () => {
+  $ceVoiceLbl.textContent = $ceVoiceInp.files[0]?.name || '未選択';
+});
+
+function openCharEditModal(mode, idx = null) {
+  charEditMode   = mode;
+  charEditTarget = idx;
+  $ceName.value     = '';
+  $cePrompt.value   = '';
+  $ceImageLbl.textContent = '未選択';
+  $ceVoiceLbl.textContent = '未選択';
+  $ceImageInp.value = '';
+  $ceVoiceInp.value = '';
+
+  if (mode === 'create') {
+    $ceTitle.textContent = '✦ NEW CHARACTER';
+  } else {
+    $ceTitle.textContent = '✦ EDIT CHARACTER';
+    // 既存データを取得してフォームに反映
+    fetch(`${API}/characters/${idx}/info`)
+      .then(r => r.json())
+      .then(d => {
+        $ceName.value   = d.name;
+        $cePrompt.value = d.prompt;
+        if (d.has_image) $ceImageLbl.textContent = '（既存ファイル）';
+        if (d.has_voice) $ceVoiceLbl.textContent = '（既存ファイル）';
+      })
+      .catch(() => {});
+  }
+
+  $ceBackdrop.classList.add('open');
+}
+
+document.getElementById('char-edit-cancel').addEventListener('click', () => $ceBackdrop.classList.remove('open'));
+
+document.getElementById('char-edit-ok').addEventListener('click', async () => {
+  const name   = $ceName.value.trim();
+  const prompt = $cePrompt.value.trim();
+  if (!name)   { showErrorToast('キャラクター名を入力してください'); return; }
+  if (!prompt) { showErrorToast('プロンプトを入力してください'); return; }
+
+  const fd = new FormData();
+  fd.append('name',   name);
+  fd.append('prompt', prompt);
+  if ($ceImageInp.files[0]) fd.append('image', $ceImageInp.files[0]);
+  if ($ceVoiceInp.files[0]) fd.append('voice', $ceVoiceInp.files[0]);
+
+  try {
+    let url = charEditMode === 'create'
+      ? `${API}/characters/create`
+      : `${API}/characters/${charEditTarget}/edit`;
+    const res = await fetch(url, { method: 'POST', body: fd });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      showErrorToast(d.detail || '保存に失敗しました');
+      return;
+    }
+    $ceBackdrop.classList.remove('open');
+    await loadCharacters();
+    showErrorToast('✓ 保存しました', 'success');
+  } catch(e) {
+    showErrorToast('通信エラー: ' + e.message);
+  }
+});
+
+// 新規キャラボタン
+document.getElementById('new-char-btn').addEventListener('click', () => openCharEditModal('create'));
+
+/* ── キャラカード … メニュー ── */
+let activeDropdown = null;
+
+function closeCharCardMenu() {
+  if (activeDropdown) { activeDropdown.remove(); activeDropdown = null; }
+}
+document.addEventListener('click', closeCharCardMenu);
+
+function openCharCardMenu(e, idx) {
+  e.stopPropagation();
+  closeCharCardMenu();
+
+  const dropdown = document.createElement('div');
+  dropdown.className = 'char-card-dropdown';
+
+  const items = [
+    { icon: '✏', label: '編集',   action: () => openCharEditModal('edit', idx) },
+    { icon: '⧉', label: '複製',   action: () => duplicateChar(idx) },
+  ];
+
+  items.forEach(item => {
+    const el = document.createElement('div');
+    el.className = 'char-card-dropdown-item';
+    el.innerHTML = `<span>${item.icon}</span><span>${item.label}</span>`;
+    el.addEventListener('click', e2 => {
+      e2.stopPropagation();
+      closeCharCardMenu();
+      item.action();
+    });
+    dropdown.appendChild(el);
+  });
+
+  // ボタン位置の直下に表示
+  const rect = e.currentTarget.getBoundingClientRect();
+  dropdown.style.position = 'fixed';
+  dropdown.style.top  = (rect.bottom + 4) + 'px';
+  dropdown.style.left = Math.max(4, rect.left - 60) + 'px';
+  document.body.appendChild(dropdown);
+  activeDropdown = dropdown;
+}
+
+async function duplicateChar(idx) {
+  try {
+    const res = await fetch(`${API}/characters/${idx}/duplicate`, { method: 'POST' });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      showErrorToast(d.detail || '複製に失敗しました');
+      return;
+    }
+    const d = await res.json();
+    await loadCharacters();
+    showErrorToast(`✓ 複製しました: ${d.name}`, 'success');
+  } catch(e) {
+    showErrorToast('複製エラー: ' + e.message);
+  }
+}
 </script>
 </body>
 </html>

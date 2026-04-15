@@ -1,6 +1,6 @@
 """
 bridge_server.py  –  WebUI版 bridge3.py
-依存: fastapi uvicorn openai pygame
+依存: fastapi uvicorn openai python-multipart
 
 起動:
     uvicorn bridge_server:app --host 0.0.0.0 --port 8000 --reload
@@ -9,7 +9,6 @@ bridge_server.py  –  WebUI版 bridge3.py
 import os, subprocess, time, re, threading, queue, asyncio, json, zipfile, shutil
 from pathlib import Path
 from openai import OpenAI
-import pygame
 from fastapi import FastAPI, HTTPException, Body
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,6 +22,7 @@ import base64
 
 # --- 設定ファイル ---
 SETTINGS_FILE = "bridge_settings.json"
+TTS_CONFIG_FILE = "tts_config.json"   # TTS詳細設定の外部ファイル
 
 PROMPTS_DIR = "prompts"
 
@@ -33,10 +33,11 @@ DEFAULT_SETTINGS = {
     "tts_enabled": True,
     "bg_enabled": True,
     # システムプロンプト設定
-    "system_prompt_file": "",       # 選択中のプロンプトファイル名 (prompts/ 配下)
+    "system_prompt_file": "__base__",   # 初回デフォルト = base_system_prompt.txt
     "system_prompt_after_char": False,  # True=キャラクタープロンプトの後ろにシステムプロンプトを配置
     "user_slots": ["", "", "", "", ""],  # ユーザー編集スロット x5
-    "active_user_slot": -1,         # 使用中のユーザースロット (-1=なし)
+    "active_user_slot": -1,             # 使用中のユーザースロット (-1=なし)
+    "slot_and_file": False,             # True=スロットとファイルを同時適用
 }
 
 def load_settings() -> dict:
@@ -60,7 +61,7 @@ LLM_API_URL = os.getenv("LLM_API_URL", "http://localhost:1234/v1")
 LLM_API_KEY = "lm-studio"
 
 
-# irodori.TTSの設定. 
+# irodori.TTSの設定
 TTS_API_URL = os.getenv("TTS_API_URL", "http://localhost:7862/")
 
 # その他の設定
@@ -70,22 +71,26 @@ MAX_HISTORY     = 10
 WINDOW_WIDTH    = 300
 
 
-# TTS詳細設定
-TTS_CONFIG = {
+# ── TTS詳細設定 (tts_config.json から読み込み) ────────────────────────────
+DEFAULT_TTS_CONFIG = {
+    # モデル設定
     "checkpoint": "Aratako/Irodori-TTS-500M-v2",
     "model_device": "cuda",
     "model_precision": "fp32",
     "codec_device": "cuda",
     "codec_precision": "fp32",
+    # 生成パラメータ
     "num_steps": 20,
     "num_candidates": 1,
     "seed_raw": "",
+    # CFG設定
     "cfg_guidance_mode": "independent",
     "cfg_scale_text": 3,
     "cfg_scale_speaker": 5,
     "cfg_scale_raw": "",
     "cfg_min_t": 0.5,
     "cfg_max_t": 1,
+    # キャッシュ / スケーリング
     "context_kv_cache": True,
     "truncation_factor_raw": "",
     "rescale_k_raw": "",
@@ -94,6 +99,29 @@ TTS_CONFIG = {
     "speaker_kv_min_t_raw": "0.9",
     "speaker_kv_max_layers_raw": "",
 }
+
+def load_tts_config() -> dict:
+    """tts_config.json を読み込む。なければデフォルトを書き出して返す。"""
+    if os.path.exists(TTS_CONFIG_FILE):
+        try:
+            with open(TTS_CONFIG_FILE, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+            # 新しいキーをデフォルトで補完
+            merged = {**DEFAULT_TTS_CONFIG, **saved}
+            return merged
+        except Exception as e:
+            print(f"[TTS Config] Failed to load {TTS_CONFIG_FILE}: {e}")
+    # ファイルがなければデフォルトを生成
+    save_tts_config(DEFAULT_TTS_CONFIG)
+    return dict(DEFAULT_TTS_CONFIG)
+
+def save_tts_config(data: dict):
+    with open(TTS_CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    print(f"[TTS Config] Saved to {TTS_CONFIG_FILE}")
+
+# 起動時に読み込み（グローバル変数として保持）
+TTS_CONFIG: dict = load_tts_config()
 
 
 # --- OpenAI クライアント ---
@@ -372,44 +400,66 @@ def crop_center(img):
 
 # --- システムプロンプト合成ヘルパー ---
 
-def _get_active_sys_prompt_text(settings: dict) -> str:
-    """設定からアクティブなシステムプロンプトテキストを返す"""
-    slot = settings.get("active_user_slot", -1)
-    slots = settings.get("user_slots", ["", "", "", "", ""])
-    if isinstance(slot, int) and 0 <= slot < len(slots):
-        text = slots[slot]
-        if text and text.strip():
-            return text.strip()
-
-    fname = settings.get("system_prompt_file", "")
-    if fname:
+def _read_file_prompt(fname: str) -> str:
+    """system_prompt_file の値からテキストを読んで返す。
+    '__base__' は base_system_prompt.txt を指す特別値。"""
+    if not fname:
+        return ""
+    if fname == "__base__":
+        fpath = BASE_PROMPT_FILE
+    else:
         fpath = os.path.join(PROMPTS_DIR, fname)
-        if os.path.exists(fpath):
-            try:
-                with open(fpath, "r", encoding="utf-8") as f:
-                    return f.read().strip()
-            except Exception:
-                pass
+    if os.path.exists(fpath):
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except Exception:
+            pass
     return ""
 
 
+def _get_active_sys_prompt_text(settings: dict) -> str:
+    """設定からアクティブなシステムプロンプトテキストを返す。
+
+    slot_and_file=True のとき: ファイル + スロットを両方返す（改行2つで連結）
+    slot_and_file=False のとき: スロットが有効ならスロットのみ、なければファイル
+    """
+    slot          = settings.get("active_user_slot", -1)
+    slots         = settings.get("user_slots", ["", "", "", "", ""])
+    fname         = settings.get("system_prompt_file", "")
+    slot_and_file = settings.get("slot_and_file", False)
+
+    slot_text = ""
+    if isinstance(slot, int) and 0 <= slot < len(slots):
+        slot_text = (slots[slot] or "").strip()
+
+    file_text = _read_file_prompt(fname)
+
+    if slot_and_file:
+        # 同時利用: ファイル → スロットの順で連結
+        parts = [t for t in [file_text, slot_text] if t]
+        return "\n\n".join(parts)
+    else:
+        # 従来動作: スロットが有効ならスロットだけ、なければファイル
+        if slot_text:
+            return slot_text
+        return file_text
+
+
 def _build_system_prompt(base_prompt: str, char_setting: str, settings: dict) -> str:
-    """base_prompt + char_setting + sys_prompt を設定順で合成する"""
-    sys_text = _get_active_sys_prompt_text(settings)
+    """sys_prompt + char_setting を設定順で合成する。
+    base_prompt 引数は後方互換のため残すが使用しない
+    （__base__ 選択時は _read_file_prompt 内で処理される）。"""
+    sys_text   = _get_active_sys_prompt_text(settings)
     after_char = settings.get("system_prompt_after_char", False)
 
     parts = []
-    if base_prompt:
-        parts.append(base_prompt)
-
     if after_char:
-        # キャラクター → システムプロンプト
         if char_setting:
             parts.append(char_setting)
         if sys_text:
             parts.append(sys_text)
     else:
-        # システムプロンプト → キャラクター (デフォルト)
         if sys_text:
             parts.append(sys_text)
         if char_setting:
@@ -448,27 +498,20 @@ def select_character(req: SelectRequest):
 
 @app.post("/update_system_prompt")
 def update_system_prompt():
-    """キャラクター変更なしでシステムプロンプトだけ再構築する。
-    会話履歴は保持し、先頭の system メッセージだけ差し替える。"""
+    """システムプロンプトを再構築し、会話履歴をリセットする。
+    LLMへ渡す履歴は system メッセージのみになるため文脈の汚染を防ぐ。
+    UI側のログ表示はフロントエンドが保持するため見た目は変化しない。"""
     if not state.selected:
         raise HTTPException(400, "キャラクターが選択されていません")
-
-    base_prompt = ""
-    if os.path.exists(BASE_PROMPT_FILE):
-        with open(BASE_PROMPT_FILE, "r", encoding="utf-8") as f:
-            base_prompt = f.read().strip()
 
     with open(state.selected["prompt"], "r", encoding="utf-8") as f:
         char_setting = f.read().strip()
 
     settings = load_settings()
-    sys_prompt_text = _build_system_prompt(base_prompt, char_setting, settings)
+    sys_prompt_text = _build_system_prompt("", char_setting, settings)
 
-    # 先頭の system ロールだけ差し替え（会話履歴は維持）
-    if state.memory and state.memory[0]["role"] == "system":
-        state.memory[0]["content"] = sys_prompt_text
-    else:
-        state.memory.insert(0, {"role": "system", "content": sys_prompt_text})
+    # 会話履歴を完全リセット（system メッセージのみ残す）
+    state.memory = [{"role": "system", "content": sys_prompt_text}]
 
     return {"status": "ok"}
 
@@ -524,9 +567,9 @@ EMOJI_PAT = re.compile(
 )
 
 def clean_for_tts(text: str) -> str:
-    """括弧内除去・絵文字除去・前後空白除去"""
+    """括弧内を除去するのみ。絵文字は元の位置のまま残す。
+    irodori-TTSは文末の絵文字に反応するため、位置を変えずそのまま渡す。"""
     s = re.sub(r'[\(（].*?[\)）]', '', text)
-    s = EMOJI_PAT.sub('', s)
     return s.strip()
 
 
@@ -761,18 +804,29 @@ def post_settings(data: dict = Body(...)):
 # --- プロンプトファイル一覧 ---
 @app.get("/prompts")
 def list_prompts():
-    """prompts/ フォルダ内の .txt ファイル一覧を返す"""
+    """プロンプトファイル一覧を返す。
+    先頭に __base__ (base_system_prompt.txt) を含む。"""
+    result = []
+    # base_system_prompt.txt を先頭に追加
+    if os.path.exists(BASE_PROMPT_FILE):
+        result.append("__base__")
     os.makedirs(PROMPTS_DIR, exist_ok=True)
     files = sorted([
         f for f in os.listdir(PROMPTS_DIR)
         if f.endswith(".txt") and os.path.isfile(os.path.join(PROMPTS_DIR, f))
     ])
-    return JSONResponse(files)
+    result.extend(files)
+    return JSONResponse(result)
 
 
 @app.get("/prompts/{filename}")
 def get_prompt(filename: str):
-    """プロンプトファイルの内容を返す"""
+    """プロンプトファイルの内容を返す。__base__ は base_system_prompt.txt を参照。"""
+    if filename == "__base__":
+        if not os.path.exists(BASE_PROMPT_FILE):
+            raise HTTPException(404, "base_system_prompt.txt not found")
+        with open(BASE_PROMPT_FILE, "r", encoding="utf-8") as f:
+            return JSONResponse({"filename": "__base__", "content": f.read()})
     # パストラバーサル防止
     if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(400, "Invalid filename")
@@ -780,5 +834,188 @@ def get_prompt(filename: str):
     if not os.path.exists(fpath):
         raise HTTPException(404, "File not found")
     with open(fpath, "r", encoding="utf-8") as f:
-        content = f.read()
-    return JSONResponse({"filename": filename, "content": content})
+        content_text = f.read()
+    return JSONResponse({"filename": filename, "content": content_text})
+
+
+# ══════════════════════════════════════════════════════
+#  TTS設定 API
+# ══════════════════════════════════════════════════════
+
+@app.get("/tts_config")
+def get_tts_config_api():
+    """TTS詳細設定を返す"""
+    return JSONResponse(load_tts_config())
+
+@app.post("/tts_config")
+def post_tts_config_api(data: dict = Body(...)):
+    """TTS詳細設定を保存する"""
+    current = load_tts_config()
+    current.update(data)
+    save_tts_config(current)
+    # グローバル変数も更新
+    global TTS_CONFIG
+    TTS_CONFIG = current
+    return JSONResponse({"status": "ok"})
+
+
+# ══════════════════════════════════════════════════════
+#  キャラクター作成 / 複製 / 編集 API
+#  形式: characters/<name>/ フォルダにtxt/wav/画像を格納
+# ══════════════════════════════════════════════════════
+
+from fastapi import UploadFile, File, Form
+from typing import Optional
+
+def _safe_char_name(name: str) -> str:
+    """フォルダ名として安全な文字列に変換"""
+    name = re.sub(r'[\\/:*?"<>|]', '_', name).strip()
+    if not name:
+        raise ValueError("キャラクター名が空です")
+    return name
+
+@app.post("/characters/create")
+async def create_character(
+    name: str = Form(...),
+    prompt: str = Form(...),
+    image: Optional[UploadFile] = File(None),
+    voice: Optional[UploadFile] = File(None),
+):
+    """新規キャラクターをサブフォルダ形式で作成する"""
+    safe_name = _safe_char_name(name)
+    char_dir = os.path.join(CHAR_DIR, safe_name)
+    if os.path.exists(char_dir):
+        raise HTTPException(400, f"キャラクター '{safe_name}' は既に存在します")
+    os.makedirs(char_dir, exist_ok=True)
+
+    # プロンプトファイル
+    txt_path = os.path.join(char_dir, safe_name + ".txt")
+    with open(txt_path, "w", encoding="utf-8") as f:
+        f.write(prompt)
+
+    # 画像ファイル
+    if image and image.filename:
+        ext = Path(image.filename).suffix.lower()
+        if ext not in [".png", ".jpg", ".jpeg", ".webp"]:
+            ext = ".png"
+        img_path = os.path.join(char_dir, safe_name + ext)
+        with open(img_path, "wb") as f:
+            f.write(await image.read())
+
+    # 音声ファイル
+    if voice and voice.filename:
+        wav_path = os.path.join(char_dir, safe_name + ".wav")
+        with open(wav_path, "wb") as f:
+            f.write(await voice.read())
+
+    return JSONResponse({"status": "ok", "name": safe_name})
+
+
+@app.post("/characters/{idx}/duplicate")
+def duplicate_character(idx: int):
+    """既存キャラクターを複製する"""
+    state.chars = get_dynamic_characters()
+    if idx < 0 or idx >= len(state.chars):
+        raise HTTPException(404, "キャラクターが見つかりません")
+
+    char = state.chars[idx]
+    src_dir = os.path.dirname(char["prompt"])
+
+    # 新しいフォルダ名を決定 (name_copy, name_copy2, ...)
+    base_name = _safe_char_name(char["name"].replace(" (音声なし)", ""))
+    new_name = base_name + "_copy"
+    counter = 2
+    while os.path.exists(os.path.join(CHAR_DIR, new_name)):
+        new_name = f"{base_name}_copy{counter}"
+        counter += 1
+
+    dest_dir = os.path.join(CHAR_DIR, new_name)
+
+    # フォルダをコピー
+    if os.path.isdir(src_dir) and src_dir != CHAR_DIR:
+        shutil.copytree(src_dir, dest_dir)
+        # ファイル名をフォルダ名に合わせてリネーム
+        for fname in os.listdir(dest_dir):
+            fpath = os.path.join(dest_dir, fname)
+            stem = Path(fname).stem
+            ext  = Path(fname).suffix
+            # 古いステム名と一致するファイルをリネーム
+            if stem == base_name and ext in [".txt", ".wav"] + IMAGE_EXTS:
+                os.rename(fpath, os.path.join(dest_dir, new_name + ext))
+    else:
+        # フラットファイルをコピーしてフォルダに移動
+        os.makedirs(dest_dir, exist_ok=True)
+        for ext in [".txt", ".wav"] + IMAGE_EXTS:
+            src = os.path.join(CHAR_DIR, base_name + ext)
+            if os.path.exists(src):
+                shutil.copy2(src, os.path.join(dest_dir, new_name + ext))
+
+    return JSONResponse({"status": "ok", "name": new_name})
+
+
+@app.get("/characters/{idx}/info")
+def get_character_info(idx: int):
+    """キャラクター情報（名前・プロンプト内容）を返す"""
+    state.chars = get_dynamic_characters()
+    if idx < 0 or idx >= len(state.chars):
+        raise HTTPException(404)
+    char = state.chars[idx]
+    prompt_text = ""
+    try:
+        with open(char["prompt"], "r", encoding="utf-8") as f:
+            prompt_text = f.read()
+    except Exception:
+        pass
+    return JSONResponse({
+        "name": char["name"].replace(" (音声なし)", ""),
+        "prompt": prompt_text,
+        "has_voice": char["has_voice"],
+        "has_image": char["image_path"] is not None,
+        "folder": os.path.basename(os.path.dirname(char["prompt"])),
+    })
+
+
+@app.post("/characters/{idx}/edit")
+async def edit_character(
+    idx: int,
+    name: str = Form(...),
+    prompt: str = Form(...),
+    image: Optional[UploadFile] = File(None),
+    voice: Optional[UploadFile] = File(None),
+):
+    """既存キャラクターの名前・プロンプト・画像・音声を更新する"""
+    state.chars = get_dynamic_characters()
+    if idx < 0 or idx >= len(state.chars):
+        raise HTTPException(404)
+
+    char = state.chars[idx]
+    old_name = char["name"].replace(" (音声なし)", "")
+    safe_name = _safe_char_name(name)
+    char_dir = os.path.dirname(char["prompt"])
+
+    # プロンプト更新
+    with open(char["prompt"], "w", encoding="utf-8") as f:
+        f.write(prompt)
+
+    # 画像更新
+    if image and image.filename:
+        # 旧画像を削除
+        if char["image_path"] and os.path.exists(char["image_path"]):
+            os.remove(char["image_path"])
+        ext = Path(image.filename).suffix.lower()
+        if ext not in [".png", ".jpg", ".jpeg", ".webp"]:
+            ext = ".png"
+        img_path = os.path.join(char_dir, Path(char["prompt"]).stem + ext)
+        with open(img_path, "wb") as f:
+            f.write(await image.read())
+
+    # 音声更新
+    if voice and voice.filename:
+        old_wav = char.get("voice_path")
+        if old_wav and os.path.exists(old_wav):
+            os.remove(old_wav)
+        wav_path = os.path.join(char_dir, Path(char["prompt"]).stem + ".wav")
+        with open(wav_path, "wb") as f:
+            f.write(await voice.read())
+
+    return JSONResponse({"status": "ok"})

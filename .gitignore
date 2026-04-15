@@ -1,0 +1,5 @@
+bridge_settings.json
+uv.lock
+__pycache__/
+.venv/
+*~
