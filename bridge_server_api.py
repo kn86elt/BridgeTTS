@@ -585,7 +585,7 @@ def stream_llm_with_tts(messages: list, tts_enabled: bool):
     full_answer = ""
     llm_buffer = ""
     # 句読点・感嘆符の後で分割。直後の絵文字は前トークンに含めるため後続絵文字をバッファへ残す
-    split_pat = re.compile(r'(?<=[。！？\?!])(?!' + EMOJI_PAT.pattern + r')')
+    split_pat = re.compile(r'(?<=[。！？\?!])(?!\s*' + EMOJI_PAT.pattern + r')')
 
     # バッチ用: 確定した文のリスト
     pending_sentences: list[str] = []
@@ -633,8 +633,9 @@ def stream_llm_with_tts(messages: list, tts_enabled: bool):
                     # 絵文字が続く場合は次のパーツの先頭絵文字を前のパーツに結合
                     merged: list[str] = []
                     for i, part in enumerate(parts[:-1]):
-                        suffix_match = EMOJI_PAT.match(parts[i + 1]) if i + 1 < len(parts) else None
-                        if suffix_match:
+                        # スペースを挟んだ絵文字も前の文に結合する
+                        suffix_match = re.match(r'\s*' + EMOJI_PAT.pattern, parts[i + 1]) if i + 1 < len(parts) else None
+                        if suffix_match and suffix_match.group().strip():
                             part = part + suffix_match.group()
                             # 次パーツから絵文字prefix を削除
                             parts[i + 1] = parts[i + 1][suffix_match.end():]
