@@ -33,7 +33,7 @@ DEFAULT_SETTINGS = {
     "tts_enabled": True,
     "bg_enabled": True,
     # システムプロンプト設定
-    "system_prompt_file": "__base__",   # 初回デフォルト = base_system_prompt.txt
+    "system_prompt_file": "base_system_prompt.txt",   # 初回デフォルト
     "system_prompt_after_char": False,  # True=キャラクタープロンプトの後ろにシステムプロンプトを配置
     "user_slots": ["", "", "", "", ""],  # ユーザー編集スロット x5
     "active_user_slot": -1,             # 使用中のユーザースロット (-1=なし)
@@ -401,14 +401,10 @@ def crop_center(img):
 # --- システムプロンプト合成ヘルパー ---
 
 def _read_file_prompt(fname: str) -> str:
-    """system_prompt_file の値からテキストを読んで返す。
-    '__base__' は base_system_prompt.txt を指す特別値。"""
+    """system_prompt_file の値からテキストを読んで返す。"""
     if not fname:
         return ""
-    if fname == "__base__":
-        fpath = BASE_PROMPT_FILE
-    else:
-        fpath = os.path.join(PROMPTS_DIR, fname)
+    fpath = os.path.join(PROMPTS_DIR, fname)
     if os.path.exists(fpath):
         try:
             with open(fpath, "r", encoding="utf-8") as f:
@@ -449,7 +445,7 @@ def _get_active_sys_prompt_text(settings: dict) -> str:
 def _build_system_prompt(base_prompt: str, char_setting: str, settings: dict) -> str:
     """sys_prompt + char_setting を設定順で合成する。
     base_prompt 引数は後方互換のため残すが使用しない
-    （__base__ 選択時は _read_file_prompt 内で処理される）。"""
+    sys_prompt と char_setting を設定順で合成する。"""
     sys_text   = _get_active_sys_prompt_text(settings)
     after_char = settings.get("system_prompt_after_char", False)
 
@@ -805,29 +801,18 @@ def post_settings(data: dict = Body(...)):
 # --- プロンプトファイル一覧 ---
 @app.get("/prompts")
 def list_prompts():
-    """プロンプトファイル一覧を返す。
-    先頭に __base__ (base_system_prompt.txt) を含む。"""
-    result = []
-    # base_system_prompt.txt を先頭に追加
-    if os.path.exists(BASE_PROMPT_FILE):
-        result.append("__base__")
+    """prompts/ フォルダ内の .txt ファイル一覧を返す。"""
     os.makedirs(PROMPTS_DIR, exist_ok=True)
     files = sorted([
         f for f in os.listdir(PROMPTS_DIR)
         if f.endswith(".txt") and os.path.isfile(os.path.join(PROMPTS_DIR, f))
     ])
-    result.extend(files)
-    return JSONResponse(result)
+    return JSONResponse(files)
 
 
 @app.get("/prompts/{filename}")
 def get_prompt(filename: str):
-    """プロンプトファイルの内容を返す。__base__ は base_system_prompt.txt を参照。"""
-    if filename == "__base__":
-        if not os.path.exists(BASE_PROMPT_FILE):
-            raise HTTPException(404, "base_system_prompt.txt not found")
-        with open(BASE_PROMPT_FILE, "r", encoding="utf-8") as f:
-            return JSONResponse({"filename": "__base__", "content": f.read()})
+    """プロンプトファイルの内容を返す。"""
     # パストラバーサル防止
     if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(400, "Invalid filename")

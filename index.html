@@ -1164,11 +1164,6 @@ $directTtsToggle.addEventListener('change', () => {
 let sysModalSelection = { type: null, value: null }; // type: 'file'|'slot', value: filename|slotIndex
 let sysModalSlotDirty = false;
 
-function fileDisplayName(fname) {
-  if (fname === '__base__') return 'base (default)';
-  return (fname || '').replace(/\.txt$/, '');
-}
-
 function updateSysActiveLabel(s) {
   if (!s) return;
   const slot  = s.active_user_slot;
@@ -1180,11 +1175,11 @@ function updateSysActiveLabel(s) {
   const hasFile = !!fname;
 
   if (slotAndFile && hasSlot && hasFile) {
-    $sysActiveLabel.textContent = `${fileDisplayName(fname)} + [スロット${slot + 1}]`;
+    $sysActiveLabel.textContent = `${(fname || '').replace(/\.txt$/, '')} + [スロット${slot + 1}]`;
   } else if (hasSlot) {
     $sysActiveLabel.textContent = `[スロット${slot + 1}]`;
   } else if (hasFile) {
-    $sysActiveLabel.textContent = fileDisplayName(fname);
+    $sysActiveLabel.textContent = (fname || '').replace(/\.txt$/, '');
   } else {
     $sysActiveLabel.textContent = '';
   }
@@ -1216,7 +1211,7 @@ async function openSysModal() {
   files.forEach(fname => {
     const el = document.createElement('div');
     el.className = 'sys-file-item';
-    el.textContent = fileDisplayName(fname);
+    el.textContent = (fname || '').replace(/\.txt$/, '');
     el.dataset.fname = fname;
     const isActive = settings.active_user_slot === -1 && settings.system_prompt_file === fname;
     if (isActive) {
@@ -1229,7 +1224,7 @@ async function openSysModal() {
       try {
         const r = await fetch(`${API}/prompts/${encodeURIComponent(fname)}`);
         const d = await r.json();
-        $sysPreviewFn.textContent = fileDisplayName(fname);
+        $sysPreviewFn.textContent = (fname || '').replace(/\.txt$/, '');
         $sysPreviewTxt.value = d.content;
         $sysPreviewTxt.setAttribute('readonly', '');
         $sysSaveSlot.style.display = 'none';
@@ -1270,7 +1265,7 @@ async function openSysModal() {
     try {
       const r = await fetch(`${API}/prompts/${encodeURIComponent(sysModalSelection.value)}`);
       const d = await r.json();
-      $sysPreviewFn.textContent = fileDisplayName(sysModalSelection.value);
+      $sysPreviewFn.textContent = (sysModalSelection.value || '').replace(/\.txt$/, '');
       $sysPreviewTxt.value = d.content;
       $sysPreviewTxt.setAttribute('readonly', '');
       $sysSaveSlot.style.display = 'none';
