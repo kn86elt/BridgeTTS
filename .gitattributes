@@ -1,0 +1,7 @@
+# バッチファイルはShift-JISのまま触らない
+*.bat -text
+
+# テキストファイルは改行コードを統一
+*.py text eol=lf
+*.html text eol=lf
+*.json text eol=lf
