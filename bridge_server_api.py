@@ -70,7 +70,7 @@ _DEFAULT_LLM_API_URL = LLM_API_URL
 _DEFAULT_TTS_API_URL = TTS_API_URL
 
 # その他の設定
-CHAR_DIR        = "characters"
+CHAR_DIR        = os.getenv("CHAR_DIR", "characters")
 BASE_PROMPT_FILE = os.path.join(PROMPTS_DIR, "base_system_prompt.txt")
 MAX_HISTORY     = 10
 WINDOW_WIDTH    = 300
@@ -1091,43 +1091,77 @@ async def create_character(
 
 
 @app.post("/characters/{idx}/duplicate")
-def duplicate_character(idx: int):
-    """既存キャラクターを複製する"""
+async def duplicate_character(
+    idx: int,
+    name: Optional[str] = Form(None),
+    prompt: Optional[str] = Form(None),
+    image: Optional[UploadFile] = File(None),
+    voice: Optional[UploadFile] = File(None),
+):
+    """既存キャラクターを複製する。name/prompt/image/voice が指定された場合はその値を使う。"""
     state.chars = get_dynamic_characters()
     if idx < 0 or idx >= len(state.chars):
         raise HTTPException(404, "キャラクターが見つかりません")
 
     char = state.chars[idx]
     src_dir = os.path.dirname(char["prompt"])
-
-    # 新しいフォルダ名を決定 (name_copy, name_copy2, ...)
     base_name = _safe_char_name(char["name"].replace(" (音声なし)", ""))
-    new_name = base_name + "_copy"
-    counter = 2
-    while os.path.exists(os.path.join(CHAR_DIR, new_name)):
-        new_name = f"{base_name}_copy{counter}"
-        counter += 1
+
+    # 新しいフォルダ名を決定
+    if name:
+        new_name = _safe_char_name(name)
+        if os.path.exists(os.path.join(CHAR_DIR, new_name)):
+            raise HTTPException(400, f"キャラクター '{new_name}' は既に存在します")
+    else:
+        new_name = base_name + "_copy"
+        counter = 2
+        while os.path.exists(os.path.join(CHAR_DIR, new_name)):
+            new_name = f"{base_name}_copy{counter}"
+            counter += 1
 
     dest_dir = os.path.join(CHAR_DIR, new_name)
 
-    # フォルダをコピー
+    # ソースフォルダをコピーしてファイル名を新名に揃える
     if os.path.isdir(src_dir) and src_dir != CHAR_DIR:
         shutil.copytree(src_dir, dest_dir)
-        # ファイル名をフォルダ名に合わせてリネーム
         for fname in os.listdir(dest_dir):
             fpath = os.path.join(dest_dir, fname)
             stem = Path(fname).stem
             ext  = Path(fname).suffix
-            # 古いステム名と一致するファイルをリネーム
             if stem == base_name and ext in [".txt", ".wav"] + IMAGE_EXTS:
                 os.rename(fpath, os.path.join(dest_dir, new_name + ext))
     else:
-        # フラットファイルをコピーしてフォルダに移動
         os.makedirs(dest_dir, exist_ok=True)
         for ext in [".txt", ".wav"] + IMAGE_EXTS:
             src = os.path.join(CHAR_DIR, base_name + ext)
             if os.path.exists(src):
                 shutil.copy2(src, os.path.join(dest_dir, new_name + ext))
+
+    # プロンプトを上書き
+    txt_path = os.path.join(dest_dir, new_name + ".txt")
+    if prompt is not None:
+        with open(txt_path, "w", encoding="utf-8") as f:
+            f.write(prompt)
+
+    # 画像を上書き
+    if image and image.filename:
+        for ext in IMAGE_EXTS:
+            old = os.path.join(dest_dir, new_name + ext)
+            if os.path.exists(old):
+                os.remove(old)
+        ext = Path(image.filename).suffix.lower()
+        if ext not in IMAGE_EXTS:
+            ext = ".png"
+        with open(os.path.join(dest_dir, new_name + ext), "wb") as f:
+            f.write(await image.read())
+
+    # 音声を上書き
+    if voice and voice.filename:
+        old_wav = os.path.join(dest_dir, new_name + ".wav")
+        if os.path.exists(old_wav):
+            os.remove(old_wav)
+        with open(os.path.join(dest_dir, new_name + ".wav"), "wb") as f:
+            f.write(await voice.read())
 
     return JSONResponse({"status": "ok", "name": new_name})
 

@@ -2218,7 +2218,7 @@ loadSettings().then(() => loadCharacters());
 /* ══════════════════════════════
    キャラクター作成/編集モーダル
 ══════════════════════════════ */
-let charEditMode   = 'create'; // 'create' | 'edit'
+let charEditMode   = 'create'; // 'create' | 'edit' | 'duplicate'
 let charEditTarget = null;     // 編集対象のindex
 
 const $ceBackdrop = document.getElementById('char-edit-backdrop');
@@ -2251,7 +2251,7 @@ function openCharEditModal(mode, idx = null) {
 
   if (mode === 'create') {
     $ceTitle.textContent = '✦ NEW CHARACTER';
-  } else {
+  } else if (mode === 'edit') {
     $ceTitle.textContent = '✦ EDIT CHARACTER';
     // 既存データを取得してフォームに反映
     fetch(`${API}/characters/${idx}/info`)
@@ -2261,6 +2261,18 @@ function openCharEditModal(mode, idx = null) {
         $cePrompt.value = d.prompt;
         if (d.has_image) $ceImageLbl.textContent = '（既存ファイル）';
         if (d.has_voice) $ceVoiceLbl.textContent = '（既存ファイル）';
+      })
+      .catch(() => {});
+  } else {
+    $ceTitle.textContent = '✦ DUPLICATE CHARACTER';
+    // 既存データをテンプレートとして取得
+    fetch(`${API}/characters/${idx}/info`)
+      .then(r => r.json())
+      .then(d => {
+        $ceName.value   = d.name + '_copy';
+        $cePrompt.value = d.prompt;
+        if (d.has_image) $ceImageLbl.textContent = '（既存ファイルをコピー）';
+        if (d.has_voice) $ceVoiceLbl.textContent = '（既存ファイルをコピー）';
       })
       .catch(() => {});
   }
@@ -2283,9 +2295,14 @@ document.getElementById('char-edit-ok').addEventListener('click', async () => {
   if ($ceVoiceInp.files[0]) fd.append('voice', $ceVoiceInp.files[0]);
 
   try {
-    let url = charEditMode === 'create'
-      ? `${API}/characters/create`
-      : `${API}/characters/${charEditTarget}/edit`;
+    let url;
+    if (charEditMode === 'create') {
+      url = `${API}/characters/create`;
+    } else if (charEditMode === 'edit') {
+      url = `${API}/characters/${charEditTarget}/edit`;
+    } else {
+      url = `${API}/characters/${charEditTarget}/duplicate`;
+    }
     const res = await fetch(url, { method: 'POST', body: fd });
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
@@ -2320,7 +2337,7 @@ function openCharCardMenu(e, idx) {
 
   const items = [
     { icon: '✏', label: '編集',   action: () => openCharEditModal('edit', idx) },
-    { icon: '⧉', label: '複製',   action: () => duplicateChar(idx) },
+    { icon: '⧉', label: '複製',   action: () => openCharEditModal('duplicate', idx) },
   ];
 
   items.forEach(item => {
@@ -2344,21 +2361,6 @@ function openCharCardMenu(e, idx) {
   activeDropdown = dropdown;
 }
 
-async function duplicateChar(idx) {
-  try {
-    const res = await fetch(`${API}/characters/${idx}/duplicate`, { method: 'POST' });
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({}));
-      showErrorToast(d.detail || '複製に失敗しました');
-      return;
-    }
-    const d = await res.json();
-    await loadCharacters();
-    showErrorToast(`✓ 複製しました: ${d.name}`, 'success');
-  } catch(e) {
-    showErrorToast('複製エラー: ' + e.message);
-  }
-}
 
 /* ══════════════════════════════
    音声エクスポート関数
