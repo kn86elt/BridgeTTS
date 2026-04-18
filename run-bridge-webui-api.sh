@@ -11,5 +11,8 @@ export BRIDGE_PORT="${PORT}"
 export LLM_API_URL="http://localhost:1234/v1"
 export TTS_API_URL="http://localhost:7860/"
 
+# 依存パッケージを同期
+uv sync
+
 # uvicorn を起動
 uv run python -m uvicorn bridge_server_api:app --host 0.0.0.0 --port "${PORT}" --log-level warning

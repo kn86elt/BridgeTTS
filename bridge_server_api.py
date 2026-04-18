@@ -69,7 +69,7 @@ LLM_API_KEY = "lm-studio"
 
 
 # irodori.TTSの設定
-TTS_API_URL = os.getenv("TTS_API_URL", "http://localhost:7862/")
+TTS_API_URL = os.getenv("TTS_API_URL", "http://localhost:7860/")
 
 # ── ランタイム接続設定 (再起動で失われる一時設定) ──────────────────────────
 # 起動時のデフォルト値を保持しておく
