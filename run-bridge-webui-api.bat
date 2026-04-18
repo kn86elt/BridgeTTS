@@ -1,17 +1,17 @@
 @echo off
 @chcp 932 >nul
 set PORT=8001
-echo [INFO] ï¿½|ï¿½[ï¿½g %PORT% ï¿½Å‹Nï¿½ï¿½ï¿½ï¿½ï¿½Ü‚ï¿½...
+echo [INFO] ƒ|[ƒg %PORT% ‚Å‹N“®‚µ‚Ü‚·...
 
-:: ï¿½ï¿½ï¿½ï¿½ï¿½uï¿½ï¿½ï¿½Eï¿½Uï¿½Nï¿½ï¿½ï¿½pï¿½ÉŠÂ‹ï¿½ï¿½Ïï¿½ï¿½ï¿½ï¿½Zï¿½bï¿½g
+:: Ž©“®ƒuƒ‰ƒEƒU‹N“®—p‚ÉŠÂ‹«•Ï”‚ðƒZƒbƒg
 set BRIDGE_PORT=%PORT%
 
-:: LLMï¿½ï¿½ï¿½ï¿½ï¿½TTSï¿½ï¿½API URLï¿½Æƒ|ï¿½[ï¿½gï¿½ï¿½ï¿½`ï¿½ï¿½ï¿½Ü‚ï¿½ï¿½B
+:: LLM‚¨‚æ‚ÑTTS‚ÌAPI URL‚Æƒ|[ƒg‚ð’è‹`‚µ‚Ü‚·B
 set LLM_API_URL=http://localhost:1234/v1
 set TTS_API_URL=http://localhost:7860/
 
 :: sync dependencies
 uv sync
 
-:: uvicorn ï¿½ï¿½ï¿½Nï¿½ï¿½
+:: uvicorn‚ð‹N“®
 uv run python -m uvicorn bridge_server_api:app --host 0.0.0.0 --port %PORT% --log-level warning
