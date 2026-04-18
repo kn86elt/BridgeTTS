@@ -42,6 +42,9 @@ DEFAULT_SETTINGS = {
     "ffmpeg_to_mp3": False,        # True=ダウンロード時にMP3変換
     "ffmpeg_path_enabled": False,  # True=ffmpegパスを手動指定
     "ffmpeg_path": "",             # ffmpeg実行ファイルのパス
+    # 表示設定
+    "bubble_alpha": 0.25,          # 吹き出し背景の不透明度 (0.0〜1.0)
+    "text_shadow": False,          # True=メッセージテキストにシャドウ付与
 }
 
 def load_settings() -> dict:

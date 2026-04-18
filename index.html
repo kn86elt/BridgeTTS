@@ -11,57 +11,59 @@
    CSS Variables (Light / Dark)
 ══════════════════════════════ */
 :root {
-  --bg:         #56585f;
-  --surface:    rgba(255,255,255,0.7);
-  --border:     rgba(0,0,0,0.08);
-  --accent:     #7dd3fc;
-  --accent2:    #f9a8d4;
-  --text:       #334155;
-  --muted:      #94a3b8;
-  --user-bg:    rgba(125,211,252,0.25);
-  --char-bg:    rgba(249,168,212,0.25);
-  --sidebar-bg: rgba(255,255,255,0.15);
-  --input-bg:   rgba(255,255,255,0.7);
-  --header-bg:  #050505;
-  --card-hover: #24304a;
-  --sys-text:   #94a3b8;
-  --sidebar-w:  240px;
-  --header-h:   48px;
-  --input-h:    64px;
+  --bg:           #56585f;
+  --surface:      rgba(255,255,255,0.7);
+  --border:       rgba(0,0,0,0.08);
+  --accent:       #7dd3fc;
+  --accent2:      #f9a8d4;
+  --text:         #334155;
+  --muted:        #64748b;
+  --user-bg:      rgba(125,211,252,0.25);
+  --char-bg:      rgba(249,168,212,0.25);
+  --sidebar-bg:   rgba(255,255,255,0.15);
+  --input-bg:     rgba(255,255,255,0.7);
+  --header-bg:    #050505;
+  --card-hover:   #24304a;
+  --sys-text:     #64748b;
+  --bubble-alpha: 0.25;
+  --sidebar-w:    240px;
+  --header-h:     48px;
+  --input-h:      64px;
   --body-gradient:
     radial-gradient(circle at 20% 20%, rgba(249,168,212,0.25), transparent 40%),
     radial-gradient(circle at 80% 80%, rgba(125,211,252,0.25), transparent 40%),
     #f6f8ff;
   --bg-overlay:    linear-gradient(to bottom, rgba(255,255,255,0.4), rgba(255,255,255,0.7));
-  --bubble-char:   linear-gradient(135deg, rgba(249,168,212,0.25), rgba(249,168,212,0.08));
-  --bubble-user:   linear-gradient(135deg, rgba(125,211,252,0.25), rgba(125,211,252,0.08));
-  --bubble-base:   linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02));
+  --bubble-char:   linear-gradient(135deg, rgba(249,168,212,var(--bubble-alpha)), rgba(249,168,212,calc(var(--bubble-alpha) * 0.32)));
+  --bubble-user:   linear-gradient(135deg, rgba(125,211,252,var(--bubble-alpha)), rgba(125,211,252,calc(var(--bubble-alpha) * 0.32)));
+  --bubble-base:   linear-gradient(135deg, rgba(255,255,255,calc(var(--bubble-alpha) * 0.32)), rgba(255,255,255,calc(var(--bubble-alpha) * 0.08)));
 }
 
 /* ── Dark Mode ── */
 body.dark-mode {
-  --bg:         #0d0f14;
-  --surface:    rgba(20,24,36,0.85);
-  --border:     rgba(255,255,255,0.08);
-  --accent:     #38bdf8;
-  --accent2:    #f472b6;
-  --text:       #cbd5e1;
-  --muted:      #475569;
-  --user-bg:    rgba(56,189,248,0.15);
-  --char-bg:    rgba(244,114,182,0.15);
-  --sidebar-bg: rgba(10,13,20,0.75);
-  --input-bg:   rgba(15,20,30,0.85);
-  --header-bg:  #020305;
-  --card-hover: #1a2235;
-  --sys-text:   #475569;
+  --bg:           #0d0f14;
+  --surface:      rgba(20,24,36,0.85);
+  --border:       rgba(255,255,255,0.08);
+  --accent:       #38bdf8;
+  --accent2:      #f472b6;
+  --text:         #cbd5e1;
+  --muted:        #94a3b8;
+  --user-bg:      rgba(56,189,248,0.15);
+  --char-bg:      rgba(244,114,182,0.15);
+  --sidebar-bg:   rgba(10,13,20,0.75);
+  --input-bg:     rgba(15,20,30,0.85);
+  --header-bg:    #020305;
+  --card-hover:   #1a2235;
+  --sys-text:     #94a3b8;
+  --bubble-alpha: 0.25;
   --body-gradient:
     radial-gradient(circle at 20% 20%, rgba(244,114,182,0.12), transparent 40%),
     radial-gradient(circle at 80% 80%, rgba(56,189,248,0.12), transparent 40%),
     #0d0f14;
   --bg-overlay:   linear-gradient(to bottom, rgba(0,0,0,0.45), rgba(0,0,0,0.72));
-  --bubble-char:  linear-gradient(135deg, rgba(244,114,182,0.18), rgba(244,114,182,0.05));
-  --bubble-user:  linear-gradient(135deg, rgba(56,189,248,0.18), rgba(56,189,248,0.05));
-  --bubble-base:  linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01));
+  --bubble-char:  linear-gradient(135deg, rgba(244,114,182,var(--bubble-alpha)), rgba(244,114,182,calc(var(--bubble-alpha) * 0.32)));
+  --bubble-user:  linear-gradient(135deg, rgba(56,189,248,var(--bubble-alpha)),  rgba(56,189,248,calc(var(--bubble-alpha) * 0.32)));
+  --bubble-base:  linear-gradient(135deg, rgba(255,255,255,calc(var(--bubble-alpha) * 0.16)), rgba(255,255,255,calc(var(--bubble-alpha) * 0.04)));
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -864,8 +866,9 @@ body { background: var(--body-gradient); }
 #api-config-close:hover { color: var(--text); }
 
 #api-config-body {
-  padding: 20px 20px 8px;
-  display: flex; flex-direction: column; gap: 16px;
+  padding: 18px 20px 16px;
+  display: flex; flex-direction: column; gap: 14px;
+  overflow-y: auto; max-height: 70vh;
 }
 .api-field-label {
   font-family: 'Share Tech Mono', monospace;
@@ -892,12 +895,6 @@ body { background: var(--body-gradient); }
 .api-field-row .api-field-input { flex: 1; }
 .api-port-input { width: 80px; flex-shrink: 0; }
 
-#api-config-notice {
-  font-size: 10px; color: var(--muted);
-  padding: 0 20px 12px;
-  border-top: none;
-  line-height: 1.7;
-}
 
 #api-config-footer {
   padding: 12px 20px;
@@ -905,26 +902,46 @@ body { background: var(--body-gradient); }
   display: flex; justify-content: flex-end; gap: 8px;
   background: var(--sidebar-bg);
 }
+/* テキストシャドウモード */
+body.text-shadow-mode .msg-text {
+  text-shadow: 0 1px 4px rgba(0,0,0,0.4);
+}
+
+/* 環境設定モーダル — セクション共通 */
 .api-section-divider {
-  font-size: 0.72rem; font-weight: 600; letter-spacing: .05em;
-  color: var(--text-secondary, #888); text-transform: uppercase;
-  border-top: 1px solid rgba(128,128,128,.2);
-  margin: 14px 0 8px; padding-top: 10px;
+  font-size: 0.7rem; font-weight: 700; letter-spacing: .08em;
+  color: var(--muted); text-transform: uppercase;
+  border-top: 1px solid var(--border);
+  padding-top: 14px; margin-top: 4px;
 }
 .api-check-label {
   display: flex; align-items: center; gap: 8px;
-  font-size: 0.85rem; color: var(--text-primary, #ccc);
-  margin-bottom: 6px; cursor: pointer;
+  font-size: 0.84rem; color: var(--text);
+  padding: 2px 0; cursor: pointer;
 }
-.api-check-label input[type=checkbox] { accent-color: var(--accent, #7c6af7); }
-#ac-ffmpeg-body { display: flex; flex-direction: column; gap: 2px; }
-#ac-ffmpeg-path-row { margin-top: 4px; }
+.api-check-label input[type=checkbox] { accent-color: var(--accent); flex-shrink: 0; }
+.api-settings-group { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+#ac-ffmpeg-path-row { margin-top: 2px; padding-left: 22px; }
 .ac-ffmpeg-status {
-  font-size: 0.72rem; margin-left: 4px;
-  padding: 1px 6px; border-radius: 10px;
+  font-size: 0.7rem; margin-left: auto;
+  padding: 2px 7px; border-radius: 10px; white-space: nowrap;
 }
 .ac-ffmpeg-status.ok  { background: rgba(34,197,94,.2);  color: #4ade80; }
 .ac-ffmpeg-status.ng  { background: rgba(239,68,68,.2);  color: #f87171; }
+/* スライダー行 */
+.api-slider-row {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 0.84rem; color: var(--text);
+}
+.api-slider-row span:first-child { white-space: nowrap; }
+.api-slider-row input[type=range] {
+  flex: 1; accent-color: var(--accent);
+  height: 4px; cursor: pointer;
+}
+.api-slider-val {
+  font-size: 0.78rem; color: var(--muted);
+  min-width: 36px; text-align: right;
+}
 .error-detail-bubble {
   margin: 2px 52px 10px;
   padding: 7px 11px;
@@ -943,51 +960,66 @@ body { background: var(--body-gradient); }
 <div id="toast-container"></div>
 
 <!-- ══════════════════════════════
-     接続設定モーダル (一時的・再起動で失われる)
+     環境設定モーダル
 ══════════════════════════════ -->
 <div id="api-config-backdrop">
   <div id="api-config-modal">
     <div id="api-config-header">
-      <span class="modal-title">🔌 API接続設定 (一時的)</span>
+      <span class="modal-title">⚙ 環境設定</span>
       <button id="api-config-close">✕</button>
     </div>
     <div id="api-config-body">
-      <!-- LLM API URL -->
-      <div>
-        <div class="api-field-label">LLM API URL</div>
-        <input class="api-field-input" id="ac-llm-url" type="text" placeholder="http://localhost:1234/v1">
-        <div class="api-field-note">例: http://localhost:1234/v1 &nbsp;/&nbsp; http://192.168.1.10:1234/v1</div>
+
+      <!-- ── API接続設定 ── -->
+      <div class="api-section-divider" style="border-top:none; padding-top:0; margin-top:0;">API接続設定 <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:0.68rem;">(一時的・再起動で失われます)</span></div>
+      <div class="api-settings-group">
+        <div>
+          <div class="api-field-label">LLM API URL</div>
+          <input class="api-field-input" id="ac-llm-url" type="text" placeholder="http://localhost:1234/v1">
+          <div class="api-field-note">例: http://localhost:1234/v1 &nbsp;/&nbsp; http://192.168.1.10:1234/v1</div>
+        </div>
+        <div>
+          <div class="api-field-label">TTS API URL</div>
+          <input class="api-field-input" id="ac-tts-url" type="text" placeholder="http://localhost:7862/">
+          <div class="api-field-note">例: http://localhost:7862/ &nbsp;/&nbsp; http://192.168.1.10:7862/</div>
+        </div>
       </div>
-      <!-- TTS API URL -->
-      <div>
-        <div class="api-field-label">TTS API URL</div>
-        <input class="api-field-input" id="ac-tts-url" type="text" placeholder="http://localhost:7862/">
-        <div class="api-field-note">例: http://localhost:7862/ &nbsp;/&nbsp; http://192.168.1.10:7862/</div>
+
+      <!-- ── 表示設定 ── -->
+      <div class="api-section-divider">表示設定</div>
+      <div class="api-settings-group">
+        <div class="api-slider-row">
+          <span>吹き出し不透明度</span>
+          <input type="range" id="ac-bubble-slider" min="0" max="100" value="25">
+          <span class="api-slider-val" id="ac-bubble-val">25%</span>
+        </div>
+        <label class="api-check-label">
+          <input type="checkbox" id="ac-text-shadow">
+          <span>テキストシャドウ</span>
+        </label>
       </div>
-    </div>
-    <!-- ffmpeg設定 -->
-    <div class="api-section-divider">ダウンロード設定</div>
-    <div id="ac-ffmpeg-body">
-      <label class="api-check-label">
-        <input type="checkbox" id="ac-ffmpeg-mp3">
-        <span>ffmpegがある場合MP3でダウンロード</span>
-        <span id="ac-ffmpeg-status" class="ac-ffmpeg-status"></span>
-      </label>
-      <label class="api-check-label">
-        <input type="checkbox" id="ac-ffmpeg-path-enabled">
-        <span>ffmpegのパスを指定する</span>
-      </label>
-      <div id="ac-ffmpeg-path-row" style="display:none">
-        <input class="api-field-input" id="ac-ffmpeg-path" type="text" placeholder="例: C:\ffmpeg\bin\ffmpeg.exe">
-        <div class="api-field-note">空欄 or パスが通っていない場合はシステムのffmpegを使用します</div>
+
+      <!-- ── ダウンロード設定 ── -->
+      <div class="api-section-divider">ダウンロード設定</div>
+      <div class="api-settings-group">
+        <label class="api-check-label">
+          <input type="checkbox" id="ac-ffmpeg-mp3">
+          <span>ffmpegがある場合MP3でダウンロード</span>
+          <span id="ac-ffmpeg-status" class="ac-ffmpeg-status"></span>
+        </label>
+        <label class="api-check-label">
+          <input type="checkbox" id="ac-ffmpeg-path-enabled">
+          <span>ffmpegのパスを指定する</span>
+        </label>
+        <div id="ac-ffmpeg-path-row" style="display:none">
+          <input class="api-field-input" id="ac-ffmpeg-path" type="text" placeholder="例: C:\ffmpeg\bin\ffmpeg.exe">
+          <div class="api-field-note">空欄またはパスが通っていない場合はシステムのffmpegを使用します</div>
+        </div>
       </div>
-    </div>
-    <div id="api-config-notice">
-      ⚠ API接続設定は <strong>再起動すると失われます</strong>。永続化が必要な場合は環境変数
-      <code>LLM_API_URL</code> / <code>TTS_API_URL</code> を設定してください。
+
     </div>
     <div id="api-config-footer">
-      <button class="modal-btn secondary" id="ac-reset-btn">デフォルトに戻す</button>
+      <button class="modal-btn secondary" id="ac-reset-btn">接続先をデフォルトに戻す</button>
       <button class="modal-btn secondary" id="ac-cancel-btn">キャンセル</button>
       <button class="modal-btn primary" id="ac-apply-btn">適用</button>
     </div>
@@ -1313,6 +1345,12 @@ function applySettings(s) {
   }
   if (s.tts_batch_size !== undefined) {
     $ttsBatch.value = s.tts_batch_size;
+  }
+  if (s.bubble_alpha !== undefined) {
+    document.documentElement.style.setProperty('--bubble-alpha', s.bubble_alpha);
+  }
+  if (s.text_shadow !== undefined) {
+    document.body.classList.toggle('text-shadow-mode', !!s.text_shadow);
   }
   // システムプロンプト設定の反映
   if (s.slot_and_file !== undefined) {
@@ -2468,10 +2506,20 @@ const $acFfmpegPathEnabled  = document.getElementById('ac-ffmpeg-path-enabled');
 const $acFfmpegPathRow      = document.getElementById('ac-ffmpeg-path-row');
 const $acFfmpegPath         = document.getElementById('ac-ffmpeg-path');
 const $acFfmpegStatus       = document.getElementById('ac-ffmpeg-status');
+const $acBubbleSlider       = document.getElementById('ac-bubble-slider');
+const $acBubbleVal          = document.getElementById('ac-bubble-val');
+const $acTextShadow         = document.getElementById('ac-text-shadow');
 
 // ffmpegパス指定チェックボックスと入力欄の連動
 $acFfmpegPathEnabled.addEventListener('change', () => {
   $acFfmpegPathRow.style.display = $acFfmpegPathEnabled.checked ? '' : 'none';
+});
+
+// 吹き出し不透明度スライダー — リアルタイムプレビュー
+$acBubbleSlider.addEventListener('input', () => {
+  const v = parseInt($acBubbleSlider.value, 10);
+  $acBubbleVal.textContent = v + '%';
+  document.documentElement.style.setProperty('--bubble-alpha', v / 100);
 });
 
 // デフォルト値キャッシュ (最初のGETで取得)
@@ -2501,11 +2549,18 @@ async function openApiConfigModal() {
   } catch(e) {
     console.warn('[ApiConfig] Failed to load:', e);
   }
-  // ffmpeg設定をsettingsから読み込む
+  // 永続設定を読み込む（表示設定 + ffmpeg設定）
   try {
     const res = await fetch(`${API}/settings`);
     if (res.ok) {
       const s = await res.json();
+      // 表示設定
+      const alpha = s.bubble_alpha ?? 0.25;
+      const pct   = Math.round(alpha * 100);
+      $acBubbleSlider.value    = pct;
+      $acBubbleVal.textContent = pct + '%';
+      $acTextShadow.checked    = !!s.text_shadow;
+      // ffmpeg設定
       $acFfmpegMp3.checked         = !!s.ffmpeg_to_mp3;
       $acFfmpegPathEnabled.checked = !!s.ffmpeg_path_enabled;
       $acFfmpegPath.value          = s.ffmpeg_path || '';
@@ -2559,17 +2614,23 @@ $acApplyBtn.addEventListener('click', async () => {
     }
   }
 
-  // ffmpeg設定の保存（常に保存）
+  // 表示設定 + ffmpeg設定の保存
+  const bubbleAlpha = parseInt($acBubbleSlider.value, 10) / 100;
   try {
     await fetch(`${API}/settings`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        bubble_alpha:        bubbleAlpha,
+        text_shadow:         $acTextShadow.checked,
         ffmpeg_to_mp3:       $acFfmpegMp3.checked,
         ffmpeg_path_enabled: $acFfmpegPathEnabled.checked,
         ffmpeg_path:         $acFfmpegPath.value.trim(),
       }),
     });
+    // 表示設定を即時反映
+    document.documentElement.style.setProperty('--bubble-alpha', bubbleAlpha);
+    document.body.classList.toggle('text-shadow-mode', $acTextShadow.checked);
     showErrorToast('✓ 設定を保存しました', 'success');
   } catch(e) {
     showErrorToast('設定保存エラー: ' + e.message);
