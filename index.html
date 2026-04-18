@@ -55,15 +55,14 @@ body.dark-mode {
   --header-bg:    #020305;
   --card-hover:   #1a2235;
   --sys-text:     #94a3b8;
-  --bubble-alpha: 0.25;
   --body-gradient:
     radial-gradient(circle at 20% 20%, rgba(244,114,182,0.12), transparent 40%),
     radial-gradient(circle at 80% 80%, rgba(56,189,248,0.12), transparent 40%),
     #0d0f14;
   --bg-overlay:   linear-gradient(to bottom, rgba(0,0,0,0.45), rgba(0,0,0,0.72));
-  --bubble-char:  linear-gradient(135deg, rgba(244,114,182,var(--bubble-alpha)), rgba(244,114,182,calc(var(--bubble-alpha) * 0.32)));
-  --bubble-user:  linear-gradient(135deg, rgba(56,189,248,var(--bubble-alpha)),  rgba(56,189,248,calc(var(--bubble-alpha) * 0.32)));
-  --bubble-base:  linear-gradient(135deg, rgba(255,255,255,calc(var(--bubble-alpha) * 0.16)), rgba(255,255,255,calc(var(--bubble-alpha) * 0.04)));
+  --bubble-char:  linear-gradient(135deg, rgba(140,50,100,var(--bubble-alpha)), rgba(140,50,100,calc(var(--bubble-alpha) * 0.32)));
+  --bubble-user:  linear-gradient(135deg, rgba(25,100,160,var(--bubble-alpha)), rgba(25,100,160,calc(var(--bubble-alpha) * 0.32)));
+  --bubble-base:  linear-gradient(135deg, rgba(255,255,255,calc(var(--bubble-alpha) * 0.08)), rgba(255,255,255,calc(var(--bubble-alpha) * 0.02)));
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -305,20 +304,21 @@ body { background: var(--body-gradient); }
 .replay-btn, .regen-btn, .bubble-menu-btn {
   width: 18px; height: 18px; border-radius: 50%;
   border: 1px solid var(--accent2);
-  background: transparent;
+  background: rgba(255,255,255,0.18);
   color: var(--accent2);
   cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   font-size: 9px;
   padding: 0;
-  opacity: 0.7;
+  opacity: 0.85;
   transition: opacity .2s, background .2s;
   flex-shrink: 0;
   line-height: 1;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.15);
 }
 .replay-btn { font-size: 8px; }
 .replay-btn:hover, .regen-btn:hover, .bubble-menu-btn:hover {
-  opacity: 1; background: rgba(249,168,212,0.2);
+  opacity: 1; background: rgba(249,168,212,0.35);
 }
 .regen-btn:disabled { opacity: 0.3; cursor: default; pointer-events: none; }
 
