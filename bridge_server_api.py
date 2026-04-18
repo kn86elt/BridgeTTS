@@ -233,7 +233,15 @@ def _extract_zip(zip_path: str) -> str:
         os.makedirs(dest, exist_ok=True)
         try:
             with zipfile.ZipFile(zip_path, "r") as zf:
-                zf.extractall(dest)
+                # Windows(7-Zip等)でCP932エンコードされたファイル名に対応
+                # UTF-8フラグが立っていないエントリはCP932として再デコードする
+                for info in zf.infolist():
+                    if not (info.flag_bits & 0x800):  # UTF-8フラグなし
+                        try:
+                            info.filename = info.filename.encode('cp437').decode('cp932')
+                        except (UnicodeDecodeError, UnicodeEncodeError):
+                            pass  # デコード失敗時はそのまま使用
+                    zf.extract(info, dest)
             print(f"[ZIP] Extracted: {zip_path} → {dest}")
         except Exception as e:
             print(f"[ZIP] Failed to extract {zip_path}: {e}")
