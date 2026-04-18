@@ -38,6 +38,10 @@ DEFAULT_SETTINGS = {
     "user_slots": ["", "", "", "", ""],  # ユーザー編集スロット x5
     "active_user_slot": -1,             # 使用中のユーザースロット (-1=なし)
     "slot_and_file": False,             # True=スロットとファイルを同時適用
+    # ダウンロード設定
+    "ffmpeg_to_mp3": False,        # True=ダウンロード時にMP3変換
+    "ffmpeg_path_enabled": False,  # True=ffmpegパスを手動指定
+    "ffmpeg_path": "",             # ffmpeg実行ファイルのパス
 }
 
 def load_settings() -> dict:
@@ -693,9 +697,30 @@ def stream_llm_with_tts(messages: list, tts_enabled: bool):
                 finished_audios.pop(req_id, None)
 
     except Exception as e:
-        yield f"data: {json.dumps({'error': str(e)})}\n\n"
-        with finished_audios_lock:
-            finished_audios.pop(req_id, None)
+        import openai as _openai
+        err_str = str(e)
+        # エラーの種類に応じてフレンドリーメッセージを選択
+        if isinstance(e, _openai.APIConnectionError):
+            friendly = "LLMサーバが動いてないみたい"
+        elif isinstance(e, _openai.APIStatusError):
+            body = err_str.lower()
+            if "model" in body or e.status_code in (503, 404):
+                friendly = "モデルがロードされていないみたい"
+            else:
+                friendly = "何かエラーが起こったみたい"
+        else:
+            friendly = "何かエラーが起こったみたい"
+        # フレンドリーメッセージをアシスタントの返答として送出
+        yield f"data: {json.dumps({'token': friendly})}\n\n"
+        # TTS が有効ならフレンドリーメッセージも発声させる
+        if tts_enabled and state.selected.get("has_voice"):
+            enqueue_tts(friendly, state.selected["voice_path"], req_id)
+            yield f"data: {json.dumps({'done': True, 'req_id': req_id, 'error_detail': err_str})}\n\n"
+            # finished_audios の解放はポーリング側（audio_poll）に任せる
+        else:
+            yield f"data: {json.dumps({'done': True, 'req_id': None, 'error_detail': err_str})}\n\n"
+            with finished_audios_lock:
+                finished_audios.pop(req_id, None)
 
 
 @app.post("/chat")
@@ -929,38 +954,171 @@ def tts_regen(req: TtsRegenRequest):
 
 EXPORTS_DIR = "exports"
 
+
+# ── エクスポート用ヘルパー ────────────────────────────────────────────────
+
+def combine_wavs_bytes(wav_bytes_list: list) -> bytes:
+    """複数のWAVバイト列を連結してひとつのWAVバイト列にする"""
+    import wave, io
+    if not wav_bytes_list:
+        return b""
+    if len(wav_bytes_list) == 1:
+        return wav_bytes_list[0]
+    params = None
+    all_frames = []
+    for wb in wav_bytes_list:
+        with wave.open(io.BytesIO(wb)) as wf:
+            if params is None:
+                params = wf.getparams()
+            all_frames.append(wf.readframes(wf.getnframes()))
+    out = io.BytesIO()
+    with wave.open(out, "wb") as wf:
+        wf.setparams(params)
+        for frames in all_frames:
+            wf.writeframes(frames)
+    return out.getvalue()
+
+
+def get_ffmpeg_cmd(settings: dict) -> str | None:
+    """設定に基づいて使用するffmpegコマンドを返す。利用不可なら None。"""
+    import shutil
+    path_enabled = settings.get("ffmpeg_path_enabled", False)
+    path_val     = settings.get("ffmpeg_path", "").strip()
+    cmd = path_val if (path_enabled and path_val) else "ffmpeg"
+    if shutil.which(cmd) or (os.path.isfile(cmd) and os.access(cmd, os.X_OK)):
+        return cmd
+    return None
+
+
+def convert_wav_to_mp3(wav_bytes: bytes, ffmpeg_cmd: str) -> bytes:
+    """WAVバイト列をMP3バイト列に変換する"""
+    result = subprocess.run(
+        [ffmpeg_cmd, "-y", "-f", "wav", "-i", "pipe:0",
+         "-codec:a", "libmp3lame", "-q:a", "2", "-f", "mp3", "pipe:1"],
+        input=wav_bytes, capture_output=True, timeout=120,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.decode(errors="replace"))
+    return result.stdout
+
+
+def make_export_filename(char_name: str, text: str, ext: str) -> str:
+    """キャラ名-タイムスタンプ-セリフ冒頭.ext 形式のファイル名を返す"""
+    safe_char = re.sub(r'[\\/:*?"<>| ]', '_', char_name)
+    head = re.sub(r'[\\/:*?"<>|\s\n\r]', '', text[:15]).strip("_")
+    if not head:
+        head = "audio"
+    timestamp = int(time.time() * 1000)
+    return f"{safe_char}-{timestamp}-{head}.{ext}"
+
+
+def _split_into_batches(text: str, tts_batch_size: int) -> list[str]:
+    """tts_batch_size に従ってテキストをバッチリストに分割する（tts_regen と同ロジック）"""
+    split_pat = re.compile(r'(?<=[。！？\?!])(?!\s*' + EMOJI_PAT.pattern + r')')
+    parts = split_pat.split(text)
+    sentences: list[str] = []
+    if len(parts) > 1:
+        merged: list[str] = []
+        for i, part in enumerate(parts[:-1]):
+            suffix_match = re.match(r'\s*' + EMOJI_PAT.pattern, parts[i + 1]) if i + 1 < len(parts) else None
+            if suffix_match and suffix_match.group().strip():
+                part = part + suffix_match.group()
+                parts[i + 1] = parts[i + 1][suffix_match.end():]
+            merged.append(part)
+        sentences = [s for s in merged if s.strip()]
+        if parts[-1].strip():
+            sentences.append(parts[-1])
+    else:
+        sentences = [text] if text.strip() else []
+
+    if not sentences:
+        return [text] if text.strip() else []
+
+    if tts_batch_size == 0:
+        return ["".join(sentences)]
+
+    batches: list[str] = []
+    while len(sentences) >= tts_batch_size:
+        batches.append("".join(sentences[:tts_batch_size]))
+        sentences = sentences[tts_batch_size:]
+    if sentences:
+        batches.append("".join(sentences))
+    return batches
+
+
 class TtsExportRequest(BaseModel):
     text: str
 
 @app.post("/tts_export")
 def tts_export(req: TtsExportRequest):
-    """テキストをTTSで一括生成しWAVファイルとして保存。音声b64・ファイルパス・ファイル名を返す。"""
+    """テキストをTTSで生成(バッチ分割→WAV結合→任意でMP3変換)してファイルとして保存。"""
     if not state.selected:
         raise HTTPException(400, "キャラクターが選択されていません")
     voice_path = state.selected.get("voice_path")
     if not voice_path:
         raise HTTPException(400, "音声ファイルが設定されていません")
 
-    text = clean_for_tts(req.text.strip())
+    text = req.text.strip()
     if not text:
         raise HTTPException(400, "テキストが空です")
 
-    audio_b64 = generate_and_encode_tts(text, voice_path)
-    if audio_b64 is None:
+    settings      = load_settings()
+    tts_batch_size = settings.get("tts_batch_size", 0)
+
+    # バッチ分割して各バッチをTTS生成
+    batches = _split_into_batches(text, tts_batch_size)
+    wav_bytes_list: list[bytes] = []
+    for batch_text in batches:
+        s = clean_for_tts(batch_text)
+        if len(s) <= 1:
+            continue
+        audio_b64 = generate_and_encode_tts(s, voice_path)
+        if audio_b64 is None:
+            raise HTTPException(500, "TTS生成に失敗しました")
+        wav_bytes_list.append(base64.b64decode(audio_b64))
+
+    if not wav_bytes_list:
         raise HTTPException(500, "TTS生成に失敗しました")
 
+    # WAV結合
+    combined = combine_wavs_bytes(wav_bytes_list)
+
+    # ffmpeg MP3変換（設定が有効かつffmpegが使える場合）
+    ext  = "wav"
+    mime = "audio/wav"
+    ffmpeg_to_mp3 = settings.get("ffmpeg_to_mp3", False)
+    ffmpeg_cmd    = get_ffmpeg_cmd(settings)
+    if ffmpeg_to_mp3 and ffmpeg_cmd:
+        try:
+            combined = convert_wav_to_mp3(combined, ffmpeg_cmd)
+            ext  = "mp3"
+            mime = "audio/mpeg"
+        except Exception as e:
+            print(f"[ffmpeg] MP3変換失敗、WAVで出力: {e}")
+
+    # 保存
     os.makedirs(EXPORTS_DIR, exist_ok=True)
-    char_name = re.sub(r'[\\/:*?"<>| ]', '_', state.selected.get("name", "unknown"))
-    timestamp  = int(time.time() * 1000)
-    filename   = f"{char_name}_{timestamp}.wav"
-    filepath   = os.path.join(EXPORTS_DIR, filename)
-
-    wav_bytes = base64.b64decode(audio_b64)
+    char_name = state.selected.get("name", "unknown")
+    filename  = make_export_filename(char_name, text, ext)
+    filepath  = os.path.join(EXPORTS_DIR, filename)
     with open(filepath, "wb") as f:
-        f.write(wav_bytes)
+        f.write(combined)
 
-    abs_path = os.path.abspath(filepath)
-    return JSONResponse({"audio": audio_b64, "filename": filename, "filepath": abs_path})
+    audio_b64 = base64.b64encode(combined).decode("utf-8")
+    return JSONResponse({
+        "audio":    audio_b64,
+        "filename": filename,
+        "filepath": os.path.abspath(filepath),
+        "format":   ext,
+    })
+
+
+@app.get("/check_ffmpeg")
+def check_ffmpeg():
+    """ffmpegが使用可能か確認する"""
+    settings  = load_settings()
+    cmd       = get_ffmpeg_cmd(settings)
+    return JSONResponse({"available": cmd is not None, "cmd": cmd or ""})
 
 
 @app.get("/tts_export/{filename}")

@@ -905,6 +905,38 @@ body { background: var(--body-gradient); }
   display: flex; justify-content: flex-end; gap: 8px;
   background: var(--sidebar-bg);
 }
+.api-section-divider {
+  font-size: 0.72rem; font-weight: 600; letter-spacing: .05em;
+  color: var(--text-secondary, #888); text-transform: uppercase;
+  border-top: 1px solid rgba(128,128,128,.2);
+  margin: 14px 0 8px; padding-top: 10px;
+}
+.api-check-label {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 0.85rem; color: var(--text-primary, #ccc);
+  margin-bottom: 6px; cursor: pointer;
+}
+.api-check-label input[type=checkbox] { accent-color: var(--accent, #7c6af7); }
+#ac-ffmpeg-body { display: flex; flex-direction: column; gap: 2px; }
+#ac-ffmpeg-path-row { margin-top: 4px; }
+.ac-ffmpeg-status {
+  font-size: 0.72rem; margin-left: 4px;
+  padding: 1px 6px; border-radius: 10px;
+}
+.ac-ffmpeg-status.ok  { background: rgba(34,197,94,.2);  color: #4ade80; }
+.ac-ffmpeg-status.ng  { background: rgba(239,68,68,.2);  color: #f87171; }
+.error-detail-bubble {
+  margin: 2px 52px 10px;
+  padding: 7px 11px;
+  background: rgba(239, 68, 68, 0.08);
+  border-left: 3px solid rgba(239, 68, 68, 0.45);
+  border-radius: 6px;
+  font-size: 0.72rem;
+  color: #aaa;
+  font-family: monospace;
+  word-break: break-all;
+  white-space: pre-wrap;
+}
 </style>
 </head>
 <body>
@@ -933,8 +965,25 @@ body { background: var(--body-gradient); }
         <div class="api-field-note">例: http://localhost:7862/ &nbsp;/&nbsp; http://192.168.1.10:7862/</div>
       </div>
     </div>
+    <!-- ffmpeg設定 -->
+    <div class="api-section-divider">ダウンロード設定</div>
+    <div id="ac-ffmpeg-body">
+      <label class="api-check-label">
+        <input type="checkbox" id="ac-ffmpeg-mp3">
+        <span>ffmpegがある場合MP3でダウンロード</span>
+        <span id="ac-ffmpeg-status" class="ac-ffmpeg-status"></span>
+      </label>
+      <label class="api-check-label">
+        <input type="checkbox" id="ac-ffmpeg-path-enabled">
+        <span>ffmpegのパスを指定する</span>
+      </label>
+      <div id="ac-ffmpeg-path-row" style="display:none">
+        <input class="api-field-input" id="ac-ffmpeg-path" type="text" placeholder="例: C:\ffmpeg\bin\ffmpeg.exe">
+        <div class="api-field-note">空欄 or パスが通っていない場合はシステムのffmpegを使用します</div>
+      </div>
+    </div>
     <div id="api-config-notice">
-      ⚠ この設定は <strong>再起動すると失われます</strong>。永続化が必要な場合は環境変数
+      ⚠ API接続設定は <strong>再起動すると失われます</strong>。永続化が必要な場合は環境変数
       <code>LLM_API_URL</code> / <code>TTS_API_URL</code> を設定してください。
     </div>
     <div id="api-config-footer">
@@ -1596,13 +1645,14 @@ const activePolls = new Map();
 // ── エクスポート実行ヘルパー (データ受け取り型) ──
 async function _doDownload(data) {
   if (!data || !data.audio || !data.filename) return;
-  const wav  = Uint8Array.from(atob(data.audio), c => c.charCodeAt(0));
-  const blob = new Blob([wav], { type: 'audio/wav' });
+  const mime = (data.format === 'mp3') ? 'audio/mpeg' : 'audio/wav';
+  const bytes = Uint8Array.from(atob(data.audio), c => c.charCodeAt(0));
+  const blob = new Blob([bytes], { type: mime });
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
   a.href = url; a.download = data.filename; a.click();
   URL.revokeObjectURL(url);
-  showErrorToast('\u2713 \u30C0\u30A6\u30F3\u30ED\u30FC\u30C9\u5B8C\u4E86', 'success');
+  showErrorToast('✓ ダウンロード完了', 'success');
 }
 async function _doOpenLocation(data) {
   if (!data || !data.filepath) return;
@@ -1978,6 +2028,17 @@ function setStatus(state, text) {
 }
 
 /* ══════════════════════════════
+   エラー詳細吹き出し
+══════════════════════════════ */
+function appendErrorDetail(text) {
+  const el = document.createElement('div');
+  el.className = 'error-detail-bubble';
+  el.textContent = text;
+  $messages.appendChild(el);
+  scrollBottom();
+}
+
+/* ══════════════════════════════
    SSEストリーム処理 (共通)
    bubbleRefs = { textEl, footer, spinner, bubble }
 ══════════════════════════════ */
@@ -1985,8 +2046,9 @@ async function consumeStream(response, bubbleRefs, cursorEl) {
   const { textEl, footer, spinner } = bubbleRefs;
   const reader  = response.body.getReader();
   const decoder = new TextDecoder();
-  let buffer    = '';
-  let reqId     = null;
+  let buffer      = '';
+  let reqId       = null;
+  let errorDetail = null;
   const collectedAudio = [];   // この吹き出しに紐付く音声を収集
 
   // TTS生成中はスピナー表示
@@ -2020,6 +2082,7 @@ async function consumeStream(response, bubbleRefs, cursorEl) {
       if (data.done) {
         cursorEl.remove();
         reqId = data.req_id || null;
+        if (data.error_detail) errorDetail = data.error_detail;
       }
       if (data.error) {
         cursorEl.remove();
@@ -2030,7 +2093,7 @@ async function consumeStream(response, bubbleRefs, cursorEl) {
   }
 
   // ポーリングで届く音声も収集して再生ボタンに反映
-  return { reqId, collectedAudio, footer, spinner };
+  return { reqId, collectedAudio, footer, spinner, errorDetail };
 }
 
 /* ══════════════════════════════
@@ -2114,13 +2177,15 @@ async function sendMessage() {
       body: JSON.stringify({ message: text, tts_enabled: ttsEnabled }),
     });
 
-    const { reqId, collectedAudio, footer, spinner } =
+    const { reqId, collectedAudio, footer, spinner, errorDetail } =
       await consumeStream(res, charRefs, cursor);
 
     isGenerating = false;
     $sendBtn.disabled = false;
     setStatus('active', `${selectedName} と接続中`);
     $input.focus();
+
+    if (errorDetail) appendErrorDetail(errorDetail);
 
     if (reqId) {
       startAudioPolling(reqId, footer, spinner, collectedAudio, charRefs.textEl, hasVoice);
@@ -2156,11 +2221,12 @@ async function runInitialGreeting(ttsEnabled) {
 
   try {
     const res = await fetch(`${API}/initial_greeting?tts_enabled=${ttsEnabled}`);
-    const { reqId, collectedAudio, footer, spinner } =
+    const { reqId, collectedAudio, footer, spinner, errorDetail } =
       await consumeStream(res, charRefs, cursor);
     isGenerating = false;
     $sendBtn.disabled = false;
     setStatus('active', `${selectedName} と接続中`);
+    if (errorDetail) appendErrorDetail(errorDetail);
     if (reqId) {
       startAudioPolling(reqId, footer, spinner, collectedAudio, charRefs.textEl, hasVoice);
     } else {
@@ -2368,7 +2434,7 @@ function openCharCardMenu(e, idx) {
 async function _generateExport(textEl) {
   const text = textEl ? textEl.textContent.trim() : '';
   if (!text) { showErrorToast('テキストがありません'); return null; }
-  showErrorToast('WAV生成中...');
+  showErrorToast('音声生成中...');
   try {
     const res = await fetch(`${API}/tts_export`, {
       method: 'POST',
@@ -2390,16 +2456,36 @@ async function _generateExport(textEl) {
 /* ══════════════════════════════
    接続設定モーダル (一時的)
 ══════════════════════════════ */
-const $apiConfigBackdrop = document.getElementById('api-config-backdrop');
-const $apiConfigClose    = document.getElementById('api-config-close');
-const $acLlmUrl          = document.getElementById('ac-llm-url');
-const $acTtsUrl          = document.getElementById('ac-tts-url');
-const $acApplyBtn        = document.getElementById('ac-apply-btn');
-const $acCancelBtn       = document.getElementById('ac-cancel-btn');
-const $acResetBtn        = document.getElementById('ac-reset-btn');
+const $apiConfigBackdrop    = document.getElementById('api-config-backdrop');
+const $apiConfigClose       = document.getElementById('api-config-close');
+const $acLlmUrl             = document.getElementById('ac-llm-url');
+const $acTtsUrl             = document.getElementById('ac-tts-url');
+const $acApplyBtn           = document.getElementById('ac-apply-btn');
+const $acCancelBtn          = document.getElementById('ac-cancel-btn');
+const $acResetBtn           = document.getElementById('ac-reset-btn');
+const $acFfmpegMp3          = document.getElementById('ac-ffmpeg-mp3');
+const $acFfmpegPathEnabled  = document.getElementById('ac-ffmpeg-path-enabled');
+const $acFfmpegPathRow      = document.getElementById('ac-ffmpeg-path-row');
+const $acFfmpegPath         = document.getElementById('ac-ffmpeg-path');
+const $acFfmpegStatus       = document.getElementById('ac-ffmpeg-status');
+
+// ffmpegパス指定チェックボックスと入力欄の連動
+$acFfmpegPathEnabled.addEventListener('change', () => {
+  $acFfmpegPathRow.style.display = $acFfmpegPathEnabled.checked ? '' : 'none';
+});
 
 // デフォルト値キャッシュ (最初のGETで取得)
 let _apiConfigDefaults = { llm_api_url: '', tts_api_url: '' };
+
+async function _refreshFfmpegStatus() {
+  try {
+    const res = await fetch(`${API}/check_ffmpeg`);
+    if (!res.ok) return;
+    const d = await res.json();
+    $acFfmpegStatus.textContent = d.available ? `✓ ${d.cmd}` : '✗ 見つかりません';
+    $acFfmpegStatus.className   = 'ac-ffmpeg-status ' + (d.available ? 'ok' : 'ng');
+  } catch(e) { /* ignore */ }
+}
 
 async function openApiConfigModal() {
   try {
@@ -2409,13 +2495,24 @@ async function openApiConfigModal() {
       _apiConfigDefaults = { llm_api_url: d.default_llm_api_url, tts_api_url: d.default_tts_api_url };
       $acLlmUrl.value = d.llm_api_url || '';
       $acTtsUrl.value = d.tts_api_url || '';
-      // プレースホルダーにデフォルト値を反映
       $acLlmUrl.placeholder = d.default_llm_api_url || 'http://localhost:1234/v1';
       $acTtsUrl.placeholder = d.default_tts_api_url || 'http://localhost:7862/';
     }
   } catch(e) {
     console.warn('[ApiConfig] Failed to load:', e);
   }
+  // ffmpeg設定をsettingsから読み込む
+  try {
+    const res = await fetch(`${API}/settings`);
+    if (res.ok) {
+      const s = await res.json();
+      $acFfmpegMp3.checked         = !!s.ffmpeg_to_mp3;
+      $acFfmpegPathEnabled.checked = !!s.ffmpeg_path_enabled;
+      $acFfmpegPath.value          = s.ffmpeg_path || '';
+      $acFfmpegPathRow.style.display = $acFfmpegPathEnabled.checked ? '' : 'none';
+    }
+  } catch(e) { /* ignore */ }
+  _refreshFfmpegStatus();
   $apiConfigBackdrop.classList.add('open');
 }
 
@@ -2441,30 +2538,44 @@ $acResetBtn.addEventListener('click', () => {
 $acApplyBtn.addEventListener('click', async () => {
   const llm = $acLlmUrl.value.trim();
   const tts = $acTtsUrl.value.trim();
-  if (!llm && !tts) { closeApiConfigModal(); return; }
 
-  const payload = {};
-  if (llm) payload.llm_api_url = llm;
-  if (tts) payload.tts_api_url = tts;
+  // API接続設定の保存（変更がある場合のみ）
+  if (llm || tts) {
+    const payload = {};
+    if (llm) payload.llm_api_url = llm;
+    if (tts) payload.tts_api_url = tts;
+    try {
+      const res = await fetch(`${API}/api_config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const d = await res.json();
+      const changed = d.changed || [];
+      if (changed.length > 0) showErrorToast(`✓ 接続先を変更しました (${changed.join(', ')})`, 'success');
+    } catch(e) {
+      showErrorToast('接続設定エラー: ' + e.message);
+    }
+  }
 
+  // ffmpeg設定の保存（常に保存）
   try {
-    const res = await fetch(`${API}/api_config`, {
+    await fetch(`${API}/settings`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        ffmpeg_to_mp3:       $acFfmpegMp3.checked,
+        ffmpeg_path_enabled: $acFfmpegPathEnabled.checked,
+        ffmpeg_path:         $acFfmpegPath.value.trim(),
+      }),
     });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const d = await res.json();
-    const changed = d.changed || [];
-    if (changed.length > 0) {
-      showErrorToast(`✓ 接続先を変更しました (${changed.join(', ')})`, 'success');
-    } else {
-      showErrorToast('変更なし', 'success');
-    }
-    closeApiConfigModal();
+    showErrorToast('✓ 設定を保存しました', 'success');
   } catch(e) {
-    showErrorToast('適用エラー: ' + e.message);
+    showErrorToast('設定保存エラー: ' + e.message);
   }
+
+  closeApiConfigModal();
 });
 </script>
 </body>
