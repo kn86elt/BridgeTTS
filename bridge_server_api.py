@@ -45,6 +45,9 @@ DEFAULT_SETTINGS = {
     # 表示設定
     "bubble_alpha": 0.25,          # 吹き出し背景の不透明度 (0.0〜1.0)
     "text_shadow": False,          # True=メッセージテキストにシャドウ付与
+    "bubble_blur": True,           # True=吹き出し背景にぼかしエフェクト
+    # キャラクター読み出し設定
+    "char_dir_also_default": False, # True=CHAR_DIR設定時もデフォルトフォルダを追加で読み込む
 }
 
 def load_settings() -> dict:
@@ -77,7 +80,9 @@ _DEFAULT_LLM_API_URL = LLM_API_URL
 _DEFAULT_TTS_API_URL = TTS_API_URL
 
 # その他の設定
-CHAR_DIR        = os.getenv("CHAR_DIR", "characters")
+CHAR_DIR_ENV     = os.getenv("CHAR_DIR")                               # None = 未設定
+CHAR_DIR         = CHAR_DIR_ENV if CHAR_DIR_ENV else "characters"
+DEFAULT_CHAR_DIR = "characters"                                         # デフォルトフォルダ
 BASE_PROMPT_FILE = os.path.join(PROMPTS_DIR, "base_system_prompt.txt")
 MAX_HISTORY     = 10
 WINDOW_WIDTH    = 300
@@ -284,25 +289,20 @@ def _char_from_dir(base: str, directory: str) -> dict | None:
     }
 
 
-def get_dynamic_characters() -> list:
-    if not os.path.exists(CHAR_DIR):
-        os.makedirs(CHAR_DIR)
-        return []
+def _scan_char_dir(scan_dir: str, char_list: list, seen_names: set) -> None:
+    """scan_dir 内のキャラクターを char_list に追加する。seen_names に既にある名前はスキップ。"""
+    if not os.path.exists(scan_dir):
+        return
 
-    char_list: list[dict] = []
-    seen_names: set[str]  = set()   # 重複防止
-
-    entries = os.listdir(CHAR_DIR)
-
-    for entry in sorted(entries):
-        full_path = os.path.join(CHAR_DIR, entry)
+    for entry in sorted(os.listdir(scan_dir)):
+        full_path = os.path.join(scan_dir, entry)
 
         # ── パターン1: フラット (.txt) ──────────────────────────
         if entry.endswith(".txt"):
             base = Path(entry).stem
             if base in seen_names:
                 continue
-            char = _char_from_dir(base, CHAR_DIR)
+            char = _char_from_dir(base, scan_dir)
             if char:
                 seen_names.add(base)
                 char_list.append(char)
@@ -342,6 +342,26 @@ def get_dynamic_characters() -> list:
             if char:
                 seen_names.add(base)
                 char_list.append(char)
+
+
+def get_dynamic_characters() -> list:
+    # CHAR_DIR が存在しない場合は作成して空を返す
+    if not os.path.exists(CHAR_DIR):
+        os.makedirs(CHAR_DIR)
+        return []
+
+    char_list: list[dict] = []
+    seen_names: set[str]  = set()   # 重複防止 (CHAR_DIR 側が優先)
+
+    # CHAR_DIR を先にスキャン (優先度高)
+    _scan_char_dir(CHAR_DIR, char_list, seen_names)
+
+    # CHAR_DIR 環境変数が有効 かつ char_dir_also_default=True の場合は
+    # デフォルトフォルダも追加でスキャン (同名はCHAR_DIR側を優先済み)
+    settings = load_settings()
+    if CHAR_DIR_ENV and settings.get("char_dir_also_default", False):
+        if os.path.normpath(CHAR_DIR) != os.path.normpath(DEFAULT_CHAR_DIR):
+            _scan_char_dir(DEFAULT_CHAR_DIR, char_list, seen_names)
 
     return char_list
 
@@ -1178,6 +1198,9 @@ def get_api_config():
         "tts_api_url":         TTS_API_URL,
         "default_llm_api_url": _DEFAULT_LLM_API_URL,
         "default_tts_api_url": _DEFAULT_TTS_API_URL,
+        # CHAR_DIR 環境変数の状態
+        "char_dir_active": bool(CHAR_DIR_ENV),
+        "char_dir_value":  CHAR_DIR_ENV or "",
     })
 
 

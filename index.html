@@ -103,8 +103,9 @@ body { background: var(--body-gradient); }
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr;
   grid-template-rows: var(--header-h) 1fr var(--input-h);
-  height: 100vh;
-  height: 100dvh;
+  height: 100vh;        /* フォールバック */
+  height: 100dvh;       /* モダンブラウザ */
+  height: calc(var(--app-h, 1vh) * 100);  /* JS補正値 (iOS Safari対応) */
 }
 
 /* ── header ── */
@@ -148,6 +149,7 @@ body { background: var(--body-gradient); }
   border-right: 1px solid var(--border);
   display: flex; flex-direction: column;
   overflow: hidden;
+  -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
   background: var(--sidebar-bg);
   transition: transform .25s ease, background .3s;
@@ -322,6 +324,25 @@ body { background: var(--body-gradient); }
 }
 .regen-btn:disabled { opacity: 0.3; cursor: default; pointer-events: none; }
 
+/* ── ▶ ボタン再生中アニメーション ── */
+.replay-btn.playing {
+  color: white !important;
+  background: var(--accent2) !important;
+  opacity: 1 !important;
+  position: relative;
+  overflow: visible;
+}
+.replay-btn.playing::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,0.2);
+  border-top-color: rgba(255,255,255,0.9);
+  animation: replay-spin 0.75s linear infinite;
+  pointer-events: none;
+}
+
 /* 吹き出しドロップダウン */
 .bubble-dropdown {
   position: fixed;
@@ -357,6 +378,7 @@ body { background: var(--body-gradient); }
   padding: 0 16px;
   border-top: 1px solid var(--border);
   background: var(--input-bg);
+  -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
   transition: background .3s;
 }
@@ -634,9 +656,10 @@ body { background: var(--body-gradient); }
   #sys-modal { max-height: 85vh; }
 }
 
-@keyframes blink  { 0%,100%{opacity:1} 50%{opacity:0} }
-@keyframes fadeUp { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none} }
-@keyframes bar    { 0%,100%{height:4px} 50%{height:12px} }
+@keyframes blink       { 0%,100%{opacity:1} 50%{opacity:0} }
+@keyframes fadeUp      { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none} }
+@keyframes bar         { 0%,100%{height:4px} 50%{height:12px} }
+@keyframes replay-spin { to { transform: rotate(360deg); } }
 
 /* ══════════════════════════════
    キャラクター作成/編集 モーダル
@@ -906,6 +929,10 @@ body { background: var(--body-gradient); }
 body.text-shadow-mode .msg-text {
   text-shadow: 0 1px 4px rgba(0,0,0,0.4);
 }
+/* 吹き出しぼかし無効モード */
+body.no-bubble-blur .msg-bubble {
+  backdrop-filter: none;
+}
 
 /* 環境設定モーダル — セクション共通 */
 .api-section-divider {
@@ -997,6 +1024,10 @@ body.text-shadow-mode .msg-text {
           <input type="checkbox" id="ac-text-shadow">
           <span>テキストシャドウ</span>
         </label>
+        <label class="api-check-label">
+          <input type="checkbox" id="ac-bubble-blur" checked>
+          <span>吹き出しの後ろの背景をぼかす</span>
+        </label>
       </div>
 
       <!-- ── ダウンロード設定 ── -->
@@ -1015,6 +1046,16 @@ body.text-shadow-mode .msg-text {
           <input class="api-field-input" id="ac-ffmpeg-path" type="text" placeholder="例: C:\ffmpeg\bin\ffmpeg.exe">
           <div class="api-field-note">空欄またはパスが通っていない場合はシステムのffmpegを使用します</div>
         </div>
+      </div>
+
+      <!-- ── キャラクター読み出し設定 ── -->
+      <div class="api-section-divider">キャラクター読み出し設定</div>
+      <div class="api-settings-group">
+        <div id="ac-char-dir-status" class="api-field-note" style="margin-bottom:4px;"></div>
+        <label class="api-check-label" id="ac-char-dir-also-default-label">
+          <input type="checkbox" id="ac-char-dir-also-default">
+          <span>CHAR_DIR環境変数が設定されている場合もデフォルトのフォルダを追加で読み込む</span>
+        </label>
       </div>
 
     </div>
@@ -1218,6 +1259,10 @@ let selectedHasVoice = false;
 let isGenerating     = false;
 let audioQueue       = [];
 let isAudioPlaying   = false;
+let isReplaying      = false;   // リプレイ再生中フラグ
+let activePlayBtn    = null;    // 現在再生中の ▶ ボタン参照
+let activePlayRow    = null;    // 現在再生中の行要素 (▶ 未生成時の事後アクティブ化用)
+let audioQueueMeta   = [];      // audioQueue と並列: { row: Element|null }[]
 
 /* ══════════════════════════════
    DOM refs
@@ -1351,6 +1396,9 @@ function applySettings(s) {
   }
   if (s.text_shadow !== undefined) {
     document.body.classList.toggle('text-shadow-mode', !!s.text_shadow);
+  }
+  if (s.bubble_blur !== undefined) {
+    document.body.classList.toggle('no-bubble-blur', !s.bubble_blur);
   }
   // システムプロンプト設定の反映
   if (s.slot_and_file !== undefined) {
@@ -1621,7 +1669,18 @@ $sysBackdrop.addEventListener('click', e => { if (e.target === $sysBackdrop) $sy
    Audio Player (iPhone対応版)
 ══════════════════════════════ */
 function playNextAudio() {
-  if (audioQueue.length === 0 || isAudioPlaying) return;
+  if (audioQueue.length === 0 || isAudioPlaying) {
+    // キューが空になったタイミングで後処理
+    if (audioQueue.length === 0 && !isAudioPlaying) {
+      if (isReplaying) {
+        isReplaying = false;
+        _restoreSendBtn();
+      }
+      activePlayRow = null;
+      _clearActivePlayBtn();
+    }
+    return;
+  }
 
   // AudioContext が suspended の場合は unlock後に再試行
   const ctx = getAudioCtx();
@@ -1632,6 +1691,17 @@ function playNextAudio() {
 
   isAudioPlaying = true;
   const dataUrl = audioQueue.shift();
+  const meta    = audioQueueMeta.shift() || { row: null };
+  const row     = meta.row || null;
+
+  // この行の ▶ ボタンをアクティブ化 (まだ生成されていない場合は activePlayRow で記憶)
+  activePlayRow = row;
+  if (row) {
+    const btn = row.querySelector('.replay-btn');
+    _setActivePlayBtn(btn || null);  // btn が null の場合は生成後に事後アクティブ化
+  } else {
+    _clearActivePlayBtn();
+  }
 
   const audio = new Audio();
   audio.preload = 'auto';
@@ -1651,6 +1721,7 @@ function playNextAudio() {
         if (err.name === 'NotAllowedError') {
           // iOSポリシーブロック: キュー先頭に差し戻して次操作を待つ
           audioQueue.unshift(dataUrl);
+          audioQueueMeta.unshift(meta);
           isAudioPlaying = false;
           audioUnlocked  = false;
         } else {
@@ -1667,6 +1738,84 @@ function playNextAudio() {
 
   audio.src = dataUrl;
   audio.load();
+}
+
+/* ══════════════════════════════
+   リプレイ制御
+══════════════════════════════ */
+function _restoreSendBtn() {
+  $sendBtn.innerHTML = '&#10148;';
+  $sendBtn.title = '送信';
+  // 通常の有効/無効状態に戻す
+  $sendBtn.disabled = (selectedIndex === null || isGenerating);
+}
+
+function _setActivePlayBtn(btn) {
+  // 別のボタンが点灯中ならまず消す
+  if (activePlayBtn && activePlayBtn !== btn) {
+    activePlayBtn.classList.remove('playing');
+  }
+  activePlayBtn = btn;
+  if (btn) btn.classList.add('playing');
+}
+
+function _clearActivePlayBtn() {
+  if (activePlayBtn) {
+    activePlayBtn.classList.remove('playing');
+    activePlayBtn = null;
+  }
+}
+
+// audioQueue と audioQueueMeta に同時に積むヘルパー
+function _pushAudio(url, row) {
+  audioQueue.push(url);
+  audioQueueMeta.push({ row: row || null });
+}
+
+function stopReplay() {
+  if (!isReplaying) return;
+  isReplaying = false;
+  audioQueue.length = 0;
+  audioQueueMeta.length = 0;
+  isAudioPlaying = false;
+  activePlayRow = null;
+  _clearActivePlayBtn();
+  _restoreSendBtn();
+}
+
+function startReplayFromRow(sourceRow) {
+  stopReplay();  // 既存のリプレイを停止
+
+  // sourceRow 以降の全 char メッセージ行を取得
+  const allRows = [...$messages.querySelectorAll('.msg-row.char')];
+  const startIdx = allRows.indexOf(sourceRow);
+  if (startIdx === -1) return;
+
+  let totalPushed = 0;
+  for (let i = startIdx; i < allRows.length; i++) {
+    const r = allRows[i];
+    const audio = r._collectedAudio;
+    if (audio && audio.length > 0) {
+      for (const url of audio) _pushAudio(url, r);
+      totalPushed += audio.length;
+    }
+  }
+
+  if (totalPushed === 0) {
+    showErrorToast('再生できる音声がありません');
+    return;
+  }
+
+  // リプレイ開始
+  isReplaying = true;
+
+  // 送信ボタンを停止ボタンに変更
+  $sendBtn.innerHTML = '&#9632;';   // ■
+  $sendBtn.title = '再生停止';
+  $sendBtn.disabled = false;
+
+  unlockAudio();
+  playNextAudio();
 }
 
 /* ══════════════════════════════
@@ -1706,6 +1855,10 @@ async function _doOpenLocation(data) {
 // ⋯ メニューと ▶ 再生ボタンを footer に追加するヘルパー
 // exportCache = { data: null } を吹き出しごとに共有し、生成済みなら再利用する
 function _appendMenuAndPlay(footer, collectedAudio, textEl, exportCache) {
+  // この吹き出しの行に collectedAudio を紐付け (ここからリプレイ用)
+  const sourceRow = footer.closest('.msg-row');
+  if (sourceRow) sourceRow._collectedAudio = collectedAudio;
+
   // ⋯ メニューボタン
   const menuBtn = document.createElement('button');
   menuBtn.className = 'bubble-menu-btn';
@@ -1726,6 +1879,8 @@ function _appendMenuAndPlay(footer, collectedAudio, textEl, exportCache) {
     const dd = document.createElement('div');
     dd.className = 'bubble-dropdown';
     const items = [
+      { icon: '\u25B6\u25B6', label: 'ここからリプレイ',
+        action: () => { if (sourceRow) startReplayFromRow(sourceRow); } },
       { icon: '\u2B07',       label: '\u30C0\u30A6\u30F3\u30ED\u30FC\u30C9',
         action: async () => { try { await _doDownload(await getExport()); } catch(e) { showErrorToast('\u30A8\u30E9\u30FC: '+e.message); } } },
       { icon: '\uD83D\uDCC2', label: '\u30D5\u30A1\u30A4\u30EB\u306E\u5834\u6240\u3092\u958B\u304F',
@@ -1759,9 +1914,14 @@ function _appendMenuAndPlay(footer, collectedAudio, textEl, exportCache) {
   playBtn.textContent = '\u25B6';
   playBtn.addEventListener('click', () => {
     unlockAudio();
-    for (const url of collectedAudio) audioQueue.push(url);
+    for (const url of collectedAudio) _pushAudio(url, sourceRow);
     playNextAudio();
   });
+
+  // 生成完了時点でこの行の音声がすでに再生中なら即アクティブ化
+  if (sourceRow && sourceRow === activePlayRow) {
+    _setActivePlayBtn(playBtn);
+  }
   footer.appendChild(playBtn);
 }
 
@@ -1816,6 +1976,7 @@ function finalizeReplayBtn(footer, spinner, collectedAudio, textEl, hasVoice = f
 function startAudioPolling(reqId, footer, spinner, collectedAudio, textEl, hasVoice = true) {
   if (!reqId || activePolls.has(reqId)) return;
 
+  const pollRow = footer ? footer.closest('.msg-row') : null;
   async function poll() {
     if (!activePolls.has(reqId)) return;
     try {
@@ -1824,7 +1985,7 @@ function startAudioPolling(reqId, footer, spinner, collectedAudio, textEl, hasVo
       for (const b64 of data.audios) {
         const url = 'data:audio/wav;base64,' + b64;
         collectedAudio.push(url);
-        audioQueue.push(url);
+        _pushAudio(url, pollRow);
         playNextAudio();
       }
       if (data.finished) {
@@ -1844,6 +2005,7 @@ function startAudioPolling(reqId, footer, spinner, collectedAudio, textEl, hasVo
    既存ボタンはそのまま残し、音声だけ入れ替える。
    failMode=true かつ成功時は ⋯ と ▶ を追加する。 */
 function _pollRegenAudio(reqId, collectedAudio, spinner, regenBtn, footer, textEl, wasFailMode, exportCache) {
+  const regenRow = footer ? footer.closest('.msg-row') : null;
   async function poll() {
     try {
       const res  = await fetch(`${API}/audio_poll/${reqId}`);
@@ -1851,7 +2013,7 @@ function _pollRegenAudio(reqId, collectedAudio, spinner, regenBtn, footer, textE
       for (const b64 of data.audios) {
         const url = 'data:audio/wav;base64,' + b64;
         collectedAudio.push(url);
-        audioQueue.push(url);
+        _pushAudio(url, regenRow);
         playNextAudio();
       }
       if (data.finished) {
@@ -2108,7 +2270,7 @@ async function consumeStream(response, bubbleRefs, cursorEl) {
       if (data.audio) {
         const dataUrl = 'data:audio/wav;base64,' + data.audio;
         collectedAudio.push(dataUrl);
-        audioQueue.push(dataUrl);
+        _pushAudio(dataUrl, bubbleRefs.bubble.parentElement);
         playNextAudio();
       }
       if (data.token) {
@@ -2170,7 +2332,7 @@ async function sendMessage() {
           const data = await res.json();
           if (data.audio) {
             const url = 'data:audio/wav;base64,' + data.audio;
-            audioQueue.push(url);
+            _pushAudio(url, charRefs.bubble.parentElement);
             playNextAudio();
             finalizeReplayBtn(charRefs.footer, charRefs.spinner, [url], charRefs.textEl, hasVoice);
           } else {
@@ -2295,7 +2457,11 @@ setInterval(() => {
 $input.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
 });
-$sendBtn.addEventListener('click', () => { unlockAudio(); sendMessage(); });
+$sendBtn.addEventListener('click', () => {
+  if (isReplaying) { stopReplay(); return; }
+  unlockAudio();
+  sendMessage();
+});
 
 /* ══════════════════════════════
    Toast
@@ -2313,6 +2479,30 @@ function showErrorToast(message, type = 'error') {
     setTimeout(() => toast.remove(), 250);
   }, 3000);
 }
+
+/* ══════════════════════════════
+   iOS Safari ビューポート高さ補正
+   100vh が実際の表示高さと一致しない問題を
+   window.innerHeight で補正する
+══════════════════════════════ */
+(function _fixAppHeight() {
+  function update() {
+    // innerHeight = キーボードやアドレスバーを除いた実際の高さ
+    const vh = window.innerHeight * 0.01;
+    document.documentElement.style.setProperty('--app-h', vh + 'px');
+    // calc(var(--app-h) * 100) では単位が合わないので
+    // 直接 px 値を #app に適用する方が確実
+    const app = document.getElementById('app');
+    if (app) app.style.height = window.innerHeight + 'px';
+  }
+  update();
+  window.addEventListener('resize', update);
+  // visualViewport API: iOS でキーボード開閉時により正確に発火する
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', update);
+    window.visualViewport.addEventListener('scroll', update);
+  }
+})();
 
 /* ══════════════════════════════
    起動
@@ -2506,9 +2696,13 @@ const $acFfmpegPathEnabled  = document.getElementById('ac-ffmpeg-path-enabled');
 const $acFfmpegPathRow      = document.getElementById('ac-ffmpeg-path-row');
 const $acFfmpegPath         = document.getElementById('ac-ffmpeg-path');
 const $acFfmpegStatus       = document.getElementById('ac-ffmpeg-status');
-const $acBubbleSlider       = document.getElementById('ac-bubble-slider');
-const $acBubbleVal          = document.getElementById('ac-bubble-val');
-const $acTextShadow         = document.getElementById('ac-text-shadow');
+const $acBubbleSlider           = document.getElementById('ac-bubble-slider');
+const $acBubbleVal              = document.getElementById('ac-bubble-val');
+const $acTextShadow             = document.getElementById('ac-text-shadow');
+const $acBubbleBlur             = document.getElementById('ac-bubble-blur');
+const $acCharDirStatus          = document.getElementById('ac-char-dir-status');
+const $acCharDirAlsoDefault     = document.getElementById('ac-char-dir-also-default');
+const $acCharDirAlsoDefaultLabel= document.getElementById('ac-char-dir-also-default-label');
 
 // ffmpegパス指定チェックボックスと入力欄の連動
 $acFfmpegPathEnabled.addEventListener('change', () => {
@@ -2545,11 +2739,23 @@ async function openApiConfigModal() {
       $acTtsUrl.value = d.tts_api_url || '';
       $acLlmUrl.placeholder = d.default_llm_api_url || 'http://localhost:1234/v1';
       $acTtsUrl.placeholder = d.default_tts_api_url || 'http://localhost:7862/';
+      // CHAR_DIR 状態の表示
+      if (d.char_dir_active) {
+        $acCharDirStatus.textContent = `CHAR_DIR = ${d.char_dir_value}`;
+        $acCharDirStatus.style.color = 'var(--accent)';
+        $acCharDirAlsoDefaultLabel.style.opacity = '1';
+        $acCharDirAlsoDefault.disabled = false;
+      } else {
+        $acCharDirStatus.textContent = 'CHAR_DIR 環境変数は設定されていません';
+        $acCharDirStatus.style.color = 'var(--muted)';
+        $acCharDirAlsoDefaultLabel.style.opacity = '0.4';
+        $acCharDirAlsoDefault.disabled = true;
+      }
     }
   } catch(e) {
     console.warn('[ApiConfig] Failed to load:', e);
   }
-  // 永続設定を読み込む（表示設定 + ffmpeg設定）
+  // 永続設定を読み込む（表示設定 + ffmpeg設定 + キャラクター読み出し設定）
   try {
     const res = await fetch(`${API}/settings`);
     if (res.ok) {
@@ -2560,11 +2766,14 @@ async function openApiConfigModal() {
       $acBubbleSlider.value    = pct;
       $acBubbleVal.textContent = pct + '%';
       $acTextShadow.checked    = !!s.text_shadow;
+      $acBubbleBlur.checked    = s.bubble_blur !== false;
       // ffmpeg設定
       $acFfmpegMp3.checked         = !!s.ffmpeg_to_mp3;
       $acFfmpegPathEnabled.checked = !!s.ffmpeg_path_enabled;
       $acFfmpegPath.value          = s.ffmpeg_path || '';
       $acFfmpegPathRow.style.display = $acFfmpegPathEnabled.checked ? '' : 'none';
+      // キャラクター読み出し設定
+      $acCharDirAlsoDefault.checked = !!s.char_dir_also_default;
     }
   } catch(e) { /* ignore */ }
   _refreshFfmpegStatus();
@@ -2621,16 +2830,19 @@ $acApplyBtn.addEventListener('click', async () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        bubble_alpha:        bubbleAlpha,
-        text_shadow:         $acTextShadow.checked,
-        ffmpeg_to_mp3:       $acFfmpegMp3.checked,
-        ffmpeg_path_enabled: $acFfmpegPathEnabled.checked,
-        ffmpeg_path:         $acFfmpegPath.value.trim(),
+        bubble_alpha:          bubbleAlpha,
+        text_shadow:           $acTextShadow.checked,
+        bubble_blur:           $acBubbleBlur.checked,
+        ffmpeg_to_mp3:         $acFfmpegMp3.checked,
+        ffmpeg_path_enabled:   $acFfmpegPathEnabled.checked,
+        ffmpeg_path:           $acFfmpegPath.value.trim(),
+        char_dir_also_default: $acCharDirAlsoDefault.checked,
       }),
     });
     // 表示設定を即時反映
     document.documentElement.style.setProperty('--bubble-alpha', bubbleAlpha);
     document.body.classList.toggle('text-shadow-mode', $acTextShadow.checked);
+    document.body.classList.toggle('no-bubble-blur', !$acBubbleBlur.checked);
     showErrorToast('✓ 設定を保存しました', 'success');
   } catch(e) {
     showErrorToast('設定保存エラー: ' + e.message);
