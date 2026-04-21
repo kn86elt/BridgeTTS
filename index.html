@@ -414,6 +414,41 @@ body { background: var(--body-gradient); }
 .tts-bars span:nth-child(2) { animation-delay: .15s; }
 .tts-bars span:nth-child(3) { animation-delay: .30s; }
 
+/* ── メッセージ上下スクロールヒント ── */
+#msg-scroll-top, #msg-scroll-bottom {
+  position: sticky;
+  display: flex; align-items: center; justify-content: center;
+  height: 28px;
+  z-index: 20;
+  cursor: pointer;
+  flex-shrink: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .25s;
+}
+#msg-scroll-top  { top: 0; }
+#msg-scroll-bottom { bottom: 0; }
+#msg-scroll-top.visible, #msg-scroll-bottom.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+#msg-scroll-top span, #msg-scroll-bottom span {
+  display: flex; align-items: center; justify-content: center;
+  width: 44px; height: 20px;
+  background: rgba(255,255,255,0.12);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 8px; color: var(--muted);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  transition: color .15s, background .15s;
+  user-select: none;
+}
+#msg-scroll-top:hover span, #msg-scroll-bottom:hover span {
+  color: var(--accent);
+  background: rgba(255,255,255,0.22);
+}
+
 /* ── welcome ── */
 #welcome {
   flex: 1; display: flex; flex-direction: column;
@@ -1220,11 +1255,13 @@ body.no-bubble-blur .msg-bubble {
 
   <!-- Messages -->
   <main id="messages">
+    <div id="msg-scroll-top" title="先頭へスクロール"><span>▲</span></div>
     <div id="welcome">
       <div class="big">&#127897;&#65039;</div>
       <div>キャラクターを選択してください</div>
       <button id="welcome-menu-btn" onclick="openSidebar()">&#9776; キャラクターを選ぶ</button>
     </div>
+    <div id="msg-scroll-bottom" title="末尾へスクロール"><span>▼</span></div>
   </main>
 
   <!-- Input -->
@@ -1267,8 +1304,10 @@ let audioQueueMeta   = [];      // audioQueue と並列: { row: Element|null }[]
 /* ══════════════════════════════
    DOM refs
 ══════════════════════════════ */
-const $charList  = document.getElementById('char-list');
-const $messages  = document.getElementById('messages');
+const $charList       = document.getElementById('char-list');
+const $messages       = document.getElementById('messages');
+const $msgScrollTop   = document.getElementById('msg-scroll-top');
+const $msgScrollBottom= document.getElementById('msg-scroll-bottom');
 const $input     = document.getElementById('user-input');
 const $sendBtn   = document.getElementById('send-btn');
 const $statusDot = document.getElementById('status-dot');
@@ -2140,6 +2179,9 @@ async function selectCharacter(idx, name, hasImage, hasVoice) {
   isAudioPlaying = false;
 
   $messages.innerHTML = '';
+  // innerHTML クリア後にスクロール帯を復元 (insertBefore の参照先として必要)
+  $messages.appendChild($msgScrollTop);
+  $messages.appendChild($msgScrollBottom);
   appendSystemMsg(`${name} がログインしました`);
   setBackgroundImage(selectedImageUrl);
   runInitialGreeting($ttsToggle.checked);
@@ -2156,7 +2198,7 @@ function appendSystemMsg(text) {
   const div = document.createElement('div');
   div.style.cssText = 'text-align:center;font-family:\'Share Tech Mono\',monospace;font-size:11px;color:var(--sys-text);letter-spacing:.05em;padding:4px 0;';
   div.textContent = `\u2500\u2500 ${text} \u2500\u2500`;
-  $messages.appendChild(div);
+  $messages.insertBefore(div, $msgScrollBottom);
   scrollBottom();
 }
 
@@ -2211,13 +2253,30 @@ function appendMessage(role, name, imageUrl) {
   if (role === 'user') { row.appendChild(bubble); row.appendChild(avatar); }
   else                 { row.appendChild(avatar);  row.appendChild(bubble); }
 
-  $messages.appendChild(row);
+  $messages.insertBefore(row, $msgScrollBottom);
   scrollBottom();
 
   return { textEl, footer, spinner, bubble };
 }
 
 function scrollBottom() { $messages.scrollTop = $messages.scrollHeight; }
+
+/* ── スクロールヒント表示制御 ── */
+function updateScrollHints() {
+  const { scrollTop, scrollHeight, clientHeight } = $messages;
+  $msgScrollTop   .classList.toggle('visible', scrollTop > 8);
+  $msgScrollBottom.classList.toggle('visible', scrollTop < scrollHeight - clientHeight - 8);
+}
+$messages.addEventListener('scroll', updateScrollHints, { passive: true });
+// コンテンツ追加時にも更新
+new MutationObserver(updateScrollHints).observe($messages, { childList: true });
+
+$msgScrollTop.addEventListener('click', () => {
+  $messages.scrollTo({ top: 0, behavior: 'smooth' });
+});
+$msgScrollBottom.addEventListener('click', () => {
+  $messages.scrollTo({ top: $messages.scrollHeight, behavior: 'smooth' });
+});
 
 /* ══════════════════════════════
    ステータス更新
@@ -2234,7 +2293,7 @@ function appendErrorDetail(text) {
   const el = document.createElement('div');
   el.className = 'error-detail-bubble';
   el.textContent = text;
-  $messages.appendChild(el);
+  $messages.insertBefore(el, $msgScrollBottom);
   scrollBottom();
 }
 
