@@ -2,6 +2,8 @@ bridge_settings.json
 uv.lock
 __pycache__/
 .venv/
+.git/
+.env/
 *~
 run-bridge-test.bat
 changelog_detail.md
