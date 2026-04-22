@@ -430,6 +430,9 @@ body { background: var(--body-gradient); }
   color: var(--muted); cursor: not-allowed; opacity: .5;
   pointer-events: none;
 }
+.log-popup-sep {
+  height: 1px; background: var(--border); margin: 4px 0;
+}
 /* ログモーダル共通 */
 .log-modal-backdrop {
   display: none; position: fixed; inset: 0;
@@ -1466,8 +1469,11 @@ let isReplaying      = false;   // リプレイ再生中フラグ
 let activePlayBtn    = null;    // 現在再生中の ▶ ボタン参照
 let activePlayRow    = null;    // 現在再生中の行要素 (▶ 未生成時の事後アクティブ化用)
 let audioQueueMeta   = [];      // audioQueue と並列: { row: Element|null }[]
-let replayRowsQueue  = [];      // ここからリプレイ: 未処理行のキュー
+let replayRowsQueue    = [];    // ここからリプレイ: 未処理行のキュー
 let replayWaitingRegen = false; // リプレイ中の音声生成待ちフラグ
+let isScenarioPlaying  = false; // シナリオ再生中フラグ
+let scenarioQueue      = [];    // シナリオ: 送出待ちユーザー発言の配列
+let logLoadMode        = 'load';// ログ読み込みダイアログのモード ('load' | 'scenario')
 let ffmpegAvailable  = false;   // check_ffmpeg で取得した ffmpeg 利用可否
 let logSessionId     = null;    // 現在のログセッションID
 let pendingLogChar   = null;    // 遅延セッション開始用キャラ名
@@ -2601,18 +2607,30 @@ $logMenuBtn.addEventListener('click', e => {
 
   const popup = document.createElement('div');
   popup.className = 'log-popup';
-  const items = [
-    { label: 'ログを保存', action: openLogSaveDialog },
-    { label: 'ログを読み込む', action: openLogLoadDialog },
+
+  const menuDefs = [
+    { label: 'ログを保存',     action: openLogSaveDialog },
+    { label: 'ログを読み込む', action: () => openLogLoadDialog('load') },
+    null, // セパレータ
+    { label: 'シナリオを読み込む',
+      tooltip: 'ログのユーザー入力のみ使用し新しい会話で再現します',
+      action: () => openLogLoadDialog('scenario') },
   ];
-  items.forEach(item => {
+  menuDefs.forEach(def => {
+    if (!def) {
+      const sep = document.createElement('div');
+      sep.className = 'log-popup-sep';
+      popup.appendChild(sep);
+      return;
+    }
     const el = document.createElement('div');
     el.className = 'log-popup-item';
-    el.textContent = item.label;
+    el.textContent = def.label;
+    if (def.tooltip) el.title = def.tooltip;
     el.addEventListener('click', ev => {
       ev.stopPropagation();
       popup.remove(); logPopupEl = null;
-      item.action();
+      def.action();
     });
     popup.appendChild(el);
   });
@@ -2658,9 +2676,17 @@ $logSaveOk.addEventListener('click', async () => {
 
 // ── ログ読み込みダイアログ ──
 let logLoadDir = 'output';
-function openLogLoadDialog() {
+function openLogLoadDialog(mode = 'load') {
+  logLoadMode = mode;
+  // シナリオモード時はキャラクター未選択を弾く
+  if (mode === 'scenario' && selectedIndex === null) {
+    showErrorToast('先にキャラクターを選択してください');
+    return;
+  }
+  // タイトルを切り替え
+  const titleEl = $logLoadBackdrop.querySelector('.log-modal-header span');
+  if (titleEl) titleEl.textContent = mode === 'scenario' ? 'シナリオを読み込む' : 'ログを読み込む';
   $logLoadBackdrop.classList.add('open');
-  // タブの初期状態をリセット
   $logDirTabs.querySelectorAll('.log-dir-tab').forEach(t => {
     t.classList.toggle('active', t.dataset.dir === logLoadDir);
   });
@@ -2696,7 +2722,14 @@ async function fetchLogFiles(dir) {
       const item = document.createElement('div');
       item.className = 'log-file-item';
       item.innerHTML = `<span class="log-file-name">${f.filename}</span><span class="log-file-date">${f.modified}</span>`;
-      item.addEventListener('click', () => loadLogFile(f.path));
+      item.addEventListener('click', () => {
+        if (logLoadMode === 'scenario') {
+          closeLogLoadDialog();
+          startScenario(f.path);
+        } else {
+          loadLogFile(f.path);
+        }
+      });
       $logFileList.appendChild(item);
     });
   } catch(e) {
@@ -2718,6 +2751,108 @@ async function loadLogFile(filepath) {
   } catch(e) {
     showErrorToast('読み込みエラー: ' + e.message);
   }
+}
+
+/* ══════════════════════════════
+   シナリオ再生
+   ログのユーザー発言のみ抽出し、現在のキャラクターで新規会話を再現する
+══════════════════════════════ */
+
+// ログの messages 配列からシナリオキュー（送出するテキストの配列）を構築する
+// 最初の ASSISTANT は挨拶なのでスキップ。連続する ASSISTANT は空送信を意味する。
+function buildScenarioQueue(messages) {
+  const queue = [];
+  let firstAssistantDone = false;
+  let lastRole = null;
+  for (const msg of messages) {
+    if (msg.role === 'assistant' && !firstAssistantDone) {
+      firstAssistantDone = true;
+      lastRole = 'assistant';
+      continue;  // 挨拶はスキップ（新しいキャラクターが生成する）
+    }
+    if (msg.role === 'assistant') {
+      // 直前も assistant → 間に空送信があった
+      if (lastRole === 'assistant') queue.push('');
+      lastRole = 'assistant';
+    } else if (msg.role === 'user') {
+      queue.push(msg.text);
+      lastRole = 'user';
+    }
+  }
+  return queue;
+}
+
+async function startScenario(filepath) {
+  if (selectedIndex === null) { showErrorToast('キャラクターを選択してください'); return; }
+
+  // ログファイルをパース
+  let data;
+  try {
+    const res = await fetch(`${API}/log/load`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filepath }),
+    });
+    if (!res.ok) { const d = await res.json().catch(()=>({})); throw new Error(d.detail || 'HTTP '+res.status); }
+    data = await res.json();
+  } catch(e) {
+    showErrorToast('シナリオ読み込みエラー: ' + e.message);
+    return;
+  }
+
+  const queue = buildScenarioQueue(data.messages);
+  if (queue.length === 0) {
+    showErrorToast('ユーザー発言がログに含まれていません');
+    return;
+  }
+
+  // 会話をリセットして新規ログセッション準備
+  stopAudioPolling({ cancel: true });
+  stopReplay();
+  audioQueue.length = 0;
+  isAudioPlaying = false;
+  logSessionId     = null;
+  pendingLogChar   = selectedName;
+  logMessageBuffer = [];
+  pendingLogBuffer = [];
+
+  $messages.innerHTML = '';
+  $messages.appendChild($msgScrollTop);
+  $messages.appendChild($msgScrollBottom);
+  appendSystemMsg(`シナリオ再生: ${data.char_name || '不明'} → ${selectedName}`);
+
+  // シナリオ状態をセット（送信ボタンを ■ に変更）
+  isScenarioPlaying = true;
+  scenarioQueue     = queue;
+  $sendBtn.innerHTML = '&#9632;';
+  $sendBtn.title     = 'シナリオ停止';
+  $sendBtn.disabled  = false;
+
+  // 挨拶を生成してから送出開始
+  await runInitialGreeting($ttsToggle.checked);
+
+  await runScenarioQueue();
+}
+
+async function runScenarioQueue() {
+  while (scenarioQueue.length > 0 && isScenarioPlaying) {
+    const text = scenarioQueue.shift();
+    $input.value = text;
+    await sendMessage();
+    // sendMessage の finally が送信ボタンを復元するため、シナリオ継続中は再設定
+    if (isScenarioPlaying) {
+      $sendBtn.innerHTML = '&#9632;';
+      $sendBtn.title     = 'シナリオ停止';
+      $sendBtn.disabled  = false;
+    }
+  }
+  if (isScenarioPlaying) stopScenario();
+}
+
+function stopScenario() {
+  isScenarioPlaying = false;
+  scenarioQueue     = [];
+  _restoreSendBtn();
 }
 
 /* ══════════════════════════════
@@ -3166,10 +3301,14 @@ setInterval(() => {
    キーボード / ボタン
 ══════════════════════════════ */
 $input.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    if (!isScenarioPlaying) sendMessage();
+  }
 });
 $sendBtn.addEventListener('click', () => {
-  if (isReplaying) { stopReplay(); return; }
+  if (isReplaying)        { stopReplay();   return; }
+  if (isScenarioPlaying)  { stopScenario(); return; }
   unlockAudio();
   sendMessage();
 });

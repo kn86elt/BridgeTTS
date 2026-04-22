@@ -4,6 +4,9 @@ __pycache__/
 .venv/
 .git/
 .env/
+log/
+output/
+exports/
 *~
 run-bridge-test.bat
 changelog_detail.md
