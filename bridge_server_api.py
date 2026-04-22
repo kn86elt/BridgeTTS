@@ -1008,6 +1008,8 @@ def tts_regen(req: TtsRegenRequest):
 # ══════════════════════════════════════════════════════
 
 EXPORTS_DIR = "exports"
+LOG_DIR     = "log"
+OUTPUT_DIR  = "output"
 
 
 # ── エクスポート用ヘルパー ────────────────────────────────────────────────
@@ -1488,3 +1490,164 @@ async def edit_character(
             f.write(await voice.read())
 
     return JSONResponse({"status": "ok"})
+
+
+# ══════════════════════════════════════════════════════
+#  会話ログ管理
+# ══════════════════════════════════════════════════════
+
+import random, string as _string
+
+_log_session: dict = {"path": None, "char_name": None, "session_id": None}
+
+
+def _make_session_id() -> str:
+    return ''.join(random.choices(_string.ascii_lowercase + _string.digits, k=6))
+
+
+def _log_filename(char_name: str, session_id: str) -> str:
+    from datetime import datetime as _dt
+    date_str  = _dt.now().strftime("%y-%m-%d")
+    safe_name = re.sub(r'[\\/:*?"<>|\s]', '_', char_name)
+    return f"{date_str}-{safe_name}-{session_id}.log"
+
+
+def _log_header(char_name: str, session_id: str, started: str) -> str:
+    return (
+        f"# BridgeTTS 会話ログ\n"
+        f"# Character: {char_name}\n"
+        f"# Session: {session_id}\n"
+        f"# Started: {started}\n"
+        f"\n---\n\n"
+    )
+
+
+def _parse_log_file(content: str) -> dict:
+    """ログファイルを解析してキャラ名とメッセージリストを返す"""
+    import re as _re
+    char_name = ""
+    messages: list[dict] = []
+
+    lines = content.splitlines()
+    body_start = 0
+    for i, line in enumerate(lines):
+        if line.strip() == "---":
+            body_start = i + 1
+            break
+        if line.startswith("# Character:"):
+            char_name = line[len("# Character:"):].strip()
+
+    body = "\n".join(lines[body_start:])
+    pattern = _re.compile(
+        r'\[(USER|ASSISTANT) (\d{2}:\d{2}:\d{2})\]\n(.*?)(?=\n\[(?:USER|ASSISTANT) \d{2}:\d{2}:\d{2}\]|\Z)',
+        _re.DOTALL,
+    )
+    for m in pattern.finditer(body):
+        text = m.group(3).strip()
+        if text:
+            messages.append({
+                "role": m.group(1).lower(),   # "user" | "assistant"
+                "time": m.group(2),
+                "text": text,
+            })
+
+    return {"char_name": char_name, "messages": messages}
+
+
+class LogStartRequest(BaseModel):
+    char_name: str
+
+class LogAppendRequest(BaseModel):
+    session_id: Optional[str] = None  # 現在は無視 (グローバルセッション使用)
+    role: str                          # "user" | "assistant"
+    text: str
+
+class LogSaveRequest(BaseModel):
+    session_id: Optional[str] = None  # 現在は無視
+    filename:   str = ""
+    directory:  str = OUTPUT_DIR
+
+class LogLoadRequest(BaseModel):
+    filepath: str
+
+
+@app.post("/log/start")
+def log_start(req: LogStartRequest):
+    """新しい会話セッションを開始し log/ にログファイルを作成する"""
+    from datetime import datetime as _dt
+    os.makedirs(LOG_DIR, exist_ok=True)
+    session_id = _make_session_id()
+    filename   = _log_filename(req.char_name, session_id)
+    path       = os.path.join(LOG_DIR, filename)
+    started    = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(_log_header(req.char_name, session_id, started))
+    _log_session["path"]       = path
+    _log_session["char_name"]  = req.char_name
+    _log_session["session_id"] = session_id
+    return JSONResponse({"session_id": session_id, "filename": filename})
+
+
+@app.post("/log/append")
+def log_append(req: LogAppendRequest):
+    """現在のセッションログに1件のメッセージを追記する"""
+    from datetime import datetime as _dt
+    if not _log_session["path"]:
+        raise HTTPException(400, "ログセッションが開始されていません")
+    role_tag = "USER" if req.role == "user" else "ASSISTANT"
+    time_str = _dt.now().strftime("%H:%M:%S")
+    entry = f"[{role_tag} {time_str}]\n{req.text}\n\n"
+    with open(_log_session["path"], "a", encoding="utf-8") as f:
+        f.write(entry)
+    return JSONResponse({"status": "ok"})
+
+
+@app.post("/log/save")
+def log_save(req: LogSaveRequest):
+    """現在のセッションログを指定ディレクトリ（デフォルト: output/）にコピー保存する"""
+    if not _log_session["path"] or not os.path.exists(_log_session["path"]):
+        raise HTTPException(400, "保存できるログがありません")
+    save_dir = req.directory or OUTPUT_DIR
+    if ".." in save_dir:
+        raise HTTPException(400, "不正なパスです")
+    os.makedirs(save_dir, exist_ok=True)
+    filename = (req.filename or "").strip() or os.path.basename(_log_session["path"])
+    if not filename.endswith(".log"):
+        filename += ".log"
+    dest = os.path.join(save_dir, filename)
+    shutil.copy2(_log_session["path"], dest)
+    return JSONResponse({"status": "ok", "filename": filename, "path": dest})
+
+
+@app.post("/log/load")
+def log_load(req: LogLoadRequest):
+    """指定ログファイルを解析してキャラ名とメッセージリストを返す。
+    filepath (絶対・相対どちらでも可) で指定する。"""
+    path = req.filepath if req.filepath else None
+    if not path:
+        raise HTTPException(400, "filepath が指定されていません")
+    if not os.path.exists(path):
+        raise HTTPException(404, "ログファイルが見つかりません")
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+    return JSONResponse(_parse_log_file(content))
+
+
+@app.get("/log/files")
+def log_files(directory: str = OUTPUT_DIR):
+    """指定ディレクトリ（デフォルト: output/）の .log ファイル一覧を返す（更新日時降順）"""
+    from datetime import datetime as _dt
+    result = []
+    if os.path.exists(directory):
+        for fname in os.listdir(directory):
+            if fname.endswith(".log"):
+                fpath = os.path.join(directory, fname)
+                stat  = os.stat(fpath)
+                result.append({
+                    "filename": fname,
+                    "path":     fpath,
+                    "modified": _dt.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
+                    "size":     stat.st_size,
+                })
+    result.sort(key=lambda x: x["modified"], reverse=True)
+    return JSONResponse({"files": result})

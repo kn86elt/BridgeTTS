@@ -398,6 +398,102 @@ body { background: var(--body-gradient); }
 }
 #send-btn:hover   { background: var(--accent); color: var(--bg); }
 #send-btn:disabled { opacity: .3; cursor: default; }
+/* ログメニューボタン */
+#log-menu-btn {
+  flex-shrink: 0;
+  width: 28px; height: 28px; border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 16px; line-height: 1; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all .2s;
+}
+#log-menu-btn:hover { border-color: var(--accent); color: var(--accent); }
+/* ログポップアップ */
+.log-popup {
+  position: fixed; z-index: 9000;
+  background: var(--sidebar-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0,0,0,.35);
+  padding: 4px 0; min-width: 160px;
+  font-family: 'Share Tech Mono', monospace; font-size: 12px;
+}
+.log-popup-item {
+  padding: 8px 14px; cursor: pointer; color: var(--text);
+  display: flex; align-items: center; gap: 8px;
+  transition: background .15s;
+}
+.log-popup-item:hover { background: var(--card-hover); }
+.log-popup-item.disabled {
+  color: var(--muted); cursor: not-allowed; opacity: .5;
+  pointer-events: none;
+}
+/* ログモーダル共通 */
+.log-modal-backdrop {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,.55); z-index: 8500;
+  align-items: center; justify-content: center;
+}
+.log-modal-backdrop.open { display: flex; }
+.log-modal {
+  background: var(--sidebar-bg);
+  border: 1px solid var(--border); border-radius: 12px;
+  width: min(420px, 92vw); max-height: 80vh;
+  display: flex; flex-direction: column;
+  font-family: 'Share Tech Mono', monospace;
+}
+.log-modal-header {
+  padding: 14px 18px; border-bottom: 1px solid var(--border);
+  font-size: 13px; font-weight: 600; color: var(--accent);
+  letter-spacing: .05em;
+}
+.log-modal-body {
+  padding: 16px 18px; flex: 1; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.log-field-label {
+  font-size: 10px; color: var(--muted); margin-bottom: 4px; letter-spacing: .04em;
+}
+.log-field-input {
+  width: 100%; box-sizing: border-box;
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text);
+  font-family: 'Share Tech Mono', monospace; font-size: 12px;
+  padding: 6px 10px;
+}
+.log-field-input:focus { outline: none; border-color: var(--accent); }
+.log-modal-footer {
+  padding: 12px 18px; border-top: 1px solid var(--border);
+  display: flex; justify-content: flex-end; gap: 8px;
+}
+/* ログファイルリスト */
+.log-file-list {
+  border: 1px solid var(--border); border-radius: 6px;
+  overflow-y: auto; max-height: 280px;
+  background: var(--bg);
+}
+.log-file-item {
+  padding: 8px 12px; cursor: pointer; color: var(--text);
+  border-bottom: 1px solid var(--border); font-size: 11px;
+  transition: background .15s;
+}
+.log-file-item:last-child { border-bottom: none; }
+.log-file-item:hover { background: var(--card-hover); }
+.log-file-item.selected { background: var(--char-bg); color: var(--accent); }
+.log-file-empty { padding: 12px; color: var(--muted); font-size: 11px; text-align: center; }
+.log-file-item { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.log-file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-file-date { flex-shrink: 0; color: var(--muted); font-size: 10px; }
+.log-dir-tabs {
+  display: flex; gap: 6px; margin-bottom: 8px;
+}
+.log-dir-tab {
+  padding: 4px 10px; border-radius: 5px; font-size: 11px; cursor: pointer;
+  border: 1px solid var(--border); background: transparent; color: var(--muted);
+}
+.log-dir-tab.active { border-color: var(--accent); color: var(--accent); background: var(--char-bg); }
 
 /* ── TTS indicator ── */
 #tts-indicator {
@@ -1283,7 +1379,58 @@ body.no-bubble-blur .msg-bubble {
       </label>
     </div>
     <textarea id="user-input" placeholder="メッセージを入力... (Enter で送信)" rows="1"></textarea>
+    <button id="log-menu-btn" title="ログメニュー">&#8230;</button>
     <button id="send-btn" disabled title="送信">&#10148;</button>
+  </div>
+</div>
+
+<!-- ══════════════════════════════
+     ログ 保存モーダル
+══════════════════════════════ -->
+<div class="log-modal-backdrop" id="log-save-backdrop">
+  <div class="log-modal">
+    <div class="log-modal-header">
+      <span>ログを保存</span>
+      <button class="log-modal-close" id="log-save-close">✕</button>
+    </div>
+    <div class="log-modal-body">
+      <div class="log-field-row">
+        <label class="log-field-label">保存先フォルダ</label>
+        <input type="text" class="log-field-input" id="log-save-dir" value="output">
+      </div>
+      <div class="log-field-row">
+        <label class="log-field-label">ファイル名</label>
+        <input type="text" class="log-field-input" id="log-save-name" placeholder="自動生成">
+      </div>
+    </div>
+    <div class="log-modal-footer">
+      <button class="log-modal-btn" id="log-save-cancel">キャンセル</button>
+      <button class="log-modal-btn primary" id="log-save-ok">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════
+     ログ 読み込みモーダル
+══════════════════════════════ -->
+<div class="log-modal-backdrop" id="log-load-backdrop">
+  <div class="log-modal" style="width:520px;max-width:98vw">
+    <div class="log-modal-header">
+      <span>ログを読み込む</span>
+      <button class="log-modal-close" id="log-load-close">✕</button>
+    </div>
+    <div class="log-modal-body">
+      <div class="log-dir-tabs" id="log-dir-tabs">
+        <button class="log-dir-tab active" data-dir="output">output/</button>
+        <button class="log-dir-tab" data-dir="log">log/</button>
+      </div>
+      <div class="log-file-list" id="log-file-list">
+        <div style="padding:16px;text-align:center;opacity:.5">読み込み中…</div>
+      </div>
+    </div>
+    <div class="log-modal-footer">
+      <button class="log-modal-btn" id="log-load-cancel">キャンセル</button>
+    </div>
   </div>
 </div>
 
@@ -1310,7 +1457,10 @@ let isReplaying      = false;   // リプレイ再生中フラグ
 let activePlayBtn    = null;    // 現在再生中の ▶ ボタン参照
 let activePlayRow    = null;    // 現在再生中の行要素 (▶ 未生成時の事後アクティブ化用)
 let audioQueueMeta   = [];      // audioQueue と並列: { row: Element|null }[]
+let replayRowsQueue  = [];      // ここからリプレイ: 未処理行のキュー
+let replayWaitingRegen = false; // リプレイ中の音声生成待ちフラグ
 let ffmpegAvailable  = false;   // check_ffmpeg で取得した ffmpeg 利用可否
+let logSessionId     = null;    // 現在のログセッションID
 
 /* ══════════════════════════════
    DOM refs
@@ -1336,6 +1486,20 @@ const $blurToggle= document.getElementById('blur-toggle');
 const $ttsBatch  = document.getElementById('tts-batch-size');
 const $directTtsToggle = document.getElementById('direct-tts-toggle');
 const $directTtsLabel  = document.getElementById('direct-tts-label');
+const $logMenuBtn      = document.getElementById('log-menu-btn');
+// ログ保存モーダル
+const $logSaveBackdrop = document.getElementById('log-save-backdrop');
+const $logSaveClose    = document.getElementById('log-save-close');
+const $logSaveCancel   = document.getElementById('log-save-cancel');
+const $logSaveOk       = document.getElementById('log-save-ok');
+const $logSaveDir      = document.getElementById('log-save-dir');
+const $logSaveName     = document.getElementById('log-save-name');
+// ログ読み込みモーダル
+const $logLoadBackdrop = document.getElementById('log-load-backdrop');
+const $logLoadClose    = document.getElementById('log-load-close');
+const $logLoadCancel   = document.getElementById('log-load-cancel');
+const $logFileList     = document.getElementById('log-file-list');
+const $logDirTabs      = document.getElementById('log-dir-tabs');
 
 // システムプロンプト モーダル
 const $sysBtn        = document.getElementById('sys-prompt-btn');
@@ -1723,8 +1887,14 @@ function playNextAudio() {
     // キューが空になったタイミングで後処理
     if (audioQueue.length === 0 && !isAudioPlaying) {
       if (isReplaying) {
-        isReplaying = false;
-        _restoreSendBtn();
+        // リプレイキューに次の行があれば処理継続
+        if (replayRowsQueue.length > 0 && !replayWaitingRegen) {
+          processNextReplayRow();
+          return;
+        } else if (replayRowsQueue.length === 0 && !replayWaitingRegen) {
+          isReplaying = false;
+          _restoreSendBtn();
+        }
       }
       activePlayRow = null;
       _clearActivePlayBtn();
@@ -1827,6 +1997,8 @@ function stopReplay() {
   isReplaying = false;
   audioQueue.length = 0;
   audioQueueMeta.length = 0;
+  replayRowsQueue.length = 0;
+  replayWaitingRegen = false;
   isAudioPlaying = false;
   activePlayRow = null;
   _clearActivePlayBtn();
@@ -1836,24 +2008,21 @@ function stopReplay() {
 function startReplayFromRow(sourceRow) {
   stopReplay();  // 既存のリプレイを停止
 
-  // sourceRow 以降の全 char メッセージ行を取得
+  // sourceRow 以降の全 char メッセージ行をキューに積む
   const allRows = [...$messages.querySelectorAll('.msg-row.char')];
   const startIdx = allRows.indexOf(sourceRow);
   if (startIdx === -1) return;
 
-  let totalPushed = 0;
-  for (let i = startIdx; i < allRows.length; i++) {
-    const r = allRows[i];
-    const audio = r._collectedAudio;
-    if (audio && audio.length > 0) {
-      for (const url of audio) _pushAudio(url, r);
-      totalPushed += audio.length;
-    }
-  }
+  replayRowsQueue = allRows.slice(startIdx);
 
-  if (totalPushed === 0) {
-    showErrorToast('再生できる音声がありません');
-    return;
+  // 音声なしかつ再生成も不可な行のみかチェック（キャラ無音モデルで音声定義なし）
+  const hasVoiceRows = replayRowsQueue.some(r => r._collectedAudio && r._collectedAudio.length > 0 || r._hasVoice);
+  if (!hasVoiceRows) {
+    const hasTtsCapable = replayRowsQueue.some(r => r._hasVoice !== false);
+    if (!hasTtsCapable) {
+      showErrorToast('再生できる音声がありません');
+      return;
+    }
   }
 
   // リプレイ開始
@@ -1865,7 +2034,7 @@ function startReplayFromRow(sourceRow) {
   $sendBtn.disabled = false;
 
   unlockAudio();
-  playNextAudio();
+  processNextReplayRow();
 }
 
 /* ══════════════════════════════
@@ -1908,6 +2077,10 @@ function _appendMenuAndPlay(footer, collectedAudio, textEl, exportCache) {
   // この吹き出しの行に collectedAudio を紐付け (ここからリプレイ用)
   const sourceRow = footer.closest('.msg-row');
   if (sourceRow) sourceRow._collectedAudio = collectedAudio;
+
+  // ロード済み吹き出しの仮メニューボタンがあれば除去
+  const existingLoaded = footer.querySelector('.loaded-menu-btn');
+  if (existingLoaded) existingLoaded.remove();
 
   // ⋯ メニューボタン
   const menuBtn = document.createElement('button');
@@ -2096,6 +2269,364 @@ Object.defineProperty(window, 'activePollId', {
 });
 
 /* ══════════════════════════════
+   ここからリプレイ: キューベース処理
+   音声未生成の行は随時 TTS 再生成して再生する
+══════════════════════════════ */
+function processNextReplayRow() {
+  if (!isReplaying || replayWaitingRegen) return;
+  if (replayRowsQueue.length === 0) return;  // playNextAudio で終了処理
+
+  const row = replayRowsQueue.shift();
+  const audio = row._collectedAudio;
+
+  if (audio && audio.length > 0) {
+    // 音声あり → キューに積んで再生
+    for (const url of audio) _pushAudio(url, row);
+    playNextAudio();
+  } else if (row._hasVoice !== false) {
+    // 音声未生成だが TTS 対応行 → 再生成
+    const textEl = row.querySelector('.msg-text');
+    const text   = textEl ? textEl.textContent.trim() : '';
+    if (text) {
+      _regenForReplay(row, text);
+    } else {
+      // テキストなし → スキップ
+      processNextReplayRow();
+    }
+  } else {
+    // TTS 非対応行 → スキップ
+    processNextReplayRow();
+  }
+}
+
+async function _regenForReplay(row, text) {
+  replayWaitingRegen = true;
+  try {
+    const res = await fetch(`${API}/tts_regen`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const { req_id } = await res.json();
+    _pollRegenForReplay(req_id, row);
+  } catch(e) {
+    console.warn('[replay regen] error:', e);
+    replayWaitingRegen = false;
+    // この行をスキップして次へ
+    if (isReplaying) processNextReplayRow();
+  }
+}
+
+function _pollRegenForReplay(reqId, row) {
+  const collectedAudio = row._collectedAudio || [];
+  row._collectedAudio  = collectedAudio;
+  const footer         = row.querySelector('.bubble-footer');
+  const textEl         = row.querySelector('.msg-text');
+
+  async function poll() {
+    if (!isReplaying) { replayWaitingRegen = false; return; }
+    try {
+      const res  = await fetch(`${API}/audio_poll/${reqId}`);
+      const data = await res.json();
+      for (const b64 of data.audios) {
+        const url = 'data:audio/wav;base64,' + b64;
+        collectedAudio.push(url);
+        _pushAudio(url, row);
+      }
+      if (data.finished) {
+        replayWaitingRegen = false;
+        // コントロールをアップグレード (ロード済み吹き出し → 通常ボタン)
+        if (footer && collectedAudio.length > 0) {
+          const exportCache = { data: null };
+          const regenBtn = footer.querySelector('.regen-btn');
+          if (!regenBtn) {
+            const rb = document.createElement('button');
+            rb.className = 'regen-btn';
+            rb.title = '音声を再生成 (一括)';
+            rb.textContent = '\u21BB';
+            rb.addEventListener('click', () => {
+              const t = textEl ? textEl.textContent.trim() : '';
+              if (!t) return;
+              rb.disabled = true;
+              const collCopy = collectedAudio;
+              collCopy.length = 0;
+              fetch(`${API}/tts_regen`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({text:t}) })
+                .then(r => r.json())
+                .then(({req_id}) => _pollRegenAudio(req_id, collCopy, null, rb, footer, textEl, false, exportCache))
+                .catch(e => { showErrorToast('再生成エラー: '+e.message); rb.disabled=false; });
+            });
+            footer.appendChild(rb);
+          }
+          _appendMenuAndPlay(footer, collectedAudio, textEl, exportCache);
+        }
+        // 音声キューを消費 → 次の行へ
+        playNextAudio();
+        return;
+      }
+    } catch(e) { console.warn('[replay poll]', e); }
+    setTimeout(poll, 300);
+  }
+  poll();
+}
+
+/* ══════════════════════════════
+   ログ読み込み済み吹き出し用フッター
+   シンプルな ⋯(ここからリプレイのみ) + ↻
+══════════════════════════════ */
+function appendLoadedCharFooter(row, footer, textEl, hasVoice) {
+  if (!footer) return;
+
+  // ↻ 再生成ボタン
+  const regenBtn = document.createElement('button');
+  regenBtn.className = 'regen-btn';
+  regenBtn.title = '音声を再生成 (一括)';
+  regenBtn.textContent = '\u21BB';
+
+  regenBtn.addEventListener('click', async () => {
+    const text = textEl ? textEl.textContent.trim() : '';
+    if (!text) return;
+    regenBtn.disabled = true;
+    const exportCache   = { data: null };
+    const collectedAudio = (row._collectedAudio = row._collectedAudio || []);
+    collectedAudio.length = 0;
+    try {
+      const res = await fetch(`${API}/tts_regen`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const { req_id } = await res.json();
+      _pollRegenAudio(req_id, collectedAudio, null, regenBtn, footer, textEl, true, exportCache);
+    } catch(e) {
+      showErrorToast('再生成エラー: ' + e.message);
+      regenBtn.disabled = false;
+    }
+  });
+  footer.appendChild(regenBtn);
+
+  // ⋯ ロード済み仮メニュー (ここからリプレイのみ)
+  const menuBtn = document.createElement('button');
+  menuBtn.className = 'bubble-menu-btn loaded-menu-btn';
+  menuBtn.title = 'その他';
+  menuBtn.textContent = '\u22EF';
+  let activeDd = null;
+  menuBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    if (activeDd) { activeDd.remove(); activeDd = null; return; }
+    const dd = document.createElement('div');
+    dd.className = 'bubble-dropdown';
+    const item = document.createElement('div');
+    item.className = 'bubble-dropdown-item';
+    item.innerHTML = '<span>\u25B6\u25B6</span><span>\u3053\u3053\u304B\u3089\u30EA\u30D7\u30EC\u30A4</span>';
+    item.addEventListener('click', ev => {
+      ev.stopPropagation();
+      dd.remove(); activeDd = null;
+      startReplayFromRow(row);
+    });
+    dd.appendChild(item);
+    const rect = menuBtn.getBoundingClientRect();
+    dd.style.right  = (window.innerWidth  - rect.right)  + 'px';
+    dd.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
+    document.body.appendChild(dd);
+    activeDd = dd;
+    const close = () => { if (dd.parentNode) { dd.remove(); activeDd = null; } document.removeEventListener('click', close); };
+    setTimeout(() => document.addEventListener('click', close), 0);
+  });
+  footer.insertBefore(menuBtn, footer.firstChild);
+
+  // hasVoice フラグを行に記録 (リプレイ時の再生成可否判定用)
+  row._hasVoice = !!hasVoice;
+}
+
+/* ══════════════════════════════
+   ログ読み込みレンダリング
+══════════════════════════════ */
+function renderLoadedLog(data) {
+  stopAudioPolling({ cancel: true });
+  audioQueue.length = 0;
+  isAudioPlaying = false;
+
+  $messages.innerHTML = '';
+  $messages.appendChild($msgScrollTop);
+  $messages.appendChild($msgScrollBottom);
+  appendSystemMsg(`ログ読み込み: ${data.char_name || '不明'}`);
+
+  for (const msg of data.messages) {
+    if (msg.role === 'user') {
+      const { textEl } = appendMessage('user', 'あなた', null);
+      textEl.textContent = msg.text;
+    } else {
+      const imageUrl = selectedImageUrl;
+      const { textEl, footer, bubble } = appendMessage('char', selectedName || data.char_name, imageUrl);
+      textEl.textContent = msg.text;
+      const row = bubble.parentElement;
+      row._collectedAudio = [];
+      row._hasVoice = selectedHasVoice;
+      appendLoadedCharFooter(row, footer, textEl, selectedHasVoice);
+    }
+  }
+}
+
+/* ══════════════════════════════
+   ログ管理
+══════════════════════════════ */
+async function startLogSession(charName) {
+  try {
+    const res = await fetch(`${API}/log/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ char_name: charName }),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    logSessionId = data.session_id;
+  } catch(e) {
+    console.warn('[log] start failed:', e);
+  }
+}
+
+async function appendLog(role, text) {
+  if (!logSessionId || !text.trim()) return;
+  try {
+    await fetch(`${API}/log/append`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: logSessionId, role, text: text.trim() }),
+    });
+  } catch(e) {
+    console.warn('[log] append failed:', e);
+  }
+}
+
+// ── ログ ポップアップメニュー ──
+let logPopupEl = null;
+$logMenuBtn.addEventListener('click', e => {
+  e.stopPropagation();
+  if (logPopupEl) { logPopupEl.remove(); logPopupEl = null; return; }
+
+  const popup = document.createElement('div');
+  popup.className = 'log-popup';
+  const items = [
+    { label: 'ログを保存', action: openLogSaveDialog },
+    { label: 'ログを読み込む', action: openLogLoadDialog },
+  ];
+  items.forEach(item => {
+    const el = document.createElement('div');
+    el.className = 'log-popup-item';
+    el.textContent = item.label;
+    el.addEventListener('click', ev => {
+      ev.stopPropagation();
+      popup.remove(); logPopupEl = null;
+      item.action();
+    });
+    popup.appendChild(el);
+  });
+  const rect = $logMenuBtn.getBoundingClientRect();
+  popup.style.right  = (window.innerWidth  - rect.right)  + 'px';
+  popup.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
+  document.body.appendChild(popup);
+  logPopupEl = popup;
+  const close = () => { if (popup.parentNode) { popup.remove(); logPopupEl = null; } document.removeEventListener('click', close); };
+  setTimeout(() => document.addEventListener('click', close), 0);
+});
+
+// ── ログ保存ダイアログ ──
+function openLogSaveDialog() {
+  if (!logSessionId) { showErrorToast('ログセッションがありません'); return; }
+  // デフォルトのファイル名は空(自動生成)にして表示
+  $logSaveName.value = '';
+  $logSaveBackdrop.classList.add('open');
+}
+function closeLogSaveDialog() {
+  $logSaveBackdrop.classList.remove('open');
+}
+$logSaveClose.addEventListener('click', closeLogSaveDialog);
+$logSaveCancel.addEventListener('click', closeLogSaveDialog);
+$logSaveBackdrop.addEventListener('click', e => { if (e.target === $logSaveBackdrop) closeLogSaveDialog(); });
+$logSaveOk.addEventListener('click', async () => {
+  const dir      = $logSaveDir.value.trim() || 'output';
+  const filename = $logSaveName.value.trim() || '';
+  try {
+    const res = await fetch(`${API}/log/save`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: logSessionId, directory: dir, filename }),
+    });
+    if (!res.ok) { const d = await res.json().catch(()=>({})); throw new Error(d.detail || 'HTTP '+res.status); }
+    const data = await res.json();
+    showErrorToast(`✓ 保存完了: ${data.filename}`, 'success');
+    closeLogSaveDialog();
+  } catch(e) {
+    showErrorToast('保存エラー: ' + e.message);
+  }
+});
+
+// ── ログ読み込みダイアログ ──
+let logLoadDir = 'output';
+function openLogLoadDialog() {
+  $logLoadBackdrop.classList.add('open');
+  // タブの初期状態をリセット
+  $logDirTabs.querySelectorAll('.log-dir-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.dir === logLoadDir);
+  });
+  fetchLogFiles(logLoadDir);
+}
+function closeLogLoadDialog() {
+  $logLoadBackdrop.classList.remove('open');
+}
+$logLoadClose.addEventListener('click', closeLogLoadDialog);
+$logLoadCancel.addEventListener('click', closeLogLoadDialog);
+$logLoadBackdrop.addEventListener('click', e => { if (e.target === $logLoadBackdrop) closeLogLoadDialog(); });
+
+$logDirTabs.addEventListener('click', e => {
+  const tab = e.target.closest('.log-dir-tab');
+  if (!tab) return;
+  logLoadDir = tab.dataset.dir;
+  $logDirTabs.querySelectorAll('.log-dir-tab').forEach(t => t.classList.toggle('active', t === tab));
+  fetchLogFiles(logLoadDir);
+});
+
+async function fetchLogFiles(dir) {
+  $logFileList.innerHTML = '<div style="padding:16px;text-align:center;opacity:.5">読み込み中…</div>';
+  try {
+    const res = await fetch(`${API}/log/files?directory=${encodeURIComponent(dir)}`);
+    const data = await res.json();
+    const files = data.files || [];
+    if (files.length === 0) {
+      $logFileList.innerHTML = '<div style="padding:16px;text-align:center;opacity:.5">ファイルがありません</div>';
+      return;
+    }
+    $logFileList.innerHTML = '';
+    files.forEach(f => {
+      const item = document.createElement('div');
+      item.className = 'log-file-item';
+      item.innerHTML = `<span class="log-file-name">${f.filename}</span><span class="log-file-date">${f.modified}</span>`;
+      item.addEventListener('click', () => loadLogFile(f.path));
+      $logFileList.appendChild(item);
+    });
+  } catch(e) {
+    $logFileList.innerHTML = `<div style="padding:16px;text-align:center;opacity:.5">エラー: ${e.message}</div>`;
+  }
+}
+
+async function loadLogFile(filepath) {
+  try {
+    const res = await fetch(`${API}/log/load`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filepath }),
+    });
+    if (!res.ok) { const d = await res.json().catch(()=>({})); throw new Error(d.detail || 'HTTP '+res.status); }
+    const data = await res.json();
+    closeLogLoadDialog();
+    renderLoadedLog(data);
+  } catch(e) {
+    showErrorToast('読み込みエラー: ' + e.message);
+  }
+}
+
+/* ══════════════════════════════
    キャラクター一覧読み込み
 ══════════════════════════════ */
 async function loadCharacters() {
@@ -2195,6 +2726,7 @@ async function selectCharacter(idx, name, hasImage, hasVoice) {
   $messages.appendChild($msgScrollBottom);
   appendSystemMsg(`${name} がログインしました`);
   setBackgroundImage(selectedImageUrl);
+  startLogSession(name);
   runInitialGreeting($ttsToggle.checked);
 
   setTimeout(closeSidebar, 150);
@@ -2386,6 +2918,7 @@ async function sendMessage() {
     if (!text.trim()) return;  // 直接TTSは空テキスト不可
     const charRefs = appendMessage('char', selectedName, selectedImageUrl);
     charRefs.textEl.textContent = text.trim();
+    appendLog('assistant', text.trim());
 
     if (ttsEnabled && selectedIndex !== null) {
       isGenerating = true;
@@ -2431,6 +2964,7 @@ async function sendMessage() {
   if (text.trim()) {
     const { textEl: userTextEl } = appendMessage('user', 'あなた', null);
     userTextEl.textContent = text.trim();
+    appendLog('user', text.trim());
   }
 
   const charRefs = appendMessage('char', selectedName, selectedImageUrl);
@@ -2454,6 +2988,10 @@ async function sendMessage() {
     $sendBtn.disabled = false;
     setStatus('active', `${selectedName} と接続中`);
     $input.focus();
+
+    // ログにアシスタント応答を追記
+    const assistantText = charRefs.textEl.textContent.trim();
+    if (assistantText) appendLog('assistant', assistantText);
 
     if (errorDetail) appendErrorDetail(errorDetail);
 
@@ -2496,6 +3034,9 @@ async function runInitialGreeting(ttsEnabled) {
     isGenerating = false;
     $sendBtn.disabled = false;
     setStatus('active', `${selectedName} と接続中`);
+    // ログにアシスタント挨拶を追記
+    const greetText = charRefs.textEl.textContent.trim();
+    if (greetText) appendLog('assistant', greetText);
     if (errorDetail) appendErrorDetail(errorDetail);
     if (reqId) {
       startAudioPolling(reqId, footer, spinner, collectedAudio, charRefs.textEl, hasVoice);
