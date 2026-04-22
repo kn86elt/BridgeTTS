@@ -430,6 +430,9 @@ body { background: var(--body-gradient); }
   color: var(--muted); cursor: not-allowed; opacity: .5;
   pointer-events: none;
 }
+.log-popup-sep {
+  height: 1px; background: var(--border); margin: 4px 0;
+}
 /* ログモーダル共通 */
 .log-modal-backdrop {
   display: none; position: fixed; inset: 0;
@@ -1193,6 +1196,15 @@ body.no-bubble-blur .msg-bubble {
         </label>
       </div>
 
+      <!-- ── チャットログ設定 ── -->
+      <div class="api-section-divider">チャットログ設定</div>
+      <div class="api-settings-group">
+        <label class="api-check-label">
+          <input type="checkbox" id="ac-log-auto-save" checked>
+          <span>チャットログを自動保存する（log/ フォルダに随時記録）</span>
+        </label>
+      </div>
+
     </div>
     <div id="api-config-footer">
       <button class="modal-btn secondary" id="ac-reset-btn">接続先をデフォルトに戻す</button>
@@ -1457,11 +1469,17 @@ let isReplaying      = false;   // リプレイ再生中フラグ
 let activePlayBtn    = null;    // 現在再生中の ▶ ボタン参照
 let activePlayRow    = null;    // 現在再生中の行要素 (▶ 未生成時の事後アクティブ化用)
 let audioQueueMeta   = [];      // audioQueue と並列: { row: Element|null }[]
-let replayRowsQueue  = [];      // ここからリプレイ: 未処理行のキュー
+let replayRowsQueue    = [];    // ここからリプレイ: 未処理行のキュー
 let replayWaitingRegen = false; // リプレイ中の音声生成待ちフラグ
+let isScenarioPlaying  = false; // シナリオ再生中フラグ
+let scenarioQueue      = [];    // シナリオ: 送出待ちユーザー発言の配列
+let logLoadMode        = 'load';// ログ読み込みダイアログのモード ('load' | 'scenario')
 let ffmpegAvailable  = false;   // check_ffmpeg で取得した ffmpeg 利用可否
 let logSessionId     = null;    // 現在のログセッションID
-let pendingLogChar   = null;    // 遅延セッション開始用キャラ名 (ログ読み込み後の最初の appendLog で使用)
+let pendingLogChar   = null;    // 遅延セッション開始用キャラ名
+let pendingLogBuffer = [];      // セッション確定前に溜めておくメッセージバッファ (廃止予定→logMessageBuffer に統合)
+let logMessageBuffer = [];      // 会話開始からの全メッセージ [{role, text, time}]
+let logAutoSave      = true;    // チャットログ自動保存設定
 
 /* ══════════════════════════════
    DOM refs
@@ -1618,6 +1636,10 @@ function applySettings(s) {
   // システムプロンプト設定の反映
   if (s.slot_and_file !== undefined) {
     $sysSlotAndFile.checked = !!s.slot_and_file;
+  }
+  // ログ自動保存設定の反映
+  if (s.log_auto_save !== undefined) {
+    logAutoSave = s.log_auto_save !== false;
   }
   updateSysActiveLabel(s);
 }
@@ -2454,8 +2476,10 @@ function renderLoadedLog(data) {
   appendSystemMsg(`ログ読み込み: ${data.char_name || '不明'}`);
 
   // 読み込み後に入力があった場合のみ新セッションを作成する (遅延方式)
-  logSessionId   = null;
-  pendingLogChar = data.char_name || selectedName || '不明';
+  logSessionId     = null;
+  pendingLogChar   = data.char_name || selectedName || '不明';
+  pendingLogBuffer = [];
+  logMessageBuffer = [];  // 読み込み元のメッセージは新セッションのバッファには含めない
 
   for (const msg of data.messages) {
     if (msg.role === 'user') {
@@ -2491,23 +2515,88 @@ async function startLogSession(charName) {
   }
 }
 
-async function appendLog(role, text) {
-  if (!text.trim()) return;
-  // ログ読み込み後の最初の書き込み時にセッションを開始する (遅延作成)
-  if (!logSessionId && pendingLogChar) {
-    await startLogSession(pendingLogChar);
-    pendingLogChar = null;
-  }
+// 実際の HTTP 書き込み（内部用）
+async function _doAppendLog(role, text) {
   if (!logSessionId) return;
   try {
     await fetch(`${API}/log/append`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: logSessionId, role, text: text.trim() }),
+      body: JSON.stringify({ session_id: logSessionId, role, text }),
     });
   } catch(e) {
     console.warn('[log] append failed:', e);
   }
+}
+
+// 全メッセージを現在のセッションファイルに上書き再生成
+async function _rewriteLogFile() {
+  if (!logSessionId || logMessageBuffer.length === 0) return;
+  try {
+    await fetch(`${API}/log/rewrite`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: logMessageBuffer }),
+    });
+  } catch(e) {
+    console.warn('[log] rewrite failed:', e);
+  }
+}
+
+// ユーザーが最初にメッセージを送ったときにセッションを確定し、バッファを書き出す
+async function triggerLogSession() {
+  if (logSessionId || !pendingLogChar) return;
+  const charName = pendingLogChar;
+  pendingLogChar = null;
+  if (!logAutoSave) return;  // OFF時はセッション開始しない (バッファは継続)
+  await startLogSession(charName);
+  // logMessageBuffer の全内容をファイルに書き出す
+  for (const msg of logMessageBuffer) {
+    await _doAppendLog(msg.role, msg.text);
+  }
+}
+
+// メッセージを記録する (常にメモリバッファへ; logAutoSave ON かつセッション確定済みなら即ファイルへも)
+async function appendLog(role, text) {
+  if (!text.trim()) return;
+  const now = new Date();
+  const time = now.toLocaleTimeString('ja-JP', { hour12: false });
+  const entry = { role, text: text.trim(), time };
+
+  // セッション未確定 (ユーザー未送信) → バッファに積むだけ
+  if (!logSessionId) {
+    logMessageBuffer.push(entry);
+    return;
+  }
+
+  // セッション確定済み
+  logMessageBuffer.push(entry);
+  if (logAutoSave) {
+    await _doAppendLog(role, text.trim());
+  }
+}
+
+// 環境設定からログ自動保存 ON/OFF を切り替える
+async function applyLogAutoSave(enabled) {
+  const prev = logAutoSave;
+  logAutoSave = enabled;
+  if (enabled && !prev) {
+    // OFF → ON: セッションがなければ開始してバッファ全文を書き出す
+    //            セッションがあれば上書き再生成して以後随時書き込みへ
+    if (!logSessionId && pendingLogChar) {
+      const charName = pendingLogChar;
+      pendingLogChar = null;
+      if (logMessageBuffer.length > 0) {
+        await startLogSession(charName);
+        for (const msg of logMessageBuffer) {
+          await _doAppendLog(msg.role, msg.text);
+        }
+      }
+    } else if (logSessionId) {
+      await _rewriteLogFile();
+    }
+  }
+  // ON → OFF は何もしない (バッファは継続、ファイルは停止)
 }
 
 // ── ログ ポップアップメニュー ──
@@ -2518,18 +2607,30 @@ $logMenuBtn.addEventListener('click', e => {
 
   const popup = document.createElement('div');
   popup.className = 'log-popup';
-  const items = [
-    { label: 'ログを保存', action: openLogSaveDialog },
-    { label: 'ログを読み込む', action: openLogLoadDialog },
+
+  const menuDefs = [
+    { label: 'ログを保存',     action: openLogSaveDialog },
+    { label: 'ログを読み込む', action: () => openLogLoadDialog('load') },
+    null, // セパレータ
+    { label: 'シナリオを読み込む',
+      tooltip: 'ログのユーザー入力のみ使用し新しい会話で再現します',
+      action: () => openLogLoadDialog('scenario') },
   ];
-  items.forEach(item => {
+  menuDefs.forEach(def => {
+    if (!def) {
+      const sep = document.createElement('div');
+      sep.className = 'log-popup-sep';
+      popup.appendChild(sep);
+      return;
+    }
     const el = document.createElement('div');
     el.className = 'log-popup-item';
-    el.textContent = item.label;
+    el.textContent = def.label;
+    if (def.tooltip) el.title = def.tooltip;
     el.addEventListener('click', ev => {
       ev.stopPropagation();
       popup.remove(); logPopupEl = null;
-      item.action();
+      def.action();
     });
     popup.appendChild(el);
   });
@@ -2575,9 +2676,17 @@ $logSaveOk.addEventListener('click', async () => {
 
 // ── ログ読み込みダイアログ ──
 let logLoadDir = 'output';
-function openLogLoadDialog() {
+function openLogLoadDialog(mode = 'load') {
+  logLoadMode = mode;
+  // シナリオモード時はキャラクター未選択を弾く
+  if (mode === 'scenario' && selectedIndex === null) {
+    showErrorToast('先にキャラクターを選択してください');
+    return;
+  }
+  // タイトルを切り替え
+  const titleEl = $logLoadBackdrop.querySelector('.log-modal-header span');
+  if (titleEl) titleEl.textContent = mode === 'scenario' ? 'シナリオを読み込む' : 'ログを読み込む';
   $logLoadBackdrop.classList.add('open');
-  // タブの初期状態をリセット
   $logDirTabs.querySelectorAll('.log-dir-tab').forEach(t => {
     t.classList.toggle('active', t.dataset.dir === logLoadDir);
   });
@@ -2613,7 +2722,14 @@ async function fetchLogFiles(dir) {
       const item = document.createElement('div');
       item.className = 'log-file-item';
       item.innerHTML = `<span class="log-file-name">${f.filename}</span><span class="log-file-date">${f.modified}</span>`;
-      item.addEventListener('click', () => loadLogFile(f.path));
+      item.addEventListener('click', () => {
+        if (logLoadMode === 'scenario') {
+          closeLogLoadDialog();
+          startScenario(f.path);
+        } else {
+          loadLogFile(f.path);
+        }
+      });
       $logFileList.appendChild(item);
     });
   } catch(e) {
@@ -2635,6 +2751,108 @@ async function loadLogFile(filepath) {
   } catch(e) {
     showErrorToast('読み込みエラー: ' + e.message);
   }
+}
+
+/* ══════════════════════════════
+   シナリオ再生
+   ログのユーザー発言のみ抽出し、現在のキャラクターで新規会話を再現する
+══════════════════════════════ */
+
+// ログの messages 配列からシナリオキュー（送出するテキストの配列）を構築する
+// 最初の ASSISTANT は挨拶なのでスキップ。連続する ASSISTANT は空送信を意味する。
+function buildScenarioQueue(messages) {
+  const queue = [];
+  let firstAssistantDone = false;
+  let lastRole = null;
+  for (const msg of messages) {
+    if (msg.role === 'assistant' && !firstAssistantDone) {
+      firstAssistantDone = true;
+      lastRole = 'assistant';
+      continue;  // 挨拶はスキップ（新しいキャラクターが生成する）
+    }
+    if (msg.role === 'assistant') {
+      // 直前も assistant → 間に空送信があった
+      if (lastRole === 'assistant') queue.push('');
+      lastRole = 'assistant';
+    } else if (msg.role === 'user') {
+      queue.push(msg.text);
+      lastRole = 'user';
+    }
+  }
+  return queue;
+}
+
+async function startScenario(filepath) {
+  if (selectedIndex === null) { showErrorToast('キャラクターを選択してください'); return; }
+
+  // ログファイルをパース
+  let data;
+  try {
+    const res = await fetch(`${API}/log/load`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filepath }),
+    });
+    if (!res.ok) { const d = await res.json().catch(()=>({})); throw new Error(d.detail || 'HTTP '+res.status); }
+    data = await res.json();
+  } catch(e) {
+    showErrorToast('シナリオ読み込みエラー: ' + e.message);
+    return;
+  }
+
+  const queue = buildScenarioQueue(data.messages);
+  if (queue.length === 0) {
+    showErrorToast('ユーザー発言がログに含まれていません');
+    return;
+  }
+
+  // 会話をリセットして新規ログセッション準備
+  stopAudioPolling({ cancel: true });
+  stopReplay();
+  audioQueue.length = 0;
+  isAudioPlaying = false;
+  logSessionId     = null;
+  pendingLogChar   = selectedName;
+  logMessageBuffer = [];
+  pendingLogBuffer = [];
+
+  $messages.innerHTML = '';
+  $messages.appendChild($msgScrollTop);
+  $messages.appendChild($msgScrollBottom);
+  appendSystemMsg(`シナリオ再生: ${data.char_name || '不明'} → ${selectedName}`);
+
+  // シナリオ状態をセット（送信ボタンを ■ に変更）
+  isScenarioPlaying = true;
+  scenarioQueue     = queue;
+  $sendBtn.innerHTML = '&#9632;';
+  $sendBtn.title     = 'シナリオ停止';
+  $sendBtn.disabled  = false;
+
+  // 挨拶を生成してから送出開始
+  await runInitialGreeting($ttsToggle.checked);
+
+  await runScenarioQueue();
+}
+
+async function runScenarioQueue() {
+  while (scenarioQueue.length > 0 && isScenarioPlaying) {
+    const text = scenarioQueue.shift();
+    $input.value = text;
+    await sendMessage();
+    // sendMessage の finally が送信ボタンを復元するため、シナリオ継続中は再設定
+    if (isScenarioPlaying) {
+      $sendBtn.innerHTML = '&#9632;';
+      $sendBtn.title     = 'シナリオ停止';
+      $sendBtn.disabled  = false;
+    }
+  }
+  if (isScenarioPlaying) stopScenario();
+}
+
+function stopScenario() {
+  isScenarioPlaying = false;
+  scenarioQueue     = [];
+  _restoreSendBtn();
 }
 
 /* ══════════════════════════════
@@ -2737,8 +2955,10 @@ async function selectCharacter(idx, name, hasImage, hasVoice) {
   $messages.appendChild($msgScrollBottom);
   appendSystemMsg(`${name} がログインしました`);
   setBackgroundImage(selectedImageUrl);
-  pendingLogChar = null;   // 遅延セッションをキャンセル
-  startLogSession(name);
+  logSessionId      = null;
+  pendingLogChar    = name;
+  pendingLogBuffer  = [];
+  logMessageBuffer  = [];
   runInitialGreeting($ttsToggle.checked);
 
   setTimeout(closeSidebar, 150);
@@ -2916,6 +3136,9 @@ async function consumeStream(response, bubbleRefs, cursorEl) {
 async function sendMessage() {
   if (isGenerating || selectedIndex === null) return;
 
+  // ユーザーが初めてメッセージを送った時点でログセッションを確定 (挨拶もバッファから書き出す)
+  await triggerLogSession();
+
   unlockAudio();
   stopAudioPolling();
 
@@ -3078,10 +3301,14 @@ setInterval(() => {
    キーボード / ボタン
 ══════════════════════════════ */
 $input.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    if (!isScenarioPlaying) sendMessage();
+  }
 });
 $sendBtn.addEventListener('click', () => {
-  if (isReplaying) { stopReplay(); return; }
+  if (isReplaying)        { stopReplay();   return; }
+  if (isScenarioPlaying)  { stopScenario(); return; }
   unlockAudio();
   sendMessage();
 });
@@ -3383,6 +3610,7 @@ const $acBubbleBlur             = document.getElementById('ac-bubble-blur');
 const $acCharDirStatus          = document.getElementById('ac-char-dir-status');
 const $acCharDirAlsoDefault     = document.getElementById('ac-char-dir-also-default');
 const $acCharDirAlsoDefaultLabel= document.getElementById('ac-char-dir-also-default-label');
+const $acLogAutoSave            = document.getElementById('ac-log-auto-save');
 
 // ffmpegパス指定チェックボックスと入力欄の連動
 $acFfmpegPathEnabled.addEventListener('change', () => {
@@ -3455,6 +3683,8 @@ async function openApiConfigModal() {
       $acFfmpegPathRow.style.display = $acFfmpegPathEnabled.checked ? '' : 'none';
       // キャラクター読み出し設定
       $acCharDirAlsoDefault.checked = !!s.char_dir_also_default;
+      // チャットログ設定
+      $acLogAutoSave.checked = s.log_auto_save !== false;  // デフォルト ON
     }
   } catch(e) { /* ignore */ }
   _refreshFfmpegStatus();
@@ -3518,12 +3748,15 @@ $acApplyBtn.addEventListener('click', async () => {
         ffmpeg_path_enabled:   $acFfmpegPathEnabled.checked,
         ffmpeg_path:           $acFfmpegPath.value.trim(),
         char_dir_also_default: $acCharDirAlsoDefault.checked,
+        log_auto_save:         $acLogAutoSave.checked,
       }),
     });
     // 表示設定を即時反映
     document.documentElement.style.setProperty('--bubble-alpha', bubbleAlpha);
     document.body.classList.toggle('text-shadow-mode', $acTextShadow.checked);
     document.body.classList.toggle('no-bubble-blur', !$acBubbleBlur.checked);
+    // ログ自動保存の ON/OFF を即時反映
+    await applyLogAutoSave($acLogAutoSave.checked);
     showErrorToast('✓ 設定を保存しました', 'success');
   } catch(e) {
     showErrorToast('設定保存エラー: ' + e.message);
