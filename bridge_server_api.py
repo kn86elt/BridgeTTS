@@ -259,6 +259,7 @@ def _char_from_dir(base: str, directory: str) -> dict | None:
     """
     directory 内に <base>.txt があればキャラクター辞書を返す。
     txt が存在しない場合は None。
+    音声は .wav を優先し、なければ .mp3 を使用する。
     """
     txt_path = os.path.join(directory, base + ".txt")
     if not os.path.exists(txt_path):
@@ -270,22 +271,42 @@ def _char_from_dir(base: str, directory: str) -> dict | None:
         base = Path(txts[0]).stem
 
     wav_path = os.path.join(directory, base + ".wav")
-    has_voice = os.path.exists(wav_path)
-    img_path  = _find_image(directory, base)
+    mp3_path = os.path.join(directory, base + ".mp3")
+    has_wav  = os.path.exists(wav_path)
+    has_mp3  = os.path.exists(mp3_path)
 
-    # wav と同名でなくとも .wav が1つだけあれば使う
-    if not has_voice:
+    if has_wav:
+        active_voice = wav_path
+    elif has_mp3:
+        active_voice = mp3_path
+    else:
+        # 同名でなくとも .wav / .mp3 が1つだけあれば使う（.wav 優先）
         wavs = [f for f in os.listdir(directory) if f.endswith(".wav")]
+        mp3s = [f for f in os.listdir(directory) if f.endswith(".mp3")]
         if wavs:
-            wav_path  = os.path.join(directory, wavs[0])
-            has_voice = True
+            wav_path     = os.path.join(directory, wavs[0])
+            active_voice = wav_path
+            has_wav      = True
+            if mp3s:
+                mp3_path = os.path.join(directory, mp3s[0])
+                has_mp3  = True
+        elif mp3s:
+            mp3_path     = os.path.join(directory, mp3s[0])
+            active_voice = mp3_path
+            has_mp3      = True
+        else:
+            active_voice = None
+
+    has_voice = active_voice is not None
 
     return {
         "name":       base if has_voice else f"{base} (音声なし)",
         "prompt":     txt_path,
-        "voice_path": wav_path if has_voice else None,
-        "image_path": img_path,
+        "voice_path": active_voice,
+        "mp3_path":   mp3_path if has_mp3 else None,
+        "image_path": _find_image(directory, base),
         "has_voice":  has_voice,
+        "has_mp3":    has_mp3,
     }
 
 
@@ -304,6 +325,7 @@ def _scan_char_dir(scan_dir: str, char_list: list, seen_names: set) -> None:
                 continue
             char = _char_from_dir(base, scan_dir)
             if char:
+                char["char_format"] = "flat"
                 seen_names.add(base)
                 char_list.append(char)
 
@@ -314,6 +336,7 @@ def _scan_char_dir(scan_dir: str, char_list: list, seen_names: set) -> None:
                 continue
             char = _char_from_dir(base, full_path)
             if char:
+                char["char_format"] = "subfolder"
                 seen_names.add(base)
                 char_list.append(char)
 
@@ -340,6 +363,7 @@ def _scan_char_dir(scan_dir: str, char_list: list, seen_names: set) -> None:
                     search_dir,
                 )
             if char:
+                char["char_format"] = "zip"
                 seen_names.add(base)
                 char_list.append(char)
 
@@ -1320,11 +1344,11 @@ async def duplicate_character(
             fpath = os.path.join(dest_dir, fname)
             stem = Path(fname).stem
             ext  = Path(fname).suffix
-            if stem == base_name and ext in [".txt", ".wav"] + IMAGE_EXTS:
+            if stem == base_name and ext in [".txt", ".wav", ".mp3"] + IMAGE_EXTS:
                 os.rename(fpath, os.path.join(dest_dir, new_name + ext))
     else:
         os.makedirs(dest_dir, exist_ok=True)
-        for ext in [".txt", ".wav"] + IMAGE_EXTS:
+        for ext in [".txt", ".wav", ".mp3"] + IMAGE_EXTS:
             src = os.path.join(CHAR_DIR, base_name + ext)
             if os.path.exists(src):
                 shutil.copy2(src, os.path.join(dest_dir, new_name + ext))
@@ -1372,12 +1396,52 @@ def get_character_info(idx: int):
     except Exception:
         pass
     return JSONResponse({
-        "name": char["name"].replace(" (音声なし)", ""),
-        "prompt": prompt_text,
-        "has_voice": char["has_voice"],
-        "has_image": char["image_path"] is not None,
-        "folder": os.path.basename(os.path.dirname(char["prompt"])),
+        "name":        char["name"].replace(" (音声なし)", ""),
+        "prompt":      prompt_text,
+        "has_voice":   char["has_voice"],
+        "has_image":   char["image_path"] is not None,
+        "has_mp3":     char.get("has_mp3", False),
+        "char_format": char.get("char_format", "subfolder"),
+        "voice_file":  os.path.basename(char["voice_path"]) if char.get("voice_path") else None,
+        "folder":      os.path.basename(os.path.dirname(char["prompt"])),
     })
+
+
+@app.post("/characters/{idx}/convert_mp3")
+async def convert_char_mp3_to_wav(idx: int):
+    """キャラクターの .mp3 リファレンス音声を ffmpeg で .wav に変換する（上書き）。"""
+    state.chars = get_dynamic_characters()
+    if idx < 0 or idx >= len(state.chars):
+        raise HTTPException(404, "キャラクターが見つかりません")
+
+    char = state.chars[idx]
+
+    if char.get("char_format") == "zip":
+        raise HTTPException(400, "zip形式のキャラクターは変換できません")
+
+    mp3_path = char.get("mp3_path")
+    if not mp3_path or not os.path.exists(mp3_path):
+        raise HTTPException(400, "MP3ファイルが見つかりません")
+
+    settings   = load_settings()
+    ffmpeg_cmd = get_ffmpeg_cmd(settings)
+    if not ffmpeg_cmd:
+        raise HTTPException(400, "ffmpegが利用できません")
+
+    char_dir = os.path.dirname(char["prompt"])
+    stem     = Path(char["prompt"]).stem
+    wav_path = os.path.join(char_dir, stem + ".wav")
+
+    try:
+        subprocess.run(
+            [ffmpeg_cmd, "-y", "-i", mp3_path, wav_path],
+            check=True, capture_output=True,
+        )
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(500, f"ffmpeg変換失敗: {e.stderr.decode(errors='replace')}")
+
+    state.chars = get_dynamic_characters()
+    return JSONResponse({"status": "ok", "wav_path": wav_path})
 
 
 @app.post("/characters/{idx}/edit")

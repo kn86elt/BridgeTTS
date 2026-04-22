@@ -790,6 +790,10 @@ body { background: var(--body-gradient); }
   transition: all .2s; flex-shrink: 0;
 }
 .ce-file-btn:hover { border-color: var(--accent); color: var(--accent); }
+.ce-file-btn:disabled {
+  opacity: .35; cursor: not-allowed;
+  border-color: var(--border) !important; color: var(--muted) !important;
+}
 #char-edit-footer {
   padding: 12px 18px;
   border-top: 1px solid var(--border);
@@ -1129,11 +1133,17 @@ body.no-bubble-blur .msg-bubble {
         </div>
       </div>
       <div class="ce-field">
-        <label class="ce-label">音声ファイル (.wav) — 話者サンプル</label>
+        <label class="ce-label">音声ファイル (.wav / .mp3) — 話者サンプル</label>
         <div class="ce-file-row">
           <span class="ce-file-label" id="ce-voice-label">未選択</span>
           <button class="ce-file-btn" id="ce-voice-btn">選択</button>
           <input type="file" id="ce-voice-input" accept="audio/wav" style="display:none">
+        </div>
+      </div>
+      <div class="ce-field" id="ce-mp3-row" style="display:none">
+        <div class="ce-file-row">
+          <span class="ce-file-label" id="ce-mp3-label" style="font-size:10px"></span>
+          <button class="ce-file-btn" id="ce-mp3-btn" disabled>MP3→WAV 変換</button>
         </div>
       </div>
     </div>
@@ -1300,6 +1310,7 @@ let isReplaying      = false;   // リプレイ再生中フラグ
 let activePlayBtn    = null;    // 現在再生中の ▶ ボタン参照
 let activePlayRow    = null;    // 現在再生中の行要素 (▶ 未生成時の事後アクティブ化用)
 let audioQueueMeta   = [];      // audioQueue と並列: { row: Element|null }[]
+let ffmpegAvailable  = false;   // check_ffmpeg で取得した ffmpeg 利用可否
 
 /* ══════════════════════════════
    DOM refs
@@ -2582,6 +2593,11 @@ const $ceImageLbl = document.getElementById('ce-image-label');
 const $ceImageInp = document.getElementById('ce-image-input');
 const $ceVoiceLbl = document.getElementById('ce-voice-label');
 const $ceVoiceInp = document.getElementById('ce-voice-input');
+const $ceMp3Row   = document.getElementById('ce-mp3-row');
+const $ceMp3Lbl   = document.getElementById('ce-mp3-label');
+const $ceMp3Btn   = document.getElementById('ce-mp3-btn');
+
+let ceMp3Info = null;  // { idx, hasWav } — MP3変換ボタン用の状態
 
 document.getElementById('ce-image-btn').addEventListener('click', () => $ceImageInp.click());
 document.getElementById('ce-voice-btn').addEventListener('click', () => $ceVoiceInp.click());
@@ -2592,6 +2608,27 @@ $ceVoiceInp.addEventListener('change', () => {
   $ceVoiceLbl.textContent = $ceVoiceInp.files[0]?.name || '未選択';
 });
 
+function _updateMp3Btn(d, idx) {
+  // 変換ボタンを表示するか: edit モード かつ mp3 あり かつ zip 以外
+  const showBtn  = d.has_mp3 && d.char_format !== 'zip';
+  const hasWav   = !!(d.voice_file && d.voice_file.toLowerCase().endsWith('.wav'));
+  const canConvert = showBtn && ffmpegAvailable;
+  $ceMp3Row.style.display = showBtn ? '' : 'none';
+  if (showBtn) {
+    if (!ffmpegAvailable) {
+      $ceMp3Lbl.textContent = '（変換にはffmpegが必要です）';
+    } else if (hasWav) {
+      $ceMp3Lbl.textContent = '.wav も存在します（上書き確認あり）';
+    } else {
+      $ceMp3Lbl.textContent = '.mp3 → .wav に変換';
+    }
+    $ceMp3Btn.disabled = !canConvert;
+    ceMp3Info = { idx, hasWav };
+  } else {
+    ceMp3Info = null;
+  }
+}
+
 function openCharEditModal(mode, idx = null) {
   charEditMode   = mode;
   charEditTarget = idx;
@@ -2601,6 +2638,10 @@ function openCharEditModal(mode, idx = null) {
   $ceVoiceLbl.textContent = '未選択';
   $ceImageInp.value = '';
   $ceVoiceInp.value = '';
+  // MP3変換行をリセット（create / duplicate では非表示）
+  $ceMp3Row.style.display = 'none';
+  $ceMp3Btn.disabled = true;
+  ceMp3Info = null;
 
   if (mode === 'create') {
     $ceTitle.textContent = '✦ NEW CHARACTER';
@@ -2613,7 +2654,8 @@ function openCharEditModal(mode, idx = null) {
         $ceName.value   = d.name;
         $cePrompt.value = d.prompt;
         if (d.has_image) $ceImageLbl.textContent = '（既存ファイル）';
-        if (d.has_voice) $ceVoiceLbl.textContent = '（既存ファイル）';
+        if (d.has_voice) $ceVoiceLbl.textContent = d.voice_file ? `（既存: ${d.voice_file}）` : '（既存ファイル）';
+        _updateMp3Btn(d, idx);
       })
       .catch(() => {});
   } else {
@@ -2625,13 +2667,39 @@ function openCharEditModal(mode, idx = null) {
         $ceName.value   = d.name + '_copy';
         $cePrompt.value = d.prompt;
         if (d.has_image) $ceImageLbl.textContent = '（既存ファイルをコピー）';
-        if (d.has_voice) $ceVoiceLbl.textContent = '（既存ファイルをコピー）';
+        if (d.has_voice) $ceVoiceLbl.textContent = d.voice_file ? `（既存: ${d.voice_file}）` : '（既存ファイルをコピー）';
+        // 複製モードではボタン非表示（複製先はまだ存在しない）
       })
       .catch(() => {});
   }
 
   $ceBackdrop.classList.add('open');
 }
+
+$ceMp3Btn.addEventListener('click', async () => {
+  if (!ceMp3Info) return;
+  const { idx, hasWav } = ceMp3Info;
+  if (hasWav && !confirm('既存の .wav ファイルを上書きします。よろしいですか？')) return;
+  $ceMp3Btn.disabled = true;
+  $ceMp3Lbl.textContent = '変換中...';
+  try {
+    const res = await fetch(`${API}/characters/${idx}/convert_mp3`, { method: 'POST' });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      showErrorToast(d.detail || '変換に失敗しました');
+      $ceMp3Lbl.textContent = '変換失敗';
+      $ceMp3Btn.disabled = false;
+      return;
+    }
+    $ceMp3Lbl.textContent = '変換完了 ✓';
+    $ceVoiceLbl.textContent = '（変換済み .wav）';
+    ceMp3Info = { idx, hasWav: true };  // 以後は wav あり扱い
+  } catch(e) {
+    showErrorToast('変換に失敗しました');
+    $ceMp3Lbl.textContent = '変換失敗';
+    $ceMp3Btn.disabled = false;
+  }
+});
 
 document.getElementById('char-edit-cancel').addEventListener('click', () => $ceBackdrop.classList.remove('open'));
 
@@ -2785,6 +2853,7 @@ async function _refreshFfmpegStatus() {
     const d = await res.json();
     $acFfmpegStatus.textContent = d.available ? `✓ ${d.cmd}` : '✗ 見つかりません';
     $acFfmpegStatus.className   = 'ac-ffmpeg-status ' + (d.available ? 'ok' : 'ng');
+    ffmpegAvailable = d.available;
   } catch(e) { /* ignore */ }
 }
 
