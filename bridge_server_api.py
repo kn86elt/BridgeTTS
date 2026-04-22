@@ -1562,6 +1562,9 @@ class LogAppendRequest(BaseModel):
     role: str                          # "user" | "assistant"
     text: str
 
+class LogRewriteRequest(BaseModel):
+    messages: list  # [{role: str, text: str, time: str}]
+
 class LogSaveRequest(BaseModel):
     session_id: Optional[str] = None  # 現在は無視
     filename:   str = ""
@@ -1599,6 +1602,26 @@ def log_append(req: LogAppendRequest):
     entry = f"[{role_tag} {time_str}]\n{req.text}\n\n"
     with open(_log_session["path"], "a", encoding="utf-8") as f:
         f.write(entry)
+    return JSONResponse({"status": "ok"})
+
+
+@app.post("/log/rewrite")
+def log_rewrite(req: LogRewriteRequest):
+    """現在のセッションログを messages の全内容で上書き再生成する"""
+    if not _log_session["path"] or not os.path.exists(_log_session["path"]):
+        raise HTTPException(400, "アクティブなセッションがありません")
+    # ヘッダー部分を既存ファイルから取得 (最初の [USER/ASSISTANT] 行の手前まで)
+    with open(_log_session["path"], "r", encoding="utf-8") as f:
+        content = f.read()
+    sep = content.find("\n[")
+    header = content[:sep + 1] if sep != -1 else content
+    # メッセージ部分を再生成して上書き
+    with open(_log_session["path"], "w", encoding="utf-8") as f:
+        f.write(header)
+        for msg in req.messages:
+            role_tag = "USER" if msg.get("role") == "user" else "ASSISTANT"
+            time_str = msg.get("time", "??:??:??")
+            f.write(f"[{role_tag} {time_str}]\n{msg['text']}\n\n")
     return JSONResponse({"status": "ok"})
 
 
