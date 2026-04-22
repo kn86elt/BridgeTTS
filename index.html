@@ -240,6 +240,8 @@ body { background: var(--body-gradient); }
 /* ── messages ── */
 #messages {
   overflow-y: auto;
+  overflow-x: hidden;   /* グリッドアイテムの横はみ出しを封じる */
+  min-width: 0;         /* min-width:auto によるトラック拡張を防ぐ */
   padding: 16px 20px;
   display: flex; flex-direction: column; gap: 16px;
   scroll-behavior: smooth;
@@ -281,7 +283,7 @@ body { background: var(--body-gradient); }
   margin-bottom: 4px; letter-spacing: .05em; padding: 0 0 4px;
 }
 .msg-row.user .msg-name { text-align: right; }
-.msg-text { font-size: 14px; line-height: 1.6; }
+.msg-text { font-size: 14px; line-height: 1.6; overflow-wrap: break-word; word-break: break-word; }
 
 /* ── 吹き出しフッター (右下) ── */
 .bubble-footer {
@@ -376,6 +378,8 @@ body { background: var(--body-gradient); }
   grid-column: 2;
   display: flex; align-items: center; gap: 10px;
   padding: 0 16px;
+  min-width: 0;         /* min-width:auto によるトラック拡張を防ぐ */
+  overflow: hidden;     /* ボタンがはみ出ないよう封じる */
   border-top: 1px solid var(--border);
   background: var(--input-bg);
   -webkit-backdrop-filter: blur(8px);
@@ -385,7 +389,7 @@ body { background: var(--body-gradient); }
 #user-input {
   flex: 1; background: transparent; border: none; outline: none;
   color: var(--text); font-family: 'Noto Sans JP', sans-serif;
-  font-size: 14px; font-weight: 300;
+  font-size: 16px; font-weight: 300;
   resize: none; height: 40px; line-height: 40px; padding: 0;
 }
 #user-input::placeholder { color: var(--muted); }
@@ -953,7 +957,8 @@ body { background: var(--body-gradient); }
 ══════════════════════════════ */
 @media (max-width: 600px) {
   :root { --sidebar-w: 80vw; --header-h: 48px; --input-h: 56px; }
-  #app { grid-template-columns: 1fr; grid-template-rows: var(--header-h) 1fr var(--input-h); }
+  /* minmax(0,1fr): auto最小幅によるトラック拡張を防ぎ overflow を封じる */
+  #app { grid-template-columns: minmax(0, 1fr); grid-template-rows: var(--header-h) 1fr var(--input-h); }
   #menu-btn { display: flex; align-items: center; }
   #sidebar {
     position: fixed; top: 0; left: 0; bottom: 0;
@@ -968,6 +973,15 @@ body { background: var(--body-gradient); }
   .msg-bubble { max-width: 85%; }
   #messages { padding: 12px; gap: 12px; }
   #char-image-area { display: none; }
+
+  /* iOS Safari: font-size < 16px の input へのフォーカスで自動ズームが発生し
+     キーボード閉鎖後もズームがリセットされず画面が横にはみ出す問題を防ぐ。
+     モバイルではすべての入力欄を 16px 以上に強制する。              */
+  input[type="text"], input[type="number"], input[type="search"],
+  input[type="url"], input[type="tel"], input[type="email"],
+  input[type="password"], textarea, select {
+    font-size: 16px;
+  }
 }
 
 /* ══════════════════════════════
@@ -3337,13 +3351,13 @@ function showErrorToast(message, type = 'error') {
 ══════════════════════════════ */
 (function _fixAppHeight() {
   function update() {
-    // innerHeight = キーボードやアドレスバーを除いた実際の高さ
-    const vh = window.innerHeight * 0.01;
-    document.documentElement.style.setProperty('--app-h', vh + 'px');
-    // calc(var(--app-h) * 100) では単位が合わないので
-    // 直接 px 値を #app に適用する方が確実
+    // 高さのみ visualViewport で補正する（幅はCSSに任せる）
+    // body { position: fixed } により横ずれは発生しないため scrollTo 不要
+    const vv = window.visualViewport;
+    const h = vv ? vv.height : window.innerHeight;
+    document.documentElement.style.setProperty('--app-h', (h * 0.01) + 'px');
     const app = document.getElementById('app');
-    if (app) app.style.height = window.innerHeight + 'px';
+    if (app) app.style.height = h + 'px';
   }
   update();
   window.addEventListener('resize', update);
