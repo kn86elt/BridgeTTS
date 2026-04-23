@@ -48,6 +48,18 @@ DEFAULT_SETTINGS = {
     "bubble_blur": True,           # True=吹き出し背景にぼかしエフェクト
     # キャラクター読み出し設定
     "char_dir_also_default": False, # True=CHAR_DIR設定時もデフォルトフォルダを追加で読み込む
+    # LLM接続設定（永続化）
+    "llm_use_env":  False,         # True=環境変数LLM_API_URLを優先使用
+    "llm_preset":   "lm-studio",   # 選択中のプリセットID
+    "llm_host":     "localhost",   # LLMサーバのホスト/IP
+    "llm_port":     1234,          # LLMサーバのポート
+    "llm_path":     "/v1",         # APIパス
+    "llm_api_key":  "lm-studio",   # APIキー (ローカルサーバ用ダミーキー等)
+    "llm_model":    "",            # モデル名 (空="local-model"フォールバック)
+    # TTS接続設定（永続化）
+    "tts_use_env":  False,         # True=環境変数TTS_API_URLを優先使用
+    "tts_host":     "localhost",   # TTSサーバのホスト/IP
+    "tts_port":     7860,          # TTSサーバのポート
 }
 
 def load_settings() -> dict:
@@ -66,18 +78,47 @@ def save_settings(data: dict):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 # --- 設定 ---
-# LM StudioのAPIモード設定
-LLM_API_URL = os.getenv("LLM_API_URL", "http://localhost:1234/v1")
-LLM_API_KEY = "lm-studio"
+# 環境変数（起動時参照用）
+_ENV_LLM_API_URL = os.getenv("LLM_API_URL", "")
+_ENV_TTS_API_URL = os.getenv("TTS_API_URL", "")
+
+# LLMサーバプリセット
+LLM_PRESETS = [
+    {"id": "lm-studio",      "label": "LM Studio",            "host": "localhost", "port": 1234,  "path": "/v1", "key": "lm-studio"},
+    {"id": "ollama",         "label": "Ollama",                "host": "localhost", "port": 11434, "path": "/v1", "key": "ollama"},
+    {"id": "text-gen-webui", "label": "text-generation-webui", "host": "localhost", "port": 5000,  "path": "/v1", "key": ""},
+    {"id": "koboldcpp",      "label": "KoboldCpp",             "host": "localhost", "port": 5001,  "path": "/v1", "key": ""},
+    {"id": "custom",         "label": "カスタム",              "host": "",          "port": None,  "path": "/v1", "key": ""},
+]
 
 
-# irodori.TTSの設定
-TTS_API_URL = os.getenv("TTS_API_URL", "http://localhost:7860/")
+def _build_llm_url(settings: dict) -> str:
+    """設定からLLM API URLを構築する。llm_use_env=True かつ env var があれば環境変数を優先。"""
+    if settings.get("llm_use_env") and _ENV_LLM_API_URL:
+        return _ENV_LLM_API_URL
+    host = (settings.get("llm_host") or "localhost").strip()
+    port = settings.get("llm_port") or 1234
+    path = (settings.get("llm_path") or "/v1").strip()
+    if not path.startswith("/"):
+        path = "/" + path
+    return f"http://{host}:{port}{path}"
 
-# ── ランタイム接続設定 (再起動で失われる一時設定) ──────────────────────────
-# 起動時のデフォルト値を保持しておく
-_DEFAULT_LLM_API_URL = LLM_API_URL
-_DEFAULT_TTS_API_URL = TTS_API_URL
+
+def _build_tts_url(settings: dict) -> str:
+    """設定からTTS API URLを構築する。tts_use_env=True かつ env var があれば環境変数を優先。"""
+    if settings.get("tts_use_env") and _ENV_TTS_API_URL:
+        return _ENV_TTS_API_URL
+    host = (settings.get("tts_host") or "localhost").strip()
+    port = settings.get("tts_port") or 7860
+    return f"http://{host}:{port}/"
+
+
+# ── 起動時に設定ファイルから接続情報を読み込む ──────────────────────────────
+_startup_settings = load_settings()
+LLM_API_URL = _build_llm_url(_startup_settings)
+LLM_API_KEY = (_startup_settings.get("llm_api_key") or "lm-studio")
+LLM_MODEL   = (_startup_settings.get("llm_model") or "")
+TTS_API_URL = _build_tts_url(_startup_settings)
 
 # その他の設定
 CHAR_DIR_ENV     = os.getenv("CHAR_DIR")                               # None = 未設定
@@ -674,8 +715,9 @@ def stream_llm_with_tts(messages: list, tts_enabled: bool):
                 enqueued_count += 1
 
     try:
+        model_name = LLM_MODEL or "local-model"
         stream = client.chat.completions.create(
-            model="local-model",
+            model=model_name,
             messages=messages,
             stream=True,
         )
@@ -1218,13 +1260,27 @@ def open_file_location(req: OpenLocationRequest):
 
 @app.get("/api_config")
 def get_api_config():
-    """現在のランタイム接続設定を返す (デフォルト値も含む)"""
+    """現在の接続設定を返す（設定ファイルの値 + 環境変数の状態）"""
+    settings = load_settings()
     return JSONResponse({
-        "llm_api_url":         LLM_API_URL,
-        "tts_api_url":         TTS_API_URL,
-        "default_llm_api_url": _DEFAULT_LLM_API_URL,
-        "default_tts_api_url": _DEFAULT_TTS_API_URL,
-        # CHAR_DIR 環境変数の状態
+        # LLM設定
+        "llm_use_env":     settings.get("llm_use_env", False),
+        "llm_preset":      settings.get("llm_preset", "lm-studio"),
+        "llm_host":        settings.get("llm_host", "localhost"),
+        "llm_port":        settings.get("llm_port", 1234),
+        "llm_path":        settings.get("llm_path", "/v1"),
+        "llm_api_key":     settings.get("llm_api_key", "lm-studio"),
+        "llm_model":       settings.get("llm_model", ""),
+        "llm_api_url":     LLM_API_URL,   # 現在実際に使用中のURL
+        # TTS設定
+        "tts_use_env":     settings.get("tts_use_env", False),
+        "tts_host":        settings.get("tts_host", "localhost"),
+        "tts_port":        settings.get("tts_port", 7860),
+        "tts_api_url":     TTS_API_URL,   # 現在実際に使用中のURL
+        # 環境変数の現在値
+        "env_llm_api_url": _ENV_LLM_API_URL,
+        "env_tts_api_url": _ENV_TTS_API_URL,
+        # CHAR_DIR 環境変数の状態（後方互換）
         "char_dir_active": bool(CHAR_DIR_ENV),
         "char_dir_value":  CHAR_DIR_ENV or "",
     })
@@ -1232,28 +1288,61 @@ def get_api_config():
 
 @app.post("/api_config")
 def post_api_config(data: dict = Body(...)):
-    """接続先URLをランタイムで変更する。ファイルには保存しない。"""
-    global LLM_API_URL, TTS_API_URL, client, tts_client
+    """接続設定を変更してファイルに永続化する。"""
+    global LLM_API_URL, TTS_API_URL, LLM_API_KEY, LLM_MODEL, client, tts_client
 
-    changed = []
+    settings = load_settings()
+    changed  = []
 
-    new_llm = data.get("llm_api_url", "").strip()
-    if new_llm and new_llm != LLM_API_URL:
-        LLM_API_URL = new_llm
-        # OpenAI クライアントを再生成
+    # ── LLM設定 ──
+    llm_fields = ["llm_use_env", "llm_preset", "llm_host", "llm_port",
+                  "llm_path", "llm_api_key", "llm_model"]
+    llm_changed = any(f in data for f in llm_fields)
+    if llm_changed:
+        for f in llm_fields:
+            if f in data:
+                settings[f] = data[f]
+        new_url = _build_llm_url(settings)
+        new_key = (settings.get("llm_api_key") or "lm-studio")
+        new_model = (settings.get("llm_model") or "")
+        LLM_API_URL = new_url
+        LLM_API_KEY = new_key
+        LLM_MODEL   = new_model
         client = OpenAI(base_url=LLM_API_URL, api_key=LLM_API_KEY)
-        changed.append("llm_api_url")
-        print(f"[API Config] LLM_API_URL -> {LLM_API_URL}")
+        changed.append("llm")
+        print(f"[API Config] LLM -> {LLM_API_URL}, key={LLM_API_KEY!r}, model={LLM_MODEL!r}")
 
-    new_tts = data.get("tts_api_url", "").strip()
-    if new_tts and new_tts != TTS_API_URL:
-        TTS_API_URL = new_tts
-        # TTS クライアントをリセット (次回 get_tts_client() 呼び出しで再接続)
-        tts_client = None
-        changed.append("tts_api_url")
-        print(f"[API Config] TTS_API_URL -> {TTS_API_URL}")
+    # ── TTS設定 ──
+    tts_fields = ["tts_use_env", "tts_host", "tts_port"]
+    tts_changed = any(f in data for f in tts_fields)
+    if tts_changed:
+        for f in tts_fields:
+            if f in data:
+                settings[f] = data[f]
+        new_tts_url = _build_tts_url(settings)
+        TTS_API_URL = new_tts_url
+        tts_client  = None   # 次回 get_tts_client() 呼び出しで再接続
+        changed.append("tts")
+        print(f"[API Config] TTS -> {TTS_API_URL}")
 
+    save_settings(settings)
     return JSONResponse({"status": "ok", "changed": changed})
+
+
+@app.get("/llm_presets")
+def get_llm_presets():
+    """LLMサーバプリセット一覧を返す"""
+    return JSONResponse(LLM_PRESETS)
+
+
+@app.get("/llm_models")
+def get_llm_models():
+    """LLMサーバから利用可能なモデル一覧を取得する。サーバが落ちていても空配列を返す。"""
+    try:
+        models = client.models.list()
+        return JSONResponse({"models": [m.id for m in models.data], "error": None})
+    except Exception as e:
+        return JSONResponse({"models": [], "error": str(e)})
 
 
 # ══════════════════════════════════════════════════════

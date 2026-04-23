@@ -1006,7 +1006,7 @@ body { background: var(--body-gradient); }
 #env-btn:hover { border-color: var(--accent2); color: var(--accent2); background: var(--card-hover); }
 
 /* ══════════════════════════════
-   接続設定モーダル (一時的)
+   接続設定モーダル
 ══════════════════════════════ */
 
 #api-config-backdrop {
@@ -1069,6 +1069,44 @@ body { background: var(--body-gradient); }
 }
 .api-field-row .api-field-input { flex: 1; }
 .api-port-input { width: 80px; flex-shrink: 0; }
+.api-prefix-label {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px; color: var(--muted);
+  white-space: nowrap; padding-bottom: 9px; flex-shrink: 0;
+}
+.api-sep-label {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 13px; color: var(--muted);
+  padding-bottom: 8px; flex-shrink: 0;
+}
+.ac-fetch-btn {
+  background: var(--input-bg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 7px 10px; cursor: pointer;
+  color: var(--text); font-size: 13px; flex-shrink: 0;
+  transition: border-color .2s, background .2s;
+}
+.ac-fetch-btn:hover { border-color: var(--accent2); background: var(--card-hover); }
+.ac-fetch-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.ac-conn-note {
+  font-size: 10px; margin-top: 4px;
+  transition: color .2s;
+}
+.ac-conn-note.ok  { color: var(--accent); }
+.ac-conn-note.err { color: #e87070; }
+.ac-conn-note.info { color: var(--muted); }
+.ac-env-active { opacity: 0.45; pointer-events: none; }
+.api-field-select {
+  width: 100%;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px; padding: 8px 10px;
+  color: var(--text);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 12px; outline: none;
+  transition: border-color .2s;
+  cursor: pointer;
+}
+.api-field-select:focus { border-color: var(--accent2); }
 
 
 #api-config-footer {
@@ -1149,19 +1187,58 @@ body.no-bubble-blur .msg-bubble {
     </div>
     <div id="api-config-body">
 
-      <!-- ── API接続設定 ── -->
-      <div class="api-section-divider" style="border-top:none; padding-top:0; margin-top:0;">API接続設定 <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:0.68rem;">(一時的・再起動で失われます)</span></div>
+      <!-- ── LLM サーバ設定 ── -->
+      <div class="api-section-divider" style="border-top:none; padding-top:0; margin-top:0;">LLM サーバ設定</div>
       <div class="api-settings-group">
         <div>
-          <div class="api-field-label">LLM API URL</div>
-          <input class="api-field-input" id="ac-llm-url" type="text" placeholder="http://localhost:1234/v1">
-          <div class="api-field-note">例: http://localhost:1234/v1 &nbsp;/&nbsp; http://192.168.1.10:1234/v1</div>
+          <div class="api-field-label">プリセット</div>
+          <select class="api-field-select" id="ac-llm-preset"></select>
         </div>
-        <div>
-          <div class="api-field-label">TTS API URL</div>
-          <input class="api-field-input" id="ac-tts-url" type="text" placeholder="http://localhost:7862/">
-          <div class="api-field-note">例: http://localhost:7862/ &nbsp;/&nbsp; http://192.168.1.10:7862/</div>
+        <div id="ac-llm-fields">
+          <div class="api-field-label">接続先</div>
+          <div class="api-field-row">
+            <span class="api-prefix-label">http://</span>
+            <input class="api-field-input" id="ac-llm-host" type="text" placeholder="localhost" style="flex:3">
+            <span class="api-sep-label">:</span>
+            <input class="api-field-input api-port-input" id="ac-llm-port" type="number" min="1" max="65535" placeholder="1234">
+            <input class="api-field-input" id="ac-llm-path" type="text" placeholder="/v1" style="flex:1.2; min-width:52px">
+          </div>
+          <div style="margin-top:8px">
+            <div class="api-field-label">API キー</div>
+            <input class="api-field-input" id="ac-llm-key" type="text" placeholder="lm-studio">
+          </div>
+          <div style="margin-top:8px">
+            <div class="api-field-label">モデル</div>
+            <div class="api-field-row">
+              <input class="api-field-input" id="ac-llm-model" type="text" list="ac-llm-model-list" placeholder="（空欄で local-model フォールバック）">
+              <datalist id="ac-llm-model-list"></datalist>
+              <button class="ac-fetch-btn" id="ac-llm-fetch-btn" title="サーバからモデル一覧を取得">🔄</button>
+            </div>
+            <div class="ac-conn-note info" id="ac-llm-model-note"></div>
+          </div>
         </div>
+        <label class="api-check-label" id="ac-llm-env-row">
+          <input type="checkbox" id="ac-llm-use-env">
+          <span id="ac-llm-env-text">環境変数 LLM_API_URL を使用</span>
+        </label>
+      </div>
+
+      <!-- ── TTS サーバ設定 ── -->
+      <div class="api-section-divider">TTS サーバ設定</div>
+      <div class="api-settings-group">
+        <div id="ac-tts-fields">
+          <div class="api-field-label">接続先</div>
+          <div class="api-field-row">
+            <span class="api-prefix-label">http://</span>
+            <input class="api-field-input" id="ac-tts-host" type="text" placeholder="localhost" style="flex:3">
+            <span class="api-sep-label">:</span>
+            <input class="api-field-input api-port-input" id="ac-tts-port" type="number" min="1" max="65535" placeholder="7860">
+          </div>
+        </div>
+        <label class="api-check-label" id="ac-tts-env-row">
+          <input type="checkbox" id="ac-tts-use-env">
+          <span id="ac-tts-env-text">環境変数 TTS_API_URL を使用</span>
+        </label>
       </div>
 
       <!-- ── 表示設定 ── -->
@@ -1221,7 +1298,7 @@ body.no-bubble-blur .msg-bubble {
 
     </div>
     <div id="api-config-footer">
-      <button class="modal-btn secondary" id="ac-reset-btn">接続先をデフォルトに戻す</button>
+      <button class="modal-btn secondary" id="ac-reset-btn">LM Studio に戻す</button>
       <button class="modal-btn secondary" id="ac-cancel-btn">キャンセル</button>
       <button class="modal-btn primary" id="ac-apply-btn">適用</button>
     </div>
@@ -3603,28 +3680,48 @@ async function _generateExport(textEl) {
 
 
 /* ══════════════════════════════
-   接続設定モーダル (一時的)
+   接続設定モーダル
 ══════════════════════════════ */
-const $apiConfigBackdrop    = document.getElementById('api-config-backdrop');
-const $apiConfigClose       = document.getElementById('api-config-close');
-const $acLlmUrl             = document.getElementById('ac-llm-url');
-const $acTtsUrl             = document.getElementById('ac-tts-url');
-const $acApplyBtn           = document.getElementById('ac-apply-btn');
-const $acCancelBtn          = document.getElementById('ac-cancel-btn');
-const $acResetBtn           = document.getElementById('ac-reset-btn');
-const $acFfmpegMp3          = document.getElementById('ac-ffmpeg-mp3');
-const $acFfmpegPathEnabled  = document.getElementById('ac-ffmpeg-path-enabled');
-const $acFfmpegPathRow      = document.getElementById('ac-ffmpeg-path-row');
-const $acFfmpegPath         = document.getElementById('ac-ffmpeg-path');
-const $acFfmpegStatus       = document.getElementById('ac-ffmpeg-status');
-const $acBubbleSlider           = document.getElementById('ac-bubble-slider');
-const $acBubbleVal              = document.getElementById('ac-bubble-val');
-const $acTextShadow             = document.getElementById('ac-text-shadow');
-const $acBubbleBlur             = document.getElementById('ac-bubble-blur');
-const $acCharDirStatus          = document.getElementById('ac-char-dir-status');
-const $acCharDirAlsoDefault     = document.getElementById('ac-char-dir-also-default');
-const $acCharDirAlsoDefaultLabel= document.getElementById('ac-char-dir-also-default-label');
-const $acLogAutoSave            = document.getElementById('ac-log-auto-save');
+const $apiConfigBackdrop     = document.getElementById('api-config-backdrop');
+const $apiConfigClose        = document.getElementById('api-config-close');
+const $acApplyBtn            = document.getElementById('ac-apply-btn');
+const $acCancelBtn           = document.getElementById('ac-cancel-btn');
+const $acResetBtn            = document.getElementById('ac-reset-btn');
+const $acFfmpegMp3           = document.getElementById('ac-ffmpeg-mp3');
+const $acFfmpegPathEnabled   = document.getElementById('ac-ffmpeg-path-enabled');
+const $acFfmpegPathRow       = document.getElementById('ac-ffmpeg-path-row');
+const $acFfmpegPath          = document.getElementById('ac-ffmpeg-path');
+const $acFfmpegStatus        = document.getElementById('ac-ffmpeg-status');
+const $acBubbleSlider        = document.getElementById('ac-bubble-slider');
+const $acBubbleVal           = document.getElementById('ac-bubble-val');
+const $acTextShadow          = document.getElementById('ac-text-shadow');
+const $acBubbleBlur          = document.getElementById('ac-bubble-blur');
+const $acCharDirStatus       = document.getElementById('ac-char-dir-status');
+const $acCharDirAlsoDefault  = document.getElementById('ac-char-dir-also-default');
+const $acCharDirAlsoDefaultLabel = document.getElementById('ac-char-dir-also-default-label');
+const $acLogAutoSave         = document.getElementById('ac-log-auto-save');
+// LLM接続設定
+const $acLlmPreset   = document.getElementById('ac-llm-preset');
+const $acLlmFields   = document.getElementById('ac-llm-fields');
+const $acLlmHost     = document.getElementById('ac-llm-host');
+const $acLlmPort     = document.getElementById('ac-llm-port');
+const $acLlmPath     = document.getElementById('ac-llm-path');
+const $acLlmKey      = document.getElementById('ac-llm-key');
+const $acLlmModel    = document.getElementById('ac-llm-model');
+const $acLlmModelList= document.getElementById('ac-llm-model-list');
+const $acLlmFetchBtn = document.getElementById('ac-llm-fetch-btn');
+const $acLlmModelNote= document.getElementById('ac-llm-model-note');
+const $acLlmUseEnv   = document.getElementById('ac-llm-use-env');
+const $acLlmEnvText  = document.getElementById('ac-llm-env-text');
+// TTS接続設定
+const $acTtsFields   = document.getElementById('ac-tts-fields');
+const $acTtsHost     = document.getElementById('ac-tts-host');
+const $acTtsPort     = document.getElementById('ac-tts-port');
+const $acTtsUseEnv   = document.getElementById('ac-tts-use-env');
+const $acTtsEnvText  = document.getElementById('ac-tts-env-text');
+
+// プリセットキャッシュ
+let _llmPresets = [];
 
 // ffmpegパス指定チェックボックスと入力欄の連動
 $acFfmpegPathEnabled.addEventListener('change', () => {
@@ -3638,8 +3735,70 @@ $acBubbleSlider.addEventListener('input', () => {
   document.documentElement.style.setProperty('--bubble-alpha', v / 100);
 });
 
-// デフォルト値キャッシュ (最初のGETで取得)
-let _apiConfigDefaults = { llm_api_url: '', tts_api_url: '' };
+// ── LLM環境変数チェック連動 ──
+function _updateLlmEnvState() {
+  const checked = $acLlmUseEnv.checked;
+  $acLlmPreset.closest('.api-settings-group').querySelectorAll(
+    '#ac-llm-fields, #ac-llm-preset'
+  ).forEach(el => el.classList.toggle('ac-env-active', checked));
+}
+$acLlmUseEnv.addEventListener('change', _updateLlmEnvState);
+
+// ── TTS環境変数チェック連動 ──
+function _updateTtsEnvState() {
+  const checked = $acTtsUseEnv.checked;
+  $acTtsFields.classList.toggle('ac-env-active', checked);
+}
+$acTtsUseEnv.addEventListener('change', _updateTtsEnvState);
+
+// ── プリセット選択 → フィールド自動入力 ──
+$acLlmPreset.addEventListener('change', () => {
+  const preset = _llmPresets.find(p => p.id === $acLlmPreset.value);
+  if (!preset || preset.id === 'custom') return;
+  $acLlmHost.value = preset.host || '';
+  $acLlmPort.value = preset.port != null ? String(preset.port) : '';
+  $acLlmPath.value = preset.path || '/v1';
+  $acLlmKey.value  = preset.key  || '';
+  // モデルリストをクリア（プリセット変更時は再取得を促す）
+  $acLlmModelList.innerHTML = '';
+  $acLlmModelNote.textContent = '';
+  $acLlmModelNote.className = 'ac-conn-note info';
+});
+
+// ── モデル一覧取得ボタン ──
+$acLlmFetchBtn.addEventListener('click', async () => {
+  $acLlmFetchBtn.disabled = true;
+  $acLlmModelNote.textContent = '取得中...';
+  $acLlmModelNote.className = 'ac-conn-note info';
+  try {
+    const res = await fetch(`${API}/llm_models`);
+    const d   = await res.json();
+    $acLlmModelList.innerHTML = '';
+    if (d.models && d.models.length > 0) {
+      d.models.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m;
+        $acLlmModelList.appendChild(opt);
+      });
+      $acLlmModelNote.textContent = `✓ ${d.models.length} 件取得 — フィールドに入力するか候補から選択`;
+      $acLlmModelNote.className = 'ac-conn-note ok';
+      // モデルが未入力の場合は最初の候補を自動入力
+      if (!$acLlmModel.value.trim()) {
+        $acLlmModel.value = d.models[0];
+      }
+    } else {
+      $acLlmModelNote.textContent = d.error
+        ? `✗ 取得失敗: ${d.error}`
+        : '✗ モデルが見つかりません';
+      $acLlmModelNote.className = 'ac-conn-note err';
+    }
+  } catch(e) {
+    $acLlmModelNote.textContent = `✗ 取得失敗: ${e.message}`;
+    $acLlmModelNote.className = 'ac-conn-note err';
+  } finally {
+    $acLlmFetchBtn.disabled = false;
+  }
+});
 
 async function _refreshFfmpegStatus() {
   try {
@@ -3653,15 +3812,57 @@ async function _refreshFfmpegStatus() {
 }
 
 async function openApiConfigModal() {
+  // ── プリセット一覧の取得・セレクト構築 ──
+  if (_llmPresets.length === 0) {
+    try {
+      const res = await fetch(`${API}/llm_presets`);
+      if (res.ok) _llmPresets = await res.json();
+    } catch(e) { /* ignore */ }
+  }
+  $acLlmPreset.innerHTML = '';
+  _llmPresets.forEach(p => {
+    const opt = document.createElement('option');
+    opt.value = p.id;
+    opt.textContent = p.label;
+    $acLlmPreset.appendChild(opt);
+  });
+
+  // ── 接続設定の読み込み ──
   try {
     const res = await fetch(`${API}/api_config`);
     if (res.ok) {
       const d = await res.json();
-      _apiConfigDefaults = { llm_api_url: d.default_llm_api_url, tts_api_url: d.default_tts_api_url };
-      $acLlmUrl.value = d.llm_api_url || '';
-      $acTtsUrl.value = d.tts_api_url || '';
-      $acLlmUrl.placeholder = d.default_llm_api_url || 'http://localhost:1234/v1';
-      $acTtsUrl.placeholder = d.default_tts_api_url || 'http://localhost:7862/';
+      // LLM
+      $acLlmPreset.value = d.llm_preset || 'lm-studio';
+      $acLlmHost.value   = d.llm_host   || 'localhost';
+      $acLlmPort.value   = d.llm_port   != null ? String(d.llm_port) : '1234';
+      $acLlmPath.value   = d.llm_path   || '/v1';
+      $acLlmKey.value    = d.llm_api_key || '';
+      $acLlmModel.value  = d.llm_model  || '';
+      // 環境変数チェック
+      $acLlmUseEnv.checked = !!d.llm_use_env;
+      if (d.env_llm_api_url) {
+        $acLlmEnvText.textContent = `環境変数 LLM_API_URL を使用 (${d.env_llm_api_url})`;
+        $acLlmUseEnv.disabled = false;
+      } else {
+        $acLlmEnvText.textContent = '環境変数 LLM_API_URL （未設定）';
+        $acLlmUseEnv.checked  = false;
+        $acLlmUseEnv.disabled = true;
+      }
+      _updateLlmEnvState();
+      // TTS
+      $acTtsHost.value   = d.tts_host || 'localhost';
+      $acTtsPort.value   = d.tts_port != null ? String(d.tts_port) : '7860';
+      $acTtsUseEnv.checked = !!d.tts_use_env;
+      if (d.env_tts_api_url) {
+        $acTtsEnvText.textContent = `環境変数 TTS_API_URL を使用 (${d.env_tts_api_url})`;
+        $acTtsUseEnv.disabled = false;
+      } else {
+        $acTtsEnvText.textContent = '環境変数 TTS_API_URL （未設定）';
+        $acTtsUseEnv.checked  = false;
+        $acTtsUseEnv.disabled = true;
+      }
+      _updateTtsEnvState();
       // CHAR_DIR 状態の表示
       if (d.char_dir_active) {
         $acCharDirStatus.textContent = `CHAR_DIR = ${d.char_dir_value}`;
@@ -3678,30 +3879,30 @@ async function openApiConfigModal() {
   } catch(e) {
     console.warn('[ApiConfig] Failed to load:', e);
   }
-  // 永続設定を読み込む（表示設定 + ffmpeg設定 + キャラクター読み出し設定）
+
+  // ── 表示設定・ffmpeg設定の読み込み ──
   try {
     const res = await fetch(`${API}/settings`);
     if (res.ok) {
       const s = await res.json();
-      // 表示設定
       const alpha = s.bubble_alpha ?? 0.25;
       const pct   = Math.round(alpha * 100);
       $acBubbleSlider.value    = pct;
       $acBubbleVal.textContent = pct + '%';
       $acTextShadow.checked    = !!s.text_shadow;
       $acBubbleBlur.checked    = s.bubble_blur !== false;
-      // ffmpeg設定
       $acFfmpegMp3.checked         = !!s.ffmpeg_to_mp3;
       $acFfmpegPathEnabled.checked = !!s.ffmpeg_path_enabled;
       $acFfmpegPath.value          = s.ffmpeg_path || '';
       $acFfmpegPathRow.style.display = $acFfmpegPathEnabled.checked ? '' : 'none';
-      // キャラクター読み出し設定
       $acCharDirAlsoDefault.checked = !!s.char_dir_also_default;
-      // チャットログ設定
-      $acLogAutoSave.checked = s.log_auto_save !== false;  // デフォルト ON
+      $acLogAutoSave.checked = s.log_auto_save !== false;
     }
   } catch(e) { /* ignore */ }
+
   _refreshFfmpegStatus();
+  $acLlmModelNote.textContent = '';
+  $acLlmModelList.innerHTML   = '';
   $apiConfigBackdrop.classList.add('open');
 }
 
@@ -3717,38 +3918,50 @@ $apiConfigClose.addEventListener('click', closeApiConfigModal);
 $acCancelBtn.addEventListener('click', closeApiConfigModal);
 $apiConfigBackdrop.addEventListener('click', e => { if (e.target === $apiConfigBackdrop) closeApiConfigModal(); });
 
-// デフォルトに戻す
+// LM Studio プリセットに戻す
 $acResetBtn.addEventListener('click', () => {
-  $acLlmUrl.value = _apiConfigDefaults.llm_api_url || '';
-  $acTtsUrl.value = _apiConfigDefaults.tts_api_url || '';
+  const lmStudio = _llmPresets.find(p => p.id === 'lm-studio');
+  if (lmStudio) {
+    $acLlmPreset.value = 'lm-studio';
+    $acLlmHost.value   = lmStudio.host;
+    $acLlmPort.value   = String(lmStudio.port);
+    $acLlmPath.value   = lmStudio.path;
+    $acLlmKey.value    = lmStudio.key;
+    $acLlmModel.value  = '';
+    $acLlmModelList.innerHTML = '';
+    $acLlmModelNote.textContent = '';
+  }
+  $acTtsHost.value = 'localhost';
+  $acTtsPort.value = '7860';
 });
 
 // 適用
 $acApplyBtn.addEventListener('click', async () => {
-  const llm = $acLlmUrl.value.trim();
-  const tts = $acTtsUrl.value.trim();
-
-  // API接続設定の保存（変更がある場合のみ）
-  if (llm || tts) {
-    const payload = {};
-    if (llm) payload.llm_api_url = llm;
-    if (tts) payload.tts_api_url = tts;
-    try {
-      const res = await fetch(`${API}/api_config`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const d = await res.json();
-      const changed = d.changed || [];
-      if (changed.length > 0) showErrorToast(`✓ 接続先を変更しました (${changed.join(', ')})`, 'success');
-    } catch(e) {
-      showErrorToast('接続設定エラー: ' + e.message);
-    }
+  // ── LLM / TTS 接続設定の保存 ──
+  try {
+    const payload = {
+      llm_use_env: $acLlmUseEnv.checked,
+      llm_preset:  $acLlmPreset.value,
+      llm_host:    $acLlmHost.value.trim(),
+      llm_port:    parseInt($acLlmPort.value, 10) || 1234,
+      llm_path:    $acLlmPath.value.trim() || '/v1',
+      llm_api_key: $acLlmKey.value.trim(),
+      llm_model:   $acLlmModel.value.trim(),
+      tts_use_env: $acTtsUseEnv.checked,
+      tts_host:    $acTtsHost.value.trim(),
+      tts_port:    parseInt($acTtsPort.value, 10) || 7860,
+    };
+    const res = await fetch(`${API}/api_config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+  } catch(e) {
+    showErrorToast('接続設定エラー: ' + e.message);
   }
 
-  // 表示設定 + ffmpeg設定の保存
+  // ── 表示設定 + ffmpeg設定の保存 ──
   const bubbleAlpha = parseInt($acBubbleSlider.value, 10) / 100;
   try {
     await fetch(`${API}/settings`, {
@@ -3765,11 +3978,9 @@ $acApplyBtn.addEventListener('click', async () => {
         log_auto_save:         $acLogAutoSave.checked,
       }),
     });
-    // 表示設定を即時反映
     document.documentElement.style.setProperty('--bubble-alpha', bubbleAlpha);
     document.body.classList.toggle('text-shadow-mode', $acTextShadow.checked);
     document.body.classList.toggle('no-bubble-blur', !$acBubbleBlur.checked);
-    // ログ自動保存の ON/OFF を即時反映
     await applyLogAutoSave($acLogAutoSave.checked);
     showErrorToast('✓ 設定を保存しました', 'success');
   } catch(e) {
