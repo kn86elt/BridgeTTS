@@ -3123,10 +3123,9 @@ function setBackgroundImage(url) {
 
 // ── 絵文字をspanでラップ（表示/非表示切り替え用）──
 const _EMOJI_RE = /\p{Extended_Pictographic}/gu;
-function wrapEmojis(textEl) {
-  const text = textEl.textContent;
-  _EMOJI_RE.lastIndex = 0;
-  if (!_EMOJI_RE.test(text)) { _EMOJI_RE.lastIndex = 0; return; }
+
+// テキストからDocumentFragmentを生成（絵文字はspan.emoji-charでラップ）
+function _emojiFragment(text) {
   _EMOJI_RE.lastIndex = 0;
   const frag = document.createDocumentFragment();
   let lastIndex = 0;
@@ -3143,8 +3142,23 @@ function wrapEmojis(textEl) {
   if (lastIndex < text.length)
     frag.appendChild(document.createTextNode(text.slice(lastIndex)));
   _EMOJI_RE.lastIndex = 0;
+  return frag;
+}
+
+// ストリーミング中にトークンを追記（絵文字は即座にラップ）
+function appendToken(textEl, token) {
+  _EMOJI_RE.lastIndex = 0;
+  if (!_EMOJI_RE.test(token)) { _EMOJI_RE.lastIndex = 0; textEl.appendChild(document.createTextNode(token)); return; }
+  textEl.appendChild(_emojiFragment(token));
+}
+
+// テキスト確定後に絵文字を一括ラップ（直接代入 / 履歴ロード用）
+function wrapEmojis(textEl) {
+  const text = textEl.textContent;
+  _EMOJI_RE.lastIndex = 0;
+  if (!_EMOJI_RE.test(text)) { _EMOJI_RE.lastIndex = 0; return; }
   textEl.innerHTML = '';
-  textEl.appendChild(frag);
+  textEl.appendChild(_emojiFragment(text));
 }
 
 function appendMessage(role, name, imageUrl) {
@@ -3273,7 +3287,7 @@ async function consumeStream(response, bubbleRefs, cursorEl) {
       }
       if (data.token) {
         cursorEl.remove();
-        textEl.insertAdjacentText('beforeend', data.token);
+        appendToken(textEl, data.token);
         textEl.appendChild(cursorEl);
         scrollBottom();
       }
@@ -3281,7 +3295,6 @@ async function consumeStream(response, bubbleRefs, cursorEl) {
         cursorEl.remove();
         reqId = data.req_id || null;
         if (data.error_detail) errorDetail = data.error_detail;
-        wrapEmojis(textEl);
       }
       if (data.error) {
         cursorEl.remove();
