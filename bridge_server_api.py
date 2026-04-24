@@ -19,6 +19,7 @@ from PIL import Image
 import io
 import webbrowser
 import base64
+import requests as _requests
 
 # --- 設定ファイル ---
 SETTINGS_FILE = "bridge_settings.json"
@@ -86,11 +87,12 @@ _ENV_TTS_API_URL = os.getenv("TTS_API_URL", "")
 
 # LLMサーバプリセット
 LLM_PRESETS = [
-    {"id": "lm-studio",      "label": "LM Studio",            "host": "localhost", "port": 1234,  "path": "/v1", "key": "lm-studio"},
-    {"id": "ollama",         "label": "Ollama",                "host": "localhost", "port": 11434, "path": "/v1", "key": "ollama"},
-    {"id": "text-gen-webui", "label": "text-generation-webui", "host": "localhost", "port": 5000,  "path": "/v1", "key": ""},
-    {"id": "koboldcpp",      "label": "KoboldCpp",             "host": "localhost", "port": 5001,  "path": "/v1", "key": ""},
-    {"id": "custom",         "label": "カスタム",              "host": "",          "port": None,  "path": "/v1", "key": ""},
+    {"id": "lm-studio",      "label": "LM Studio",            "host": "localhost", "port": 1234,  "path": "/v1", "key": "lm-studio", "supports_unload": True},
+    {"id": "ollama",         "label": "Ollama",                "host": "localhost", "port": 11434, "path": "/v1", "key": "ollama",    "supports_unload": True},
+    {"id": "text-gen-webui", "label": "text-generation-webui", "host": "localhost", "port": 5000,  "path": "/v1", "key": "",          "supports_unload": True},
+    {"id": "koboldcpp",      "label": "KoboldCpp",             "host": "localhost", "port": 5001,  "path": "/v1", "key": "",          "supports_unload": False},
+    {"id": "llama-server",   "label": "llama.cpp server",      "host": "localhost", "port": 8080,  "path": "/v1", "key": "none",      "supports_unload": False},
+    {"id": "custom",         "label": "カスタム",              "host": "",          "port": None,  "path": "/v1", "key": "",          "supports_unload": False},
 ]
 
 
@@ -1357,6 +1359,57 @@ def get_llm_models():
         return JSONResponse({"models": [m.id for m in models.data], "error": None})
     except Exception as e:
         return JSONResponse({"models": [], "error": str(e)})
+
+
+@app.post("/llm_unload")
+def llm_unload():
+    """現在のプリセットに応じてLLMモデルをアンロードする。"""
+    settings = load_settings()
+    preset   = settings.get("llm_preset", "lm-studio")
+    host     = (settings.get("llm_host") or "localhost").strip()
+    port     = settings.get("llm_port") or 1234
+    model    = (settings.get("llm_model") or "").strip()
+    base     = f"http://{host}:{port}"
+
+    try:
+        if preset == "lm-studio":
+            # ① ロード済みモデルの identifier を取得
+            r = _requests.get(f"{base}/api/v0/models", timeout=5)
+            r.raise_for_status()
+            models_list = r.json()
+            loaded = [m for m in models_list if m.get("state") == "loaded"]
+            if not loaded:
+                loaded = models_list  # フォールバック: 全件
+            if not loaded:
+                return JSONResponse({"ok": False, "message": "ロード済みモデルが見つかりません"})
+            identifier = loaded[0].get("id") or loaded[0].get("path") or ""
+            if not identifier:
+                return JSONResponse({"ok": False, "message": "モデル識別子を取得できませんでした"})
+            # ② アンロード
+            r2 = _requests.post(f"{base}/api/v0/models/unload",
+                                 json={"identifier": identifier}, timeout=10)
+            r2.raise_for_status()
+            return JSONResponse({"ok": True, "message": f"アンロードしました: {identifier}"})
+
+        elif preset == "ollama":
+            if not model:
+                return JSONResponse({"ok": False, "message": "モデル名が設定されていません（環境設定→モデル欄）"})
+            # keep_alive: 0 でモデルをVRAMから解放
+            r = _requests.post(f"{base}/api/generate",
+                                json={"model": model, "keep_alive": 0}, timeout=10)
+            r.raise_for_status()
+            return JSONResponse({"ok": True, "message": f"アンロードしました: {model}"})
+
+        elif preset == "text-gen-webui":
+            r = _requests.post(f"{base}/v1/internal/model/unload", timeout=10)
+            r.raise_for_status()
+            return JSONResponse({"ok": True, "message": "モデルをアンロードしました"})
+
+        else:
+            return JSONResponse({"ok": False, "message": f"{preset} はアンロードに対応していません"})
+
+    except Exception as e:
+        return JSONResponse({"ok": False, "message": f"エラー: {e}"})
 
 
 # ══════════════════════════════════════════════════════

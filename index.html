@@ -1216,6 +1216,9 @@ body.no-bubble-blur .msg-bubble {
             <select class="api-field-select" id="ac-llm-model-select" style="display:none; margin-top:6px"></select>
             <div class="ac-conn-note info" id="ac-llm-model-note"></div>
           </div>
+          <div id="ac-llm-unload-row" style="display:none; margin-top:10px">
+            <button class="modal-btn secondary" id="ac-llm-unload-btn" style="width:100%; font-size:12px">🗑 モデルをアンロード</button>
+          </div>
         </div>
         <label class="api-check-label" id="ac-llm-env-row">
           <input type="checkbox" id="ac-llm-use-env">
@@ -3731,6 +3734,8 @@ const $acLlmModel       = document.getElementById('ac-llm-model');
 const $acLlmModelSelect = document.getElementById('ac-llm-model-select');
 const $acLlmFetchBtn    = document.getElementById('ac-llm-fetch-btn');
 const $acLlmModelNote   = document.getElementById('ac-llm-model-note');
+const $acLlmUnloadRow   = document.getElementById('ac-llm-unload-row');
+const $acLlmUnloadBtn   = document.getElementById('ac-llm-unload-btn');
 const $acLlmUseEnv   = document.getElementById('ac-llm-use-env');
 const $acLlmEnvText  = document.getElementById('ac-llm-env-text');
 // TTS接続設定
@@ -3774,17 +3779,44 @@ function _updateTtsEnvState() {
 $acTtsUseEnv.addEventListener('change', _updateTtsEnvState);
 
 // ── プリセット選択 → フィールド自動入力 ──
+function _updateUnloadBtn() {
+  const preset = _llmPresets.find(p => p.id === $acLlmPreset.value);
+  $acLlmUnloadRow.style.display = (preset && preset.supports_unload) ? '' : 'none';
+}
+
 $acLlmPreset.addEventListener('change', () => {
   const preset = _llmPresets.find(p => p.id === $acLlmPreset.value);
-  if (!preset || preset.id === 'custom') return;
+  if (!preset || preset.id === 'custom') { _updateUnloadBtn(); return; }
   $acLlmHost.value = preset.host || '';
   $acLlmPort.value = preset.port != null ? String(preset.port) : '';
   $acLlmPath.value = preset.path || '/v1';
   $acLlmKey.value  = preset.key  || '';
   // モデルリストをクリア（プリセット変更時は再取得を促す）
-  $acLlmModelList.innerHTML = '';
+  $acLlmModelSelect.innerHTML = '';
+  $acLlmModelSelect.style.display = 'none';
   $acLlmModelNote.textContent = '';
   $acLlmModelNote.className = 'ac-conn-note info';
+  _updateUnloadBtn();
+});
+
+// ── モデルアンロードボタン ──
+$acLlmUnloadBtn.addEventListener('click', async () => {
+  $acLlmUnloadBtn.disabled = true;
+  $acLlmUnloadBtn.textContent = '🗑 アンロード中...';
+  try {
+    const res = await fetch(`${API}/llm_unload`, { method: 'POST' });
+    const d   = await res.json();
+    if (d.ok) {
+      showErrorToast('✓ ' + d.message, 'success');
+    } else {
+      showErrorToast('⚠ ' + d.message);
+    }
+  } catch(e) {
+    showErrorToast('アンロードエラー: ' + e.message);
+  } finally {
+    $acLlmUnloadBtn.disabled = false;
+    $acLlmUnloadBtn.textContent = '🗑 モデルをアンロード';
+  }
 });
 
 // ── モデル一覧取得ボタン ──
@@ -3938,6 +3970,7 @@ async function openApiConfigModal() {
   } catch(e) { /* ignore */ }
 
   _refreshFfmpegStatus();
+  _updateUnloadBtn();
   $acLlmModelNote.textContent     = '';
   $acLlmModelSelect.innerHTML     = '';
   $acLlmModelSelect.style.display = 'none';

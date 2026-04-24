@@ -13,6 +13,17 @@
 
 ---
 
+## 2026-04-25
+
+### 機能追加
+- LLM サーバのプリセットに「llama.cpp server」を追加（デフォルトポート: 8080）
+- 環境設定の LLM サーバ設定にモデルアンロードボタンを実装。LM Studio / Ollama / text-generation-webui のプリセット選択時のみ表示される。アンロードの仕組みはサーバごとに異なり、LM Studio は管理 API (`/api/v0/models/unload`)、Ollama は `keep_alive: 0` による解放、text-generation-webui は `/v1/internal/model/unload` を使用する
+
+### 修正
+- プリセット変更時にモデル一覧ドロップダウンが非表示にリセットされなかった問題を修正（内部変数名の誤りを修正）
+
+---
+
 ## 2026-04-24
 
 ### 機能追加
