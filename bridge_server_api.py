@@ -6,7 +6,7 @@ bridge_server.py  –  WebUI版 bridge3.py
     uvicorn bridge_server:app --host 0.0.0.0 --port 8000 --reload
 """
 
-import os, subprocess, time, re, threading, queue, asyncio, json, zipfile, shutil
+import os, subprocess, time, re, threading, queue, asyncio, json, zipfile, shutil, urllib.parse
 from pathlib import Path
 from openai import OpenAI
 from fastapi import FastAPI, HTTPException, Body
@@ -1387,19 +1387,25 @@ def llm_unload():
 
     try:
         if preset == "lm-studio":
-            # ① ロード済みモデルの identifier を取得
-            models_list = _get_json(f"{base}/api/v0/models", timeout=5)
-            loaded = [m for m in models_list if m.get("state") == "loaded"]
+            # ① ロード済みモデルの instance_id を取得 (/api/v0/models)
+            raw = _get_json(f"{base}/api/v0/models", timeout=5)
+            # {"data": [...]} 形式と直接リスト形式の両方に対応
+            models_list = raw.get("data", raw) if isinstance(raw, dict) else raw
+            if not isinstance(models_list, list):
+                models_list = []
+            loaded = [m for m in models_list if isinstance(m, dict) and m.get("state") == "loaded"]
             if not loaded:
-                loaded = models_list  # フォールバック: 全件
+                loaded = [m for m in models_list if isinstance(m, dict)]  # フォールバック: 全件
             if not loaded:
                 return JSONResponse({"ok": False, "message": "ロード済みモデルが見つかりません"})
-            identifier = loaded[0].get("id") or loaded[0].get("path") or ""
-            if not identifier:
+            # instance_id → id → path の順で探す
+            instance_id = (loaded[0].get("instance_id") or loaded[0].get("id")
+                           or loaded[0].get("path") or "")
+            if not instance_id:
                 return JSONResponse({"ok": False, "message": "モデル識別子を取得できませんでした"})
-            # ② アンロード
-            _post_json(f"{base}/api/v0/models/unload", {"identifier": identifier}, timeout=10)
-            return JSONResponse({"ok": True, "message": f"アンロードしました: {identifier}"})
+            # ② アンロード: POST /api/v1/models/unload  body: {"instance_id": "..."}
+            _post_json(f"{base}/api/v1/models/unload", {"instance_id": instance_id}, timeout=10)
+            return JSONResponse({"ok": True, "message": f"アンロードしました: {instance_id}"})
 
         elif preset == "ollama":
             if not model:
