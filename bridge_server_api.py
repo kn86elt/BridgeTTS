@@ -19,7 +19,8 @@ from PIL import Image
 import io
 import webbrowser
 import base64
-import requests as _requests
+import urllib.request as _urllib_req
+import urllib.error as _urllib_err
 
 # --- 設定ファイル ---
 SETTINGS_FILE = "bridge_settings.json"
@@ -1371,12 +1372,23 @@ def llm_unload():
     model    = (settings.get("llm_model") or "").strip()
     base     = f"http://{host}:{port}"
 
+    def _get_json(url, timeout=5):
+        req = _urllib_req.Request(url)
+        with _urllib_req.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read())
+
+    def _post_json(url, body=None, timeout=10):
+        data = json.dumps(body).encode() if body is not None else b""
+        req = _urllib_req.Request(url, data=data,
+                                   headers={"Content-Type": "application/json"},
+                                   method="POST")
+        with _urllib_req.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read())
+
     try:
         if preset == "lm-studio":
             # ① ロード済みモデルの identifier を取得
-            r = _requests.get(f"{base}/api/v0/models", timeout=5)
-            r.raise_for_status()
-            models_list = r.json()
+            models_list = _get_json(f"{base}/api/v0/models", timeout=5)
             loaded = [m for m in models_list if m.get("state") == "loaded"]
             if not loaded:
                 loaded = models_list  # フォールバック: 全件
@@ -1386,23 +1398,18 @@ def llm_unload():
             if not identifier:
                 return JSONResponse({"ok": False, "message": "モデル識別子を取得できませんでした"})
             # ② アンロード
-            r2 = _requests.post(f"{base}/api/v0/models/unload",
-                                 json={"identifier": identifier}, timeout=10)
-            r2.raise_for_status()
+            _post_json(f"{base}/api/v0/models/unload", {"identifier": identifier}, timeout=10)
             return JSONResponse({"ok": True, "message": f"アンロードしました: {identifier}"})
 
         elif preset == "ollama":
             if not model:
                 return JSONResponse({"ok": False, "message": "モデル名が設定されていません（環境設定→モデル欄）"})
             # keep_alive: 0 でモデルをVRAMから解放
-            r = _requests.post(f"{base}/api/generate",
-                                json={"model": model, "keep_alive": 0}, timeout=10)
-            r.raise_for_status()
+            _post_json(f"{base}/api/generate", {"model": model, "keep_alive": 0}, timeout=10)
             return JSONResponse({"ok": True, "message": f"アンロードしました: {model}"})
 
         elif preset == "text-gen-webui":
-            r = _requests.post(f"{base}/v1/internal/model/unload", timeout=10)
-            r.raise_for_status()
+            _post_json(f"{base}/v1/internal/model/unload", timeout=10)
             return JSONResponse({"ok": True, "message": "モデルをアンロードしました"})
 
         else:
