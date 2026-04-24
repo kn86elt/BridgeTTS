@@ -3511,25 +3511,37 @@ function showErrorToast(message, type = 'error') {
 
 /* ══════════════════════════════
    iOS Safari ビューポート高さ補正
-   100vh が実際の表示高さと一致しない問題を
-   window.innerHeight で補正する
+   100vh / 100dvh が実際の表示高さと一致しない問題を補正する。
+   ・iOS Safari : visualViewport.height が正確（キーボード開閉も追従）
+                  app.style.height を直接上書きして CSS を確実に反映させる
+   ・PC / その他: window.innerHeight は正確。CSS 100dvh に任せれば十分なので
+                  inline style 上書きは行わず、CSS 変数のみ更新する。
+                  visualViewport.scroll はキーボード開閉対応のため iOS 限定。
 ══════════════════════════════ */
 (function _fixAppHeight() {
+  const _isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
   function update() {
-    // 高さのみ visualViewport で補正する（幅はCSSに任せる）
-    // body { position: fixed } により横ずれは発生しないため scrollTo 不要
     const vv = window.visualViewport;
-    const h = vv ? vv.height : window.innerHeight;
+    // iOS は visualViewport.height、PC は window.innerHeight を使う
+    const h = (_isIOS && vv) ? vv.height : window.innerHeight;
     document.documentElement.style.setProperty('--app-h', (h * 0.01) + 'px');
-    const app = document.getElementById('app');
-    if (app) app.style.height = h + 'px';
+    // inline style 上書きは iOS のみ（PC では CSS dvh が正確に機能する）
+    if (_isIOS) {
+      const app = document.getElementById('app');
+      if (app) app.style.height = h + 'px';
+    }
   }
+
   update();
   window.addEventListener('resize', update);
-  // visualViewport API: iOS でキーボード開閉時により正確に発火する
   if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', update);
-    window.visualViewport.addEventListener('scroll', update);
+    // scroll イベントは iOS キーボード開閉時の高さ変化に対応するため iOS 限定
+    if (_isIOS) {
+      window.visualViewport.addEventListener('scroll', update);
+    }
   }
 })();
 
