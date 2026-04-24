@@ -1209,11 +1209,17 @@ body.no-bubble-blur .msg-bubble {
           </div>
           <div style="margin-top:8px">
             <div class="api-field-label">モデル</div>
-            <div class="api-field-row">
-              <input class="api-field-input" id="ac-llm-model" type="text" placeholder="（空欄で local-model フォールバック）">
+            <!-- llama.cpp: 読み取り専用表示 -->
+            <div id="ac-llm-model-readonly" style="display:none">
+              <div class="api-field-input" id="ac-llm-model-readonly-text"
+                   style="opacity:0.6; cursor:default; color:var(--muted); user-select:none">—</div>
+            </div>
+            <!-- その他プリセット: ドロップダウン＋リロードボタン -->
+            <div class="api-field-row" id="ac-llm-model-row">
+              <select class="api-field-select" id="ac-llm-model-select" style="flex:1; width:auto"></select>
               <button class="ac-fetch-btn" id="ac-llm-fetch-btn" title="サーバからモデル一覧を取得">🔄</button>
             </div>
-            <select class="api-field-select" id="ac-llm-model-select" style="display:none; margin-top:6px"></select>
+            <input type="hidden" id="ac-llm-model">
             <div class="ac-conn-note info" id="ac-llm-model-note"></div>
           </div>
           <div id="ac-llm-unload-row" style="display:none; margin-top:10px">
@@ -3730,12 +3736,15 @@ const $acLlmHost     = document.getElementById('ac-llm-host');
 const $acLlmPort     = document.getElementById('ac-llm-port');
 const $acLlmPath     = document.getElementById('ac-llm-path');
 const $acLlmKey      = document.getElementById('ac-llm-key');
-const $acLlmModel       = document.getElementById('ac-llm-model');
-const $acLlmModelSelect = document.getElementById('ac-llm-model-select');
-const $acLlmFetchBtn    = document.getElementById('ac-llm-fetch-btn');
-const $acLlmModelNote   = document.getElementById('ac-llm-model-note');
-const $acLlmUnloadRow   = document.getElementById('ac-llm-unload-row');
-const $acLlmUnloadBtn   = document.getElementById('ac-llm-unload-btn');
+const $acLlmModel             = document.getElementById('ac-llm-model');
+const $acLlmModelSelect       = document.getElementById('ac-llm-model-select');
+const $acLlmFetchBtn          = document.getElementById('ac-llm-fetch-btn');
+const $acLlmModelNote         = document.getElementById('ac-llm-model-note');
+const $acLlmModelRow          = document.getElementById('ac-llm-model-row');
+const $acLlmModelReadonly     = document.getElementById('ac-llm-model-readonly');
+const $acLlmModelReadonlyText = document.getElementById('ac-llm-model-readonly-text');
+const $acLlmUnloadRow         = document.getElementById('ac-llm-unload-row');
+const $acLlmUnloadBtn         = document.getElementById('ac-llm-unload-btn');
 const $acLlmUseEnv   = document.getElementById('ac-llm-use-env');
 const $acLlmEnvText  = document.getElementById('ac-llm-env-text');
 // TTS接続設定
@@ -3784,6 +3793,15 @@ function _updateUnloadBtn() {
   $acLlmUnloadRow.style.display = (preset && preset.supports_unload) ? '' : 'none';
 }
 
+function _updateModelUI() {
+  const isLlama = $acLlmPreset.value === 'llama-server';
+  $acLlmModelReadonly.style.display = isLlama ? '' : 'none';
+  $acLlmModelRow.style.display      = isLlama ? 'none' : '';
+  if (isLlama) {
+    $acLlmModelReadonlyText.textContent = $acLlmModel.value || '（ロード済みモデル）';
+  }
+}
+
 $acLlmPreset.addEventListener('change', () => {
   const preset = _llmPresets.find(p => p.id === $acLlmPreset.value);
   if (!preset || preset.id === 'custom') { _updateUnloadBtn(); return; }
@@ -3792,11 +3810,12 @@ $acLlmPreset.addEventListener('change', () => {
   $acLlmPath.value = preset.path || '/v1';
   $acLlmKey.value  = preset.key  || '';
   // モデルリストをクリア（プリセット変更時は再取得を促す）
-  $acLlmModelSelect.innerHTML = '';
-  $acLlmModelSelect.style.display = 'none';
+  $acLlmModel.value = '';
+  $acLlmModelSelect.innerHTML = '<option value="">— リロードして取得 —</option>';
   $acLlmModelNote.textContent = '';
   $acLlmModelNote.className = 'ac-conn-note info';
   _updateUnloadBtn();
+  _updateModelUI();
 });
 
 // ── モデルアンロードボタン ──
@@ -3824,7 +3843,6 @@ $acLlmFetchBtn.addEventListener('click', async () => {
   $acLlmFetchBtn.disabled = true;
   $acLlmModelNote.textContent = '取得中...';
   $acLlmModelNote.className = 'ac-conn-note info';
-  $acLlmModelSelect.style.display = 'none';
   try {
     const res = await fetch(`${API}/llm_models`);
     const d   = await res.json();
@@ -3836,7 +3854,7 @@ $acLlmFetchBtn.addEventListener('click', async () => {
         opt.textContent = m;
         $acLlmModelSelect.appendChild(opt);
       });
-      // 現在の入力値と一致するオプションを選択状態にする
+      // 現在の値と一致するオプションを選択状態にする
       const current = $acLlmModel.value.trim();
       if (current && d.models.includes(current)) {
         $acLlmModelSelect.value = current;
@@ -3844,7 +3862,6 @@ $acLlmFetchBtn.addEventListener('click', async () => {
         $acLlmModelSelect.value = d.models[0];
         $acLlmModel.value = d.models[0];
       }
-      $acLlmModelSelect.style.display = '';
       $acLlmModelNote.textContent = `✓ ${d.models.length} 件取得`;
       $acLlmModelNote.className = 'ac-conn-note ok';
     } else {
@@ -3860,7 +3877,7 @@ $acLlmFetchBtn.addEventListener('click', async () => {
     $acLlmFetchBtn.disabled = false;
   }
 });
-// selectで選択したらtext inputに反映
+// selectで選択したら hidden input に反映
 $acLlmModelSelect.addEventListener('change', () => {
   $acLlmModel.value = $acLlmModelSelect.value;
 });
@@ -3904,6 +3921,21 @@ async function openApiConfigModal() {
       $acLlmPath.value   = d.llm_path   || '/v1';
       $acLlmKey.value    = d.llm_api_key || '';
       $acLlmModel.value  = d.llm_model  || '';
+      // モデルセレクトに現在値をセット（llama.cpp以外）
+      $acLlmModelSelect.innerHTML = '';
+      if (d.llm_model) {
+        const opt = document.createElement('option');
+        opt.value = d.llm_model;
+        opt.textContent = d.llm_model;
+        $acLlmModelSelect.appendChild(opt);
+        $acLlmModelSelect.value = d.llm_model;
+      } else {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = '— リロードして取得 —';
+        $acLlmModelSelect.appendChild(opt);
+      }
+      _updateModelUI();
       // 環境変数チェック
       $acLlmUseEnv.checked = !!d.llm_use_env;
       if (d.env_llm_api_url) {
@@ -3971,9 +4003,6 @@ async function openApiConfigModal() {
 
   _refreshFfmpegStatus();
   _updateUnloadBtn();
-  $acLlmModelNote.textContent     = '';
-  $acLlmModelSelect.innerHTML     = '';
-  $acLlmModelSelect.style.display = 'none';
   $apiConfigBackdrop.classList.add('open');
 }
 
@@ -3999,9 +4028,9 @@ $acResetBtn.addEventListener('click', () => {
     $acLlmPath.value   = lmStudio.path;
     $acLlmKey.value    = lmStudio.key;
     $acLlmModel.value  = '';
-    $acLlmModelSelect.innerHTML = '';
-    $acLlmModelSelect.style.display = 'none';
+    $acLlmModelSelect.innerHTML = '<option value="">— リロードして取得 —</option>';
     $acLlmModelNote.textContent = '';
+    _updateModelUI();
   }
   $acTtsHost.value = 'localhost';
   $acTtsPort.value = '7860';
