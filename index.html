@@ -1119,6 +1119,8 @@ body { background: var(--body-gradient); }
 body.text-shadow-mode .msg-text {
   text-shadow: 0 1px 4px rgba(0,0,0,0.4);
 }
+/* 絵文字非表示モード */
+body.hide-emoji .emoji-char { display: none; }
 /* 吹き出しぼかし無効モード */
 body.no-bubble-blur .msg-bubble {
   backdrop-filter: none;
@@ -1446,6 +1448,10 @@ body.no-bubble-blur .msg-bubble {
           <input type="checkbox" id="tts-toggle" checked>
           <span>音声出力</span>
         </label>
+        <label class="ctrl-label">
+          <input type="checkbox" id="emoji-toggle" checked>
+          <span>絵文字を表示</span>
+        </label>
         <div class="ctrl-row-num">
           <span>文章数</span>
           <input type="number" id="tts-batch-size" min="0" max="20" value="2" title="TTSに一度に渡す文章数 (0=すべてまとめて)">
@@ -1611,8 +1617,9 @@ const $overlay   = document.getElementById('sidebar-overlay');
 const $menuBtn   = document.getElementById('menu-btn');
 const $bgEl      = document.getElementById('bg-character');
 const $bgToggle  = document.getElementById('bg-toggle');
-const $ttsToggle = document.getElementById('tts-toggle');
-const $darkToggle= document.getElementById('dark-toggle');
+const $ttsToggle   = document.getElementById('tts-toggle');
+const $emojiToggle = document.getElementById('emoji-toggle');
+const $darkToggle  = document.getElementById('dark-toggle');
 const $blurToggle= document.getElementById('blur-toggle');
 const $ttsBatch  = document.getElementById('tts-batch-size');
 const $directTtsToggle = document.getElementById('direct-tts-toggle');
@@ -1733,6 +1740,10 @@ function applySettings(s) {
   if (s.tts_enabled !== undefined && !$ttsToggle.disabled) {
     $ttsToggle.checked = !!s.tts_enabled;
   }
+  if (s.show_emoji !== undefined) {
+    $emojiToggle.checked = !!s.show_emoji;
+    document.body.classList.toggle('hide-emoji', !s.show_emoji);
+  }
   if (s.tts_batch_size !== undefined) {
     $ttsBatch.value = s.tts_batch_size;
   }
@@ -1780,6 +1791,11 @@ $bgToggle.addEventListener('change', () => {
 
 $ttsToggle.addEventListener('change', () => {
   saveSetting('tts_enabled', $ttsToggle.checked);
+});
+
+$emojiToggle.addEventListener('change', () => {
+  document.body.classList.toggle('hide-emoji', !$emojiToggle.checked);
+  saveSetting('show_emoji', $emojiToggle.checked);
 });
 
 $darkToggle.addEventListener('change', () => {
@@ -2601,10 +2617,12 @@ function renderLoadedLog(data) {
     if (msg.role === 'user') {
       const { textEl } = appendMessage('user', 'あなた', null);
       textEl.textContent = msg.text;
+      wrapEmojis(textEl);
     } else {
       const imageUrl = selectedImageUrl;
       const { textEl, footer, bubble } = appendMessage('char', selectedName || data.char_name, imageUrl);
       textEl.textContent = msg.text;
+      wrapEmojis(textEl);
       const row = bubble.parentElement;
       row._collectedAudio = [];
       row._hasVoice = selectedHasVoice;
@@ -3103,6 +3121,32 @@ function setBackgroundImage(url) {
   $bgEl.classList.toggle('hidden', !$bgToggle.checked);
 }
 
+// ── 絵文字をspanでラップ（表示/非表示切り替え用）──
+const _EMOJI_RE = /\p{Extended_Pictographic}/gu;
+function wrapEmojis(textEl) {
+  const text = textEl.textContent;
+  _EMOJI_RE.lastIndex = 0;
+  if (!_EMOJI_RE.test(text)) { _EMOJI_RE.lastIndex = 0; return; }
+  _EMOJI_RE.lastIndex = 0;
+  const frag = document.createDocumentFragment();
+  let lastIndex = 0;
+  let match;
+  while ((match = _EMOJI_RE.exec(text)) !== null) {
+    if (match.index > lastIndex)
+      frag.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+    const span = document.createElement('span');
+    span.className = 'emoji-char';
+    span.textContent = match[0];
+    frag.appendChild(span);
+    lastIndex = _EMOJI_RE.lastIndex;
+  }
+  if (lastIndex < text.length)
+    frag.appendChild(document.createTextNode(text.slice(lastIndex)));
+  _EMOJI_RE.lastIndex = 0;
+  textEl.innerHTML = '';
+  textEl.appendChild(frag);
+}
+
 function appendMessage(role, name, imageUrl) {
   const row = document.createElement('div');
   row.className = `msg-row ${role}`;
@@ -3237,6 +3281,7 @@ async function consumeStream(response, bubbleRefs, cursorEl) {
         cursorEl.remove();
         reqId = data.req_id || null;
         if (data.error_detail) errorDetail = data.error_detail;
+        wrapEmojis(textEl);
       }
       if (data.error) {
         cursorEl.remove();
@@ -3273,6 +3318,7 @@ async function sendMessage() {
     if (!text.trim()) return;  // 直接TTSは空テキスト不可
     const charRefs = appendMessage('char', selectedName, selectedImageUrl);
     charRefs.textEl.textContent = text.trim();
+    wrapEmojis(charRefs.textEl);
     appendLog('assistant', text.trim());
 
     if (ttsEnabled && selectedIndex !== null) {
