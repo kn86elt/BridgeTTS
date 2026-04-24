@@ -60,6 +60,8 @@ DEFAULT_SETTINGS = {
     "tts_use_env":  False,         # True=環境変数TTS_API_URLを優先使用
     "tts_host":     "localhost",   # TTSサーバのホスト/IP
     "tts_port":     7860,          # TTSサーバのポート
+    # 参照音声なしキャラのTTS動作
+    "no_voice_mode": "off",        # "off"=音声オフで使用 / "default_voice"=デフォルト音声で使用
 }
 
 def load_settings() -> dict:
@@ -631,18 +633,15 @@ class ChatRequest(BaseModel):
 
 # --- 補助関数 ---
 def generate_and_encode_tts(text, voice_path):
-    """TTSを生成してBase64文字列で返す"""
+    """TTSを生成してBase64文字列で返す。voice_path=None の場合はデフォルト音声で生成。"""
     tts = get_tts_client()
     if tts is None:
         return None
-    
+
     try:
-        result = tts.predict(
-            **TTS_CONFIG,
-            text=text,
-            uploaded_audio=handle_file(voice_path),
-            api_name="/_run_generation"
-        )
+        predict_kwargs = {**TTS_CONFIG, "text": text, "api_name": "/_run_generation",
+                          "uploaded_audio": handle_file(voice_path) if voice_path else None}
+        result = tts.predict(**predict_kwargs)
         
         res_data = result[0]
         gen_path = res_data["value"] if isinstance(res_data, dict) and "value" in res_data else res_data
@@ -682,6 +681,15 @@ def stream_llm_with_tts(messages: list, tts_enabled: bool):
 
     settings = load_settings()
     tts_batch_size: int = settings.get("tts_batch_size", 0)  # 0=すべて
+    no_voice_mode: str  = settings.get("no_voice_mode", "off")
+
+    # TTS使用可否: 音声ありキャラ、またはデフォルト音声モードで音声なしキャラ
+    tts_available = (
+        state.selected.get("has_voice")
+        or no_voice_mode == "default_voice"
+    )
+    # デフォルト音声モード時は voice_path=None でTTSを呼ぶ
+    tts_voice_path = state.selected.get("voice_path") if state.selected.get("has_voice") else None
 
     full_answer = ""
     llm_buffer = ""
@@ -711,7 +719,7 @@ def stream_llm_with_tts(messages: list, tts_enabled: bool):
             combined = "".join(chunk_sentences)
             s = clean_for_tts(combined)
             if len(s) > 1:
-                enqueue_tts(s, state.selected["voice_path"], req_id)
+                enqueue_tts(s, tts_voice_path, req_id)
                 enqueued_count += 1
 
     try:
@@ -729,7 +737,7 @@ def stream_llm_with_tts(messages: list, tts_enabled: bool):
 
             yield f"data: {json.dumps({'token': delta})}\n\n"
 
-            if tts_enabled and state.selected.get("has_voice"):
+            if tts_enabled and tts_available:
                 parts = split_pat.split(llm_buffer)
                 if len(parts) > 1:
                     # 絵文字が続く場合は次のパーツの先頭絵文字を前のパーツに結合
@@ -752,7 +760,7 @@ def stream_llm_with_tts(messages: list, tts_enabled: bool):
             yield from flush_audios()
 
         # LLM終了後の残りバッファをキューへ
-        if tts_enabled and state.selected.get("has_voice"):
+        if tts_enabled and tts_available:
             if llm_buffer.strip():
                 pending_sentences.append(llm_buffer)
             if pending_sentences:
@@ -762,7 +770,7 @@ def stream_llm_with_tts(messages: list, tts_enabled: bool):
                     pending_sentences = []
                     s = clean_for_tts(combined)
                     if len(s) > 1:
-                        enqueue_tts(s, state.selected["voice_path"], req_id)
+                        enqueue_tts(s, tts_voice_path, req_id)
                 else:
                     # 残りをバッチサイズで処理（端数は1つにまとめる）
                     while len(pending_sentences) >= tts_batch_size:
@@ -771,21 +779,21 @@ def stream_llm_with_tts(messages: list, tts_enabled: bool):
                         combined = "".join(chunk)
                         s = clean_for_tts(combined)
                         if len(s) > 1:
-                            enqueue_tts(s, state.selected["voice_path"], req_id)
+                            enqueue_tts(s, tts_voice_path, req_id)
                     # 端数
                     if pending_sentences:
                         combined = "".join(pending_sentences)
                         pending_sentences = []
                         s = clean_for_tts(combined)
                         if len(s) > 1:
-                            enqueue_tts(s, state.selected["voice_path"], req_id)
+                            enqueue_tts(s, tts_voice_path, req_id)
 
         state.memory.append({"role": "assistant", "content": full_answer})
 
         # LLM完了を即通知。残音声があれば req_id をフロントに渡してポーリングさせる
         with finished_audios_lock:
             q = finished_audios[req_id]["queued"]
-        has_pending = tts_enabled and state.selected.get("has_voice") and q > 0
+        has_pending = tts_enabled and tts_available and q > 0
         yield f"data: {json.dumps({'done': True, 'req_id': req_id if has_pending else None})}\n\n"
 
         # req_id を返した場合はポーリング側が解放するので、ここでは pop しない
@@ -810,8 +818,8 @@ def stream_llm_with_tts(messages: list, tts_enabled: bool):
         # フレンドリーメッセージをアシスタントの返答として送出
         yield f"data: {json.dumps({'token': friendly})}\n\n"
         # TTS が有効ならフレンドリーメッセージも発声させる
-        if tts_enabled and state.selected.get("has_voice"):
-            enqueue_tts(friendly, state.selected["voice_path"], req_id)
+        if tts_enabled and tts_available:
+            enqueue_tts(friendly, tts_voice_path, req_id)
             yield f"data: {json.dumps({'done': True, 'req_id': req_id, 'error_detail': err_str})}\n\n"
             # finished_audios の解放はポーリング側（audio_poll）に任せる
         else:
@@ -890,7 +898,9 @@ def tts_direct(req: DirectTTSRequest):
     if not state.selected:
         raise HTTPException(400, "キャラクターが選択されていません")
     voice_path = state.selected.get("voice_path")
-    if not voice_path:
+    settings = load_settings()
+    no_voice_mode = settings.get("no_voice_mode", "off")
+    if not voice_path and no_voice_mode != "default_voice":
         raise HTTPException(400, "音声ファイルが設定されていません")
 
     text = clean_for_tts(req.text.strip())
@@ -986,7 +996,9 @@ def tts_regen(req: TtsRegenRequest):
     if not state.selected:
         raise HTTPException(400, "キャラクターが選択されていません")
     voice_path = state.selected.get("voice_path")
-    if not voice_path:
+    settings = load_settings()
+    no_voice_mode = settings.get("no_voice_mode", "off")
+    if not voice_path and no_voice_mode != "default_voice":
         raise HTTPException(400, "音声ファイルが設定されていません")
 
     text = req.text.strip()
@@ -1154,7 +1166,9 @@ def tts_export(req: TtsExportRequest):
     if not state.selected:
         raise HTTPException(400, "キャラクターが選択されていません")
     voice_path = state.selected.get("voice_path")
-    if not voice_path:
+    settings = load_settings()
+    no_voice_mode = settings.get("no_voice_mode", "off")
+    if not voice_path and no_voice_mode != "default_voice":
         raise HTTPException(400, "音声ファイルが設定されていません")
 
     text = req.text.strip()

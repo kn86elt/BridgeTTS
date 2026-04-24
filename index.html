@@ -1210,10 +1210,10 @@ body.no-bubble-blur .msg-bubble {
           <div style="margin-top:8px">
             <div class="api-field-label">モデル</div>
             <div class="api-field-row">
-              <input class="api-field-input" id="ac-llm-model" type="text" list="ac-llm-model-list" placeholder="（空欄で local-model フォールバック）">
-              <datalist id="ac-llm-model-list"></datalist>
+              <input class="api-field-input" id="ac-llm-model" type="text" placeholder="（空欄で local-model フォールバック）">
               <button class="ac-fetch-btn" id="ac-llm-fetch-btn" title="サーバからモデル一覧を取得">🔄</button>
             </div>
+            <select class="api-field-select" id="ac-llm-model-select" style="display:none; margin-top:6px"></select>
             <div class="ac-conn-note info" id="ac-llm-model-note"></div>
           </div>
         </div>
@@ -1239,6 +1239,17 @@ body.no-bubble-blur .msg-bubble {
           <input type="checkbox" id="ac-tts-use-env">
           <span id="ac-tts-env-text">環境変数 TTS_API_URL を使用</span>
         </label>
+        <div class="api-field-label" style="margin-top:8px">参照音声のないキャラクター</div>
+        <div style="display:flex; gap:16px; align-items:center; margin-top:4px">
+          <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:13px">
+            <input type="radio" name="ac-no-voice-mode" id="ac-no-voice-off" value="off">
+            <span>音声オフで使用</span>
+          </label>
+          <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:13px">
+            <input type="radio" name="ac-no-voice-mode" id="ac-no-voice-default" value="default_voice">
+            <span>デフォルト音声で使用</span>
+          </label>
+        </div>
       </div>
 
       <!-- ── 表示設定 ── -->
@@ -1298,7 +1309,7 @@ body.no-bubble-blur .msg-bubble {
 
     </div>
     <div id="api-config-footer">
-      <button class="modal-btn secondary" id="ac-reset-btn">LM Studio に戻す</button>
+      <button class="modal-btn secondary" id="ac-reset-btn">デフォルトに戻す</button>
       <button class="modal-btn secondary" id="ac-cancel-btn">キャンセル</button>
       <button class="modal-btn primary" id="ac-apply-btn">適用</button>
     </div>
@@ -1553,6 +1564,7 @@ let selectedIndex    = null;
 let selectedName     = '';
 let selectedImageUrl = null;
 let selectedHasVoice = false;
+let noVoiceMode      = 'off';   // 'off' | 'default_voice'
 let isGenerating     = false;
 let audioQueue       = [];
 let isAudioPlaying   = false;
@@ -1731,6 +1743,10 @@ function applySettings(s) {
   // ログ自動保存設定の反映
   if (s.log_auto_save !== undefined) {
     logAutoSave = s.log_auto_save !== false;
+  }
+  // 参照音声なしキャラのTTS設定
+  if (s.no_voice_mode !== undefined) {
+    noVoiceMode = s.no_voice_mode;
   }
   updateSysActiveLabel(s);
 }
@@ -2963,8 +2979,12 @@ async function loadCharacters() {
 
     list.forEach(c => {
       const hasVoice = (c.has_voice !== undefined) ? c.has_voice : !c.name.includes('(音声なし)');
-      const subText  = hasVoice ? 'voice ready' : 'Voice not ready';
-      const subClass = hasVoice ? 'char-sub' : 'char-sub no-voice';
+      const subText  = hasVoice ? 'voice ready'
+                     : noVoiceMode === 'default_voice' ? 'デフォルト音声'
+                     : 'Voice not ready';
+      const subClass = hasVoice ? 'char-sub'
+                     : noVoiceMode === 'default_voice' ? 'char-sub'
+                     : 'char-sub no-voice';
 
       const card = document.createElement('div');
       card.className = 'char-card';
@@ -3021,7 +3041,7 @@ async function selectCharacter(idx, name, hasImage, hasVoice) {
   selectedImageUrl = hasImage ? `${API}/characters/${idx}/image` : null;
   selectedHasVoice = !!hasVoice;
 
-  if (!hasVoice) {
+  if (!hasVoice && noVoiceMode === 'off') {
     $ttsToggle.checked  = false;
     $ttsToggle.disabled = true;
   } else {
@@ -3707,18 +3727,20 @@ const $acLlmHost     = document.getElementById('ac-llm-host');
 const $acLlmPort     = document.getElementById('ac-llm-port');
 const $acLlmPath     = document.getElementById('ac-llm-path');
 const $acLlmKey      = document.getElementById('ac-llm-key');
-const $acLlmModel    = document.getElementById('ac-llm-model');
-const $acLlmModelList= document.getElementById('ac-llm-model-list');
-const $acLlmFetchBtn = document.getElementById('ac-llm-fetch-btn');
-const $acLlmModelNote= document.getElementById('ac-llm-model-note');
+const $acLlmModel       = document.getElementById('ac-llm-model');
+const $acLlmModelSelect = document.getElementById('ac-llm-model-select');
+const $acLlmFetchBtn    = document.getElementById('ac-llm-fetch-btn');
+const $acLlmModelNote   = document.getElementById('ac-llm-model-note');
 const $acLlmUseEnv   = document.getElementById('ac-llm-use-env');
 const $acLlmEnvText  = document.getElementById('ac-llm-env-text');
 // TTS接続設定
-const $acTtsFields   = document.getElementById('ac-tts-fields');
-const $acTtsHost     = document.getElementById('ac-tts-host');
-const $acTtsPort     = document.getElementById('ac-tts-port');
-const $acTtsUseEnv   = document.getElementById('ac-tts-use-env');
-const $acTtsEnvText  = document.getElementById('ac-tts-env-text');
+const $acTtsFields        = document.getElementById('ac-tts-fields');
+const $acTtsHost          = document.getElementById('ac-tts-host');
+const $acTtsPort          = document.getElementById('ac-tts-port');
+const $acTtsUseEnv        = document.getElementById('ac-tts-use-env');
+const $acTtsEnvText       = document.getElementById('ac-tts-env-text');
+const $acNoVoiceOff       = document.getElementById('ac-no-voice-off');
+const $acNoVoiceDefault   = document.getElementById('ac-no-voice-default');
 
 // プリセットキャッシュ
 let _llmPresets = [];
@@ -3770,22 +3792,29 @@ $acLlmFetchBtn.addEventListener('click', async () => {
   $acLlmFetchBtn.disabled = true;
   $acLlmModelNote.textContent = '取得中...';
   $acLlmModelNote.className = 'ac-conn-note info';
+  $acLlmModelSelect.style.display = 'none';
   try {
     const res = await fetch(`${API}/llm_models`);
     const d   = await res.json();
-    $acLlmModelList.innerHTML = '';
     if (d.models && d.models.length > 0) {
+      $acLlmModelSelect.innerHTML = '';
       d.models.forEach(m => {
         const opt = document.createElement('option');
         opt.value = m;
-        $acLlmModelList.appendChild(opt);
+        opt.textContent = m;
+        $acLlmModelSelect.appendChild(opt);
       });
-      $acLlmModelNote.textContent = `✓ ${d.models.length} 件取得 — フィールドに入力するか候補から選択`;
-      $acLlmModelNote.className = 'ac-conn-note ok';
-      // モデルが未入力の場合は最初の候補を自動入力
-      if (!$acLlmModel.value.trim()) {
+      // 現在の入力値と一致するオプションを選択状態にする
+      const current = $acLlmModel.value.trim();
+      if (current && d.models.includes(current)) {
+        $acLlmModelSelect.value = current;
+      } else {
+        $acLlmModelSelect.value = d.models[0];
         $acLlmModel.value = d.models[0];
       }
+      $acLlmModelSelect.style.display = '';
+      $acLlmModelNote.textContent = `✓ ${d.models.length} 件取得`;
+      $acLlmModelNote.className = 'ac-conn-note ok';
     } else {
       $acLlmModelNote.textContent = d.error
         ? `✗ 取得失敗: ${d.error}`
@@ -3798,6 +3827,10 @@ $acLlmFetchBtn.addEventListener('click', async () => {
   } finally {
     $acLlmFetchBtn.disabled = false;
   }
+});
+// selectで選択したらtext inputに反映
+$acLlmModelSelect.addEventListener('change', () => {
+  $acLlmModel.value = $acLlmModelSelect.value;
 });
 
 async function _refreshFfmpegStatus() {
@@ -3897,12 +3930,17 @@ async function openApiConfigModal() {
       $acFfmpegPathRow.style.display = $acFfmpegPathEnabled.checked ? '' : 'none';
       $acCharDirAlsoDefault.checked = !!s.char_dir_also_default;
       $acLogAutoSave.checked = s.log_auto_save !== false;
+      // 参照音声なしキャラのTTS設定
+      const nvm = s.no_voice_mode || 'off';
+      $acNoVoiceOff.checked     = (nvm !== 'default_voice');
+      $acNoVoiceDefault.checked = (nvm === 'default_voice');
     }
   } catch(e) { /* ignore */ }
 
   _refreshFfmpegStatus();
-  $acLlmModelNote.textContent = '';
-  $acLlmModelList.innerHTML   = '';
+  $acLlmModelNote.textContent     = '';
+  $acLlmModelSelect.innerHTML     = '';
+  $acLlmModelSelect.style.display = 'none';
   $apiConfigBackdrop.classList.add('open');
 }
 
@@ -3928,7 +3966,8 @@ $acResetBtn.addEventListener('click', () => {
     $acLlmPath.value   = lmStudio.path;
     $acLlmKey.value    = lmStudio.key;
     $acLlmModel.value  = '';
-    $acLlmModelList.innerHTML = '';
+    $acLlmModelSelect.innerHTML = '';
+    $acLlmModelSelect.style.display = 'none';
     $acLlmModelNote.textContent = '';
   }
   $acTtsHost.value = 'localhost';
@@ -3976,8 +4015,16 @@ $acApplyBtn.addEventListener('click', async () => {
         ffmpeg_path:           $acFfmpegPath.value.trim(),
         char_dir_also_default: $acCharDirAlsoDefault.checked,
         log_auto_save:         $acLogAutoSave.checked,
+        no_voice_mode:         $acNoVoiceDefault.checked ? 'default_voice' : 'off',
       }),
     });
+    noVoiceMode = $acNoVoiceDefault.checked ? 'default_voice' : 'off';
+    // no_voice_mode 変更時はキャラリストの表示（デフォルト音声 / Voice not ready）を更新
+    await loadCharacters();
+    if (selectedIndex !== null) {
+      const activeCard = document.querySelector(`.char-card[data-index="${selectedIndex}"]`);
+      if (activeCard) activeCard.classList.add('active');
+    }
     document.documentElement.style.setProperty('--bubble-alpha', bubbleAlpha);
     document.body.classList.toggle('text-shadow-mode', $acTextShadow.checked);
     document.body.classList.toggle('no-bubble-blur', !$acBubbleBlur.checked);
