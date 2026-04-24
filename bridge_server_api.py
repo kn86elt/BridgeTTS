@@ -64,6 +64,8 @@ DEFAULT_SETTINGS = {
     "tts_port":     7860,          # TTSサーバのポート
     # 参照音声なしキャラのTTS動作
     "no_voice_mode": "off",        # "off"=音声オフで使用 / "default_voice"=デフォルト音声で使用
+    # テキスト読み上げ（ファイル/ペースト）設定
+    "tts_file_batch_size": 2,      # 読み上げ1吹き出しあたりの文章数 (1〜5)
 }
 
 def load_settings() -> dict:

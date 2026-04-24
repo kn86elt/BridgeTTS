@@ -783,6 +783,10 @@ body { background: var(--body-gradient); }
   border: 1px solid var(--border);
 }
 .modal-btn.secondary:hover { border-color: var(--muted); color: var(--text); }
+.modal-btn.danger {
+  background: #c0392b; color: #fff; border: 1px solid #c0392b;
+}
+.modal-btn.danger:hover { opacity: .85; }
 .modal-btn.save-slot {
   background: transparent; color: var(--accent2);
   border: 1px solid var(--accent2); display: none;
@@ -1004,6 +1008,96 @@ body { background: var(--body-gradient); }
   transition: border-color .2s, color .2s, background .2s;
 }
 #env-btn:hover { border-color: var(--accent2); color: var(--accent2); background: var(--card-hover); }
+
+/* ══════════════════════════════
+   テキスト読み上げ モーダル群
+══════════════════════════════ */
+.ttsread-backdrop {
+  display: none; position: fixed; inset: 0; z-index: 300;
+  background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
+  align-items: center; justify-content: center;
+}
+.ttsread-backdrop.open { display: flex; }
+
+.ttsread-modal {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 24px;
+  width: min(480px, 94vw); max-height: 90vh;
+  display: flex; flex-direction: column; gap: 14px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+}
+.ttsread-title {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 13px; letter-spacing: .06em; color: var(--accent2);
+  border-bottom: 1px solid var(--border); padding-bottom: 10px;
+}
+.ttsread-method-btns {
+  display: flex; gap: 10px;
+}
+.ttsread-method-btn {
+  flex: 1; padding: 14px 10px;
+  background: var(--input-bg); border: 1px solid var(--border);
+  border-radius: 8px; cursor: pointer; color: var(--text);
+  font-family: 'Share Tech Mono', monospace; font-size: 12px;
+  text-align: center; transition: border-color .2s, background .2s;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+}
+.ttsread-method-btn .ttsread-method-icon { font-size: 22px; }
+.ttsread-method-btn:hover { border-color: var(--accent2); background: var(--card-hover); }
+
+#ttsread-paste-area {
+  width: 100%; min-height: 160px; max-height: 280px;
+  background: var(--input-bg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 10px; color: var(--text);
+  font-family: 'Noto Sans JP', sans-serif; font-size: 13px;
+  line-height: 1.6; resize: vertical; outline: none;
+  transition: border-color .2s;
+}
+#ttsread-paste-area:focus { border-color: var(--accent2); }
+#ttsread-paste-area::placeholder { color: var(--muted); }
+
+.ttsread-encoding-row {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  font-family: 'Share Tech Mono', monospace; font-size: 11px; color: var(--muted);
+}
+.ttsread-encoding-row label {
+  display: flex; align-items: center; gap: 5px; cursor: pointer;
+  color: var(--text); font-size: 11px;
+}
+.ttsread-encoding-row input[type="radio"] { accent-color: var(--accent2); }
+
+.ttsread-preview-box {
+  background: var(--input-bg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 10px;
+  max-height: 200px; overflow-y: auto;
+  font-size: 12px; line-height: 1.7; color: var(--text);
+  white-space: pre-wrap; word-break: break-word;
+  flex-shrink: 0;
+}
+.ttsread-meta {
+  font-family: 'Share Tech Mono', monospace; font-size: 10px;
+  color: var(--muted);
+}
+.ttsread-batch-row {
+  display: flex; align-items: center; gap: 10px;
+  font-family: 'Share Tech Mono', monospace; font-size: 11px; color: var(--text);
+}
+.ttsread-batch-row input[type="range"] {
+  flex: 1; accent-color: var(--accent2);
+}
+.ttsread-batch-val {
+  min-width: 28px; text-align: center; font-size: 13px;
+  color: var(--accent2); font-weight: 600;
+}
+.ttsread-footer {
+  display: flex; gap: 10px; justify-content: flex-end; margin-top: 4px;
+}
+
+/* 中止確認モーダル */
+#ttsread-stop-modal .ttsread-modal { width: min(320px, 94vw); }
+.ttsread-stop-msg {
+  font-size: 13px; color: var(--text); line-height: 1.6;
+}
 
 /* ══════════════════════════════
    接続設定モーダル
@@ -1563,6 +1657,80 @@ body.no-bubble-blur .msg-bubble {
   </div>
 </div>
 
+<!-- ══════════════════════════════
+     テキスト読み上げ：入力方法選択
+══════════════════════════════ -->
+<div class="ttsread-backdrop" id="ttsread-method-backdrop">
+  <div class="ttsread-modal">
+    <div class="ttsread-title">🔊 テキストを読み上げ <span style="font-size:10px;opacity:.6">(実験的)</span></div>
+    <div class="ttsread-method-btns">
+      <button class="ttsread-method-btn" id="ttsread-file-btn">
+        <span class="ttsread-method-icon">📄</span>
+        <span>テキストファイルを選択</span>
+      </button>
+      <button class="ttsread-method-btn" id="ttsread-paste-btn">
+        <span class="ttsread-method-icon">📋</span>
+        <span>テキストをペースト</span>
+      </button>
+    </div>
+    <!-- ペースト欄（ファイル選択時は非表示） -->
+    <div id="ttsread-paste-wrap" style="display:none; flex-direction:column; gap:8px">
+      <textarea id="ttsread-paste-area" placeholder="読み上げたいテキストをここに貼り付けてください…"></textarea>
+      <div class="ttsread-footer">
+        <button class="modal-btn secondary" id="ttsread-paste-cancel">戻る</button>
+        <button class="modal-btn primary"   id="ttsread-paste-ok">プレビューへ</button>
+      </div>
+    </div>
+    <!-- ファイル選択時はボタンクリックでダイアログを開くだけ -->
+    <input type="file" id="ttsread-file-input" accept=".txt,text/plain" style="display:none">
+    <div class="ttsread-footer" id="ttsread-method-footer">
+      <button class="modal-btn secondary" id="ttsread-method-cancel">キャンセル</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════
+     テキスト読み上げ：プレビュー
+══════════════════════════════ -->
+<div class="ttsread-backdrop" id="ttsread-preview-backdrop">
+  <div class="ttsread-modal">
+    <div class="ttsread-title">🔊 読み上げプレビュー</div>
+    <!-- エンコーディング選択（ファイルのみ表示） -->
+    <div class="ttsread-encoding-row" id="ttsread-encoding-row">
+      <span>文字コード：</span>
+      <label><input type="radio" name="ttsread-enc" value="utf-8"     checked> UTF-8</label>
+      <label><input type="radio" name="ttsread-enc" value="shift-jis"        > Shift-JIS</label>
+      <label><input type="radio" name="ttsread-enc" value="euc-jp"           > EUC-JP</label>
+    </div>
+    <div class="ttsread-preview-box" id="ttsread-preview-text"></div>
+    <div class="ttsread-meta" id="ttsread-preview-meta"></div>
+    <div class="ttsread-batch-row">
+      <span>1吹き出しの文章数</span>
+      <input type="range" id="ttsread-batch-slider" min="1" max="5" value="2">
+      <span class="ttsread-batch-val" id="ttsread-batch-val">2</span>
+      <span style="color:var(--muted)">文</span>
+    </div>
+    <div class="ttsread-footer">
+      <button class="modal-btn secondary" id="ttsread-preview-cancel">キャンセル</button>
+      <button class="modal-btn primary"   id="ttsread-preview-start">読み上げ開始</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════
+     テキスト読み上げ：中止確認
+══════════════════════════════ -->
+<div class="ttsread-backdrop" id="ttsread-stop-modal">
+  <div class="ttsread-modal" style="width:min(320px,94vw)">
+    <div class="ttsread-title">読み上げを中止しますか？</div>
+    <div class="ttsread-stop-msg">現在の読み上げを停止し、残りのテキストをキャンセルします。</div>
+    <div class="ttsread-footer">
+      <button class="modal-btn secondary" id="ttsread-stop-cancel">キャンセル</button>
+      <button class="modal-btn danger"    id="ttsread-stop-ok">中止</button>
+    </div>
+  </div>
+</div>
+
 <script>
 /* ═══════════════════════════════════════════
    Bridge WebUI — フロントエンド
@@ -1581,6 +1749,7 @@ let selectedImageUrl = null;
 let selectedHasVoice = false;
 let noVoiceMode      = 'off';   // 'off' | 'default_voice'
 let isGenerating     = false;
+let isFileReading    = false;   // テキスト読み上げ中フラグ
 let audioQueue       = [];
 let isAudioPlaying   = false;
 let isReplaying      = false;   // リプレイ再生中フラグ
@@ -1743,6 +1912,9 @@ function applySettings(s) {
   if (s.show_emoji !== undefined) {
     $emojiToggle.checked = !!s.show_emoji;
     document.body.classList.toggle('hide-emoji', !s.show_emoji);
+  }
+  if (s.tts_file_batch_size !== undefined) {
+    ttsFileBatchSize = Math.max(1, Math.min(5, s.tts_file_batch_size));
   }
   if (s.tts_batch_size !== undefined) {
     $ttsBatch.value = s.tts_batch_size;
@@ -2749,6 +2921,10 @@ $logMenuBtn.addEventListener('click', e => {
     { label: 'シナリオを読み込む',
       tooltip: 'ログのユーザー入力のみ使用し新しい会話で再現します',
       action: () => openLogLoadDialog('scenario') },
+    null, // セパレータ
+    { label: 'テキストを読み上げ (実験的)',
+      tooltip: 'テキストファイルまたはペーストしたテキストをTTSで読み上げます',
+      action: openTtsReadMethodModal },
   ];
   menuDefs.forEach(def => {
     if (!def) {
@@ -3482,10 +3658,11 @@ setInterval(() => {
 $input.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
-    if (!isScenarioPlaying) sendMessage();
+    if (!isScenarioPlaying && !isFileReading) sendMessage();
   }
 });
 $sendBtn.addEventListener('click', () => {
+  if (isFileReading)      { openTtsReadStopModal(); return; }
   if (isReplaying)        { stopReplay();   return; }
   if (isScenarioPlaying)  { stopScenario(); return; }
   unlockAudio();
@@ -3507,6 +3684,517 @@ function showErrorToast(message, type = 'error') {
     toast.classList.remove('show');
     setTimeout(() => toast.remove(), 250);
   }, 3000);
+}
+
+/* ══════════════════════════════
+   テキスト読み上げ機能 (実験的)
+══════════════════════════════ */
+
+// ── 状態変数 ──
+let ttsReadAbort      = false;   // 中止フラグ
+let ttsFileBatchSize  = 2;       // 設定ファイルから読み込む
+let _ttsReadFileData  = null;    // 読み込んだ ArrayBuffer (エンコード切替用)
+let _ttsReadCurrentAudio = null; // 再生中の Audio 要素 (中止用)
+let _ttsReadQueue     = null;    // 生成/再生パイプラインキュー (中止時のアンブロック用)
+
+// ── 非同期キュー (プロデューサー/コンシューマー間同期) ──
+class _AsyncQueue {
+  constructor() { this._items = []; this._waiter = null; }
+  push(x) {
+    this._items.push(x);
+    if (this._waiter) { this._waiter(); this._waiter = null; }
+  }
+  async pop() {
+    if (!this._items.length)
+      await new Promise(r => { this._waiter = r; });
+    return this._items.shift();
+  }
+}
+
+// ── DOM refs ──
+const $ttsReadMethodBackdrop  = document.getElementById('ttsread-method-backdrop');
+const $ttsReadFileBtn         = document.getElementById('ttsread-file-btn');
+const $ttsReadPasteBtn        = document.getElementById('ttsread-paste-btn');
+const $ttsReadPasteWrap       = document.getElementById('ttsread-paste-wrap');
+const $ttsReadPasteArea       = document.getElementById('ttsread-paste-area');
+const $ttsReadPasteCancel     = document.getElementById('ttsread-paste-cancel');
+const $ttsReadPasteOk         = document.getElementById('ttsread-paste-ok');
+const $ttsReadFileInput       = document.getElementById('ttsread-file-input');
+const $ttsReadMethodCancel    = document.getElementById('ttsread-method-cancel');
+const $ttsReadMethodFooter    = document.getElementById('ttsread-method-footer');
+const $ttsReadPreviewBackdrop = document.getElementById('ttsread-preview-backdrop');
+const $ttsReadEncodingRow     = document.getElementById('ttsread-encoding-row');
+const $ttsReadPreviewText     = document.getElementById('ttsread-preview-text');
+const $ttsReadPreviewMeta     = document.getElementById('ttsread-preview-meta');
+const $ttsReadBatchSlider     = document.getElementById('ttsread-batch-slider');
+const $ttsReadBatchVal        = document.getElementById('ttsread-batch-val');
+const $ttsReadPreviewCancel   = document.getElementById('ttsread-preview-cancel');
+const $ttsReadPreviewStart    = document.getElementById('ttsread-preview-start');
+const $ttsReadStopModal       = document.getElementById('ttsread-stop-modal');
+const $ttsReadStopCancel      = document.getElementById('ttsread-stop-cancel');
+const $ttsReadStopOk          = document.getElementById('ttsread-stop-ok');
+
+// ── テキスト処理ユーティリティ ──
+
+const FILE_MAX_BYTES = 512 * 1024; // 512KB 上限
+
+// Markdown → プレーンテキスト
+function stripMarkdown(text) {
+  return text
+    .replace(/```[\s\S]*?```/g, '')          // コードブロック除去
+    .replace(/`[^`\n]+`/g, '')               // インラインコード
+    .replace(/^#{1,6}\s*/gm, '')             // 見出し記号
+    .replace(/\*\*\*(.+?)\*\*\*/gs, '$1')   // 太字斜体
+    .replace(/\*\*(.+?)\*\*/gs, '$1')        // 太字
+    .replace(/\*(.+?)\*/gs, '$1')            // 斜体
+    .replace(/__(.+?)__/gs, '$1')            // 太字(下線)
+    .replace(/_(.+?)_/gs, '$1')              // 斜体(下線)
+    .replace(/~~(.+?)~~/gs, '$1')            // 取り消し線
+    .replace(/!\[.*?\]\(.*?\)/g, '')         // 画像リンク
+    .replace(/\[(.+?)\]\(.*?\)/g, '$1')     // リンク (テキスト残す)
+    .replace(/^[>\s]*>\s*/gm, '')            // 引用
+    .replace(/^[-*+]\s+/gm, '')             // 箇条書き
+    .replace(/^\d+\.\s+/gm, '')             // 番号リスト
+    .replace(/^[-*_]{3,}\s*$/gm, '')        // 水平線
+    .replace(/^\|.+$/gm, '')                // テーブル行
+    .replace(/\s{2,}$/gm, '\n');            // 末尾の余分スペース
+}
+
+// HTML / XMLタグ除去
+function stripTags(text) {
+  return text.replace(/<[^>]{0,200}>/g, '');
+}
+
+// 制御文字の除去（タブ・改行は保持）
+function stripControlChars(text) {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+}
+
+// テキスト前処理 (全工程)
+function preprocessText(raw) {
+  let t = stripTags(raw);
+  t = stripMarkdown(t);
+  t = stripControlChars(t);
+  // 連続改行を2つまでに正規化
+  t = t.replace(/\n{3,}/g, '\n\n');
+  return t.trim();
+}
+
+// 文章分割 → 文字列配列
+function splitIntoSentences(text, maxLen = 255) {
+  const sentences = [];
+  // 改行を正規化
+  text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+  let pos = 0;
+  while (pos < text.length) {
+    // maxLen 内で次の区切り文字を探す
+    let end = pos;
+    let found = false;
+
+    while (end < text.length && (end - pos) < maxLen) {
+      const ch = text[end];
+      end++;
+      // 日本語句点・感嘆符・疑問符
+      if ('。！？'.includes(ch)) { found = true; break; }
+      // 改行 (段落区切りも含む)
+      if (ch === '\n') { found = true; break; }
+      // 英語ピリオド: 後ろが空白・改行・文末の場合のみ
+      if (ch === '.') {
+        const next = text[end] ?? '';
+        if (next === ' ' || next === '\n' || next === '') { found = true; break; }
+      }
+    }
+
+    if (!found) {
+      // maxLen到達: 最後の良い区切り位置を探す
+      const seg = text.slice(pos, pos + maxLen);
+      // 英語: 最後の単語境界（スペース）
+      const lastSpace  = seg.lastIndexOf(' ');
+      // 日本語: 読点
+      const lastTen    = seg.lastIndexOf('、');
+      const splitAt    = Math.max(lastSpace, lastTen);
+      if (splitAt > 10) {
+        end = pos + splitAt + 1;
+      } else {
+        end = pos + maxLen;
+      }
+    }
+
+    const sentence = text.slice(pos, end).trim();
+    if (sentence) sentences.push(sentence);
+    pos = end;
+    // 連続する空白行・改行をスキップ
+    while (pos < text.length && (text[pos] === '\n' || text[pos] === ' ') && text.slice(pos).match(/^[\n ]+/)?.[0].length) {
+      const ws = text.slice(pos).match(/^[\n ]+/)?.[0] ?? '';
+      // 段落区切り(複数改行)は保持しない — 単にスキップ
+      pos += ws.length;
+    }
+  }
+  return sentences;
+}
+
+// 文章をバッチサイズでグループ化 → 結合文字列配列
+function groupSentences(sentences, batchSize) {
+  const groups = [];
+  for (let i = 0; i < sentences.length; i += batchSize) {
+    groups.push(sentences.slice(i, i + batchSize).join(''));
+  }
+  return groups;
+}
+
+// ArrayBuffer → テキスト (エンコーディング指定)
+async function decodeBuffer(buffer, encoding) {
+  try {
+    const decoder = new TextDecoder(encoding, { fatal: true });
+    return decoder.decode(buffer);
+  } catch {
+    return null; // デコード失敗
+  }
+}
+
+// ── モーダル制御 ──
+
+function openTtsReadMethodModal() {
+  if (selectedIndex === null) {
+    showErrorToast('キャラクターを選択してください'); return;
+  }
+  // リセット
+  _ttsReadFileData = null;
+  $ttsReadPasteWrap.style.display = 'none';
+  $ttsReadMethodFooter.style.display = '';
+  $ttsReadPasteArea.value = '';
+  $ttsReadMethodBackdrop.classList.add('open');
+}
+function closeTtsReadMethodModal() {
+  $ttsReadMethodBackdrop.classList.remove('open');
+}
+
+async function openTtsReadPreview(rawText, isFromFile) {
+  closeTtsReadMethodModal();
+  _ttsReadFileData = null; // ペーストの場合はバッファ不要
+
+  let text = preprocessText(rawText);
+  if (!text) { showErrorToast('読み上げ可能なテキストがありません'); return; }
+
+  // エンコーディング選択行はファイル時のみ表示
+  $ttsReadEncodingRow.style.display = isFromFile ? '' : 'none';
+
+  // プレビュー表示
+  const sentences = splitIntoSentences(text);
+  _updateTtsReadPreview(text, sentences);
+
+  // スライダー初期値
+  $ttsReadBatchSlider.value = ttsFileBatchSize;
+  $ttsReadBatchVal.textContent = ttsFileBatchSize;
+
+  $ttsReadPreviewBackdrop.classList.add('open');
+}
+
+async function openTtsReadPreviewFromFile(buffer) {
+  _ttsReadFileData = buffer;
+
+  // 自動判定: UTF-8 → Shift-JIS → EUC-JP の順で試す
+  const encs = ['utf-8', 'shift-jis', 'euc-jp'];
+  let bestEnc = 'utf-8';
+  for (const enc of encs) {
+    const t = await decodeBuffer(buffer, enc);
+    if (t !== null) { bestEnc = enc; break; }
+  }
+  // ラジオを自動判定結果に合わせる
+  document.querySelectorAll('input[name="ttsread-enc"]').forEach(r => {
+    r.checked = (r.value === bestEnc);
+  });
+
+  closeTtsReadMethodModal();
+  $ttsReadEncodingRow.style.display = '';
+
+  const rawText = await decodeBuffer(buffer, bestEnc) ?? '';
+  const text = preprocessText(rawText);
+  const sentences = splitIntoSentences(text);
+  _updateTtsReadPreview(text, sentences);
+
+  $ttsReadBatchSlider.value = ttsFileBatchSize;
+  $ttsReadBatchVal.textContent = ttsFileBatchSize;
+
+  $ttsReadPreviewBackdrop.classList.add('open');
+}
+
+function _updateTtsReadPreview(text, sentences) {
+  // プレビューは先頭 2000 文字まで
+  $ttsReadPreviewText.textContent = text.length > 2000
+    ? text.slice(0, 2000) + '\n…（以下省略）'
+    : text;
+  $ttsReadPreviewMeta.textContent =
+    `${text.length.toLocaleString()} 文字 / 約 ${sentences.length} 文`;
+  // テキストをDataとして保存
+  $ttsReadPreviewBackdrop._fullText = text;
+  $ttsReadPreviewBackdrop._sentences = sentences;
+}
+
+function closeTtsReadPreview() {
+  $ttsReadPreviewBackdrop.classList.remove('open');
+}
+
+function openTtsReadStopModal() {
+  $ttsReadStopModal.classList.add('open');
+}
+function closeTtsReadStopModal() {
+  $ttsReadStopModal.classList.remove('open');
+}
+
+// ── イベントリスナー ──
+
+// 入力方法選択
+$ttsReadMethodCancel.addEventListener('click', closeTtsReadMethodModal);
+$ttsReadMethodBackdrop.addEventListener('click', e => {
+  if (e.target === $ttsReadMethodBackdrop) closeTtsReadMethodModal();
+});
+
+// ファイル選択ボタン
+$ttsReadFileBtn.addEventListener('click', () => {
+  $ttsReadFileInput.value = '';
+  $ttsReadFileInput.click();
+});
+
+$ttsReadFileInput.addEventListener('change', async () => {
+  const file = $ttsReadFileInput.files[0];
+  if (!file) return;
+  if (file.size > FILE_MAX_BYTES) {
+    showErrorToast(`ファイルサイズが大きすぎます（最大 ${FILE_MAX_BYTES / 1024}KB）`);
+    return;
+  }
+  const buffer = await file.arrayBuffer();
+  await openTtsReadPreviewFromFile(buffer);
+});
+
+// ペーストボタン
+$ttsReadPasteBtn.addEventListener('click', () => {
+  $ttsReadPasteWrap.style.display = 'flex';
+  $ttsReadMethodFooter.style.display = 'none';
+  $ttsReadPasteArea.focus();
+});
+$ttsReadPasteCancel.addEventListener('click', () => {
+  $ttsReadPasteWrap.style.display = 'none';
+  $ttsReadMethodFooter.style.display = '';
+});
+$ttsReadPasteOk.addEventListener('click', () => {
+  const text = $ttsReadPasteArea.value.trim();
+  if (!text) { showErrorToast('テキストを入力してください'); return; }
+  openTtsReadPreview(text, false);
+});
+
+// エンコーディング切替（ファイルのみ）
+document.querySelectorAll('input[name="ttsread-enc"]').forEach(radio => {
+  radio.addEventListener('change', async () => {
+    if (!_ttsReadFileData) return;
+    const enc = radio.value;
+    const rawText = await decodeBuffer(_ttsReadFileData, enc);
+    if (rawText === null) {
+      showErrorToast('このエンコーディングでは読み込めませんでした'); return;
+    }
+    const text = preprocessText(rawText);
+    const sentences = splitIntoSentences(text);
+    _updateTtsReadPreview(text, sentences);
+  });
+});
+
+// スライダー
+$ttsReadBatchSlider.addEventListener('input', () => {
+  $ttsReadBatchVal.textContent = $ttsReadBatchSlider.value;
+});
+
+// プレビュー → キャンセル
+$ttsReadPreviewCancel.addEventListener('click', closeTtsReadPreview);
+$ttsReadPreviewBackdrop.addEventListener('click', e => {
+  if (e.target === $ttsReadPreviewBackdrop) closeTtsReadPreview();
+});
+
+// プレビュー → 読み上げ開始
+$ttsReadPreviewStart.addEventListener('click', async () => {
+  const batchSize = parseInt($ttsReadBatchSlider.value, 10) || 2;
+  ttsFileBatchSize = batchSize;
+  saveSetting('tts_file_batch_size', batchSize);
+
+  const sentences = $ttsReadPreviewBackdrop._sentences ?? [];
+  if (sentences.length === 0) {
+    showErrorToast('読み上げる文章がありません'); return;
+  }
+  const groups = groupSentences(sentences, batchSize);
+  closeTtsReadPreview();
+  await runTtsFileReading(groups);
+});
+
+// 中止確認
+$ttsReadStopCancel.addEventListener('click', closeTtsReadStopModal);
+$ttsReadStopOk.addEventListener('click', () => {
+  closeTtsReadStopModal();
+  ttsReadAbort = true;
+  // 再生中の音声を止める
+  if (_ttsReadCurrentAudio) {
+    _ttsReadCurrentAudio.pause();
+    _ttsReadCurrentAudio = null;
+  }
+  // コンシューマーが queue.pop() で待機中の場合に null を積んでアンブロック
+  if (_ttsReadQueue) _ttsReadQueue.push(null);
+});
+
+// ── 読み上げメインループ (プロデューサー/コンシューマー並行処理) ──
+//
+// プロデューサー: 吹き出し生成 + /tts_direct に順次リクエスト
+// コンシューマー: キューから取り出して順番通りに再生
+// → グループ N の再生中にグループ N+1 の音声生成が進む
+
+async function runTtsFileReading(groups) {
+  if (isGenerating || isFileReading) return;
+
+  isFileReading  = true;
+  ttsReadAbort   = false;
+  isGenerating   = true;
+  $sendBtn.innerHTML = '&#9632;'; // ■
+  $sendBtn.title     = '読み上げを中止';
+  $sendBtn.disabled  = false;
+
+  const ttsOn = $ttsToggle.checked && selectedHasVoice;
+  const queue = new _AsyncQueue();
+  _ttsReadQueue = queue;
+
+  // ── プロデューサー ──
+  // 吹き出し表示・TTS生成を先行して行い、完成次第キューへ積む
+  const producer = (async () => {
+    try {
+      for (const group of groups) {
+        if (ttsReadAbort) break;
+
+        const refs = appendMessage('char', selectedName, selectedImageUrl);
+        refs.textEl.textContent = group;
+        wrapEmojis(refs.textEl);
+        scrollBottom();
+
+        if (ttsOn) {
+          if (refs.spinner) refs.spinner.style.display = 'flex';
+          let audioB64 = null;
+          try {
+            const res = await fetch(`${API}/tts_direct`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text: group }),
+            });
+            if (res.ok && !ttsReadAbort) {
+              const data = await res.json();
+              audioB64 = data.audio ?? null;
+            }
+          } catch(e) {
+            if (!ttsReadAbort) showErrorToast('TTS エラー: ' + e.message);
+          } finally {
+            if (refs.spinner) refs.spinner.style.display = 'none';
+          }
+          queue.push({ refs, group, audioB64 });
+        } else {
+          // TTS オフ: 音声なしでそのままキューへ
+          queue.push({ refs, group, audioB64: null });
+        }
+      }
+    } finally {
+      queue.push(null); // センチネル: コンシューマーに終端を通知
+    }
+  })();
+
+  // ── コンシューマー ──
+  // キューから順番に取り出して再生 (生成完了を待ちながら再生する)
+  const consumer = (async () => {
+    while (true) {
+      const item = await queue.pop();
+      if (item === null || ttsReadAbort) break; // センチネルまたは中止
+
+      const { refs, group, audioB64 } = item;
+      if (audioB64) {
+        await _ttsReadPlayAndWait('data:audio/wav;base64,' + audioB64);
+      } else if (!ttsOn) {
+        // TTS オフ時: 次の吹き出しへ少し間を空ける
+        await new Promise(r => setTimeout(r, 200));
+      }
+      _ttsReadFinalizeFooter(refs, group, audioB64);
+    }
+  })();
+
+  await Promise.all([producer, consumer]);
+
+  // 後片付け
+  isFileReading    = false;
+  isGenerating     = false;
+  ttsReadAbort     = false;
+  _ttsReadQueue    = null;
+  _ttsReadCurrentAudio = null;
+  _restoreSendBtn();
+}
+
+// 音声再生 & 終了を Promise で待つ (中止時は即時解決)
+function _ttsReadPlayAndWait(dataUrl) {
+  return new Promise(resolve => {
+    const audio = new Audio(dataUrl);
+    _ttsReadCurrentAudio = audio;
+    let settled = false;
+    const done = () => {
+      if (settled) return; settled = true;
+      clearInterval(poll);
+      _ttsReadCurrentAudio = null;
+      resolve();
+    };
+    audio.onended = done;
+    audio.onerror = done;
+    audio.play().catch(done);
+    // 中止フラグをポーリング (stopOk がpause()を呼ぶが念のため)
+    const poll = setInterval(() => { if (ttsReadAbort) { audio.pause(); done(); } }, 80);
+  });
+}
+
+// 吹き出しフッターを確定する（再生ボタン付与）
+function _ttsReadFinalizeFooter(refs, text, audioB64) {
+  if (!refs.footer) return;
+  // スピナーを消してリプレイボタンを付与
+  const btn = document.createElement('button');
+  btn.className = 'replay-btn';
+  btn.title = '再生';
+  btn.textContent = '▶';
+  btn.addEventListener('click', async () => {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    try {
+      // キャッシュ済み音声があればそれを使う
+      const src = audioB64
+        ? 'data:audio/wav;base64,' + audioB64
+        : null;
+      if (src) {
+        const a = new Audio(src);
+        a.onended = () => { btn.disabled = false; };
+        a.onerror = () => { btn.disabled = false; };
+        a.play();
+      } else {
+        // 音声未生成: /tts_direct に再リクエスト
+        const res = await fetch(`${API}/tts_direct`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        });
+        if (!res.ok) throw new Error(res.statusText);
+        const d = await res.json();
+        if (d.audio) {
+          const a = new Audio('data:audio/wav;base64,' + d.audio);
+          a.onended = () => { btn.disabled = false; };
+          a.onerror = () => { btn.disabled = false; };
+          a.play();
+        } else {
+          btn.disabled = false;
+        }
+      }
+    } catch(e) {
+      showErrorToast('再生失敗: ' + e.message);
+      btn.disabled = false;
+    }
+  });
+  refs.footer.appendChild(btn);
 }
 
 /* ══════════════════════════════
