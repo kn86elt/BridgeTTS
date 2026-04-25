@@ -1089,11 +1089,17 @@ body { background: var(--body-gradient); }
   min-width: 28px; text-align: center; font-size: 13px;
   color: var(--accent2); font-weight: 600;
 }
-.ttsread-batch-row input[type="number"] {
-  width: 72px; padding: 2px 6px; border-radius: 4px;
+.ttsread-batch-row input[type="number"],
+.ttsread-batch-row input[type="text"] {
+  padding: 2px 6px; border-radius: 4px;
   border: 1px solid var(--border); background: var(--input-bg);
   color: var(--text); font-size: 13px; font-family: 'Share Tech Mono', monospace;
-  text-align: right;
+}
+.ttsread-batch-row input[type="number"] { width: 72px; text-align: right; }
+.ttsread-batch-row input[type="text"]   { width: 90px; }
+.ttsread-strip-note {
+  font-size: 10px; color: var(--muted); margin-top: 2px;
+  font-family: 'Share Tech Mono', monospace;
 }
 .ttsread-footer {
   display: flex; gap: 10px; justify-content: flex-end; margin-top: 4px;
@@ -1418,22 +1424,6 @@ body.no-bubble-blur .msg-bubble {
         </label>
       </div>
 
-      <!-- ── テキスト読み上げ設定 ── -->
-      <div class="api-section-divider">テキスト読み上げ設定</div>
-      <div class="api-settings-group">
-        <label class="api-check-label">
-          <input type="checkbox" id="ac-ttsread-strip-enabled" checked>
-          <span>読み上げ時に以下の括弧ペアと括弧内テキストを除去する</span>
-        </label>
-        <div class="api-field-row" style="margin-top:6px; align-items:center; gap:8px">
-          <span class="api-field-label" style="flex:none;white-space:nowrap">対象括弧</span>
-          <input type="text" class="api-field-input" id="ac-ttsread-strip-chars"
-                 placeholder="例: （）()" style="flex:1">
-        </div>
-        <div class="api-field-note" style="margin-top:4px">
-          2文字ずつ「開き括弧・閉じ括弧」のペアとして認識します（例: <code>（）</code> → （…）を除去）
-        </div>
-      </div>
 
     </div>
     <div id="api-config-footer">
@@ -1739,6 +1729,15 @@ body.no-bubble-blur .msg-bubble {
       <input type="number" id="ttsread-maxchars-input" min="500" max="4096" value="1024">
       <span style="color:var(--muted)">文字を超えたら強制分割</span>
     </div>
+    <div style="border-top:1px solid var(--border); margin:10px 0 8px"></div>
+    <div class="ttsread-batch-row">
+      <label style="display:flex;align-items:center;gap:6px;flex:none">
+        <input type="checkbox" id="ttsread-strip-enabled">
+        <span>括弧ペアと括弧内テキストを除去</span>
+      </label>
+      <input type="text" id="ttsread-strip-chars" placeholder="例: （）()">
+    </div>
+    <div class="ttsread-strip-note">2文字ずつ「開き括弧・閉じ括弧」ペア（例: （）→（…）を除去）</div>
     <div class="ttsread-footer">
       <button class="modal-btn secondary" id="ttsread-preview-cancel">キャンセル</button>
       <button class="modal-btn primary"   id="ttsread-preview-start">読み上げ開始</button>
@@ -3780,6 +3779,8 @@ const $ttsReadPreviewMeta     = document.getElementById('ttsread-preview-meta');
 const $ttsReadBatchSlider     = document.getElementById('ttsread-batch-slider');
 const $ttsReadBatchVal        = document.getElementById('ttsread-batch-val');
 const $ttsReadMaxCharsInput   = document.getElementById('ttsread-maxchars-input');
+const $ttsReadStripEnabled    = document.getElementById('ttsread-strip-enabled');
+const $ttsReadStripChars      = document.getElementById('ttsread-strip-chars');
 const $ttsReadPreviewCancel   = document.getElementById('ttsread-preview-cancel');
 const $ttsReadPreviewStart    = document.getElementById('ttsread-preview-start');
 const $ttsReadStopModal       = document.getElementById('ttsread-stop-modal');
@@ -3956,6 +3957,8 @@ async function openTtsReadPreview(rawText, isFromFile) {
   $ttsReadBatchSlider.value     = ttsFileBatchSize;
   $ttsReadBatchVal.textContent  = ttsFileBatchSize;
   $ttsReadMaxCharsInput.value   = ttsReadMaxChars;
+  $ttsReadStripEnabled.checked  = ttsReadStripEnabled;
+  $ttsReadStripChars.value      = ttsReadStripChars;
 
   $ttsReadPreviewBackdrop.classList.add('open');
 }
@@ -3986,6 +3989,8 @@ async function openTtsReadPreviewFromFile(buffer) {
   $ttsReadBatchSlider.value     = ttsFileBatchSize;
   $ttsReadBatchVal.textContent  = ttsFileBatchSize;
   $ttsReadMaxCharsInput.value   = ttsReadMaxChars;
+  $ttsReadStripEnabled.checked  = ttsReadStripEnabled;
+  $ttsReadStripChars.value      = ttsReadStripChars;
 
   $ttsReadPreviewBackdrop.classList.add('open');
 }
@@ -3996,17 +4001,26 @@ function _updateTtsReadPreview(text, sentences) {
     ? text.slice(0, 2000) + '\n…（以下省略）'
     : text;
   // テキストをDataとして保存してからメタを描画
-  $ttsReadPreviewBackdrop._fullText   = text;
+  $ttsReadPreviewBackdrop._fullText   = text;  // 表示用・再分割用の前処理済みテキスト
   $ttsReadPreviewBackdrop._sentences  = sentences;
   _refreshTtsReadMeta();
 }
 
-// バッチ数・文字数上限が変わるたびに吹き出し数見込みを再計算して表示
+// 括弧除去設定が変わったとき: 再分割してメタを更新
+function _recomputeTtsReadPreview() {
+  const text = $ttsReadPreviewBackdrop._fullText;
+  if (!text) return;
+  const sentences = splitIntoSentences(_preStripForSplit(text));
+  $ttsReadPreviewBackdrop._sentences = sentences;
+  _refreshTtsReadMeta();
+}
+
+// バッチ数・文字数上限・括弧除去設定が変わるたびに吹き出し数見込みを再計算して表示
 function _refreshTtsReadMeta() {
   const sentences = $ttsReadPreviewBackdrop._sentences ?? [];
   const text      = $ttsReadPreviewBackdrop._fullText  ?? '';
-  const batchSize = parseInt($ttsReadBatchSlider.value, 10)       || 2;
-  const maxChars  = parseInt($ttsReadMaxCharsInput.value, 10)     || 1024;
+  const batchSize = parseInt($ttsReadBatchSlider.value, 10)   || 2;
+  const maxChars  = parseInt($ttsReadMaxCharsInput.value, 10) || 1024;
   const groups    = groupSentences(sentences, batchSize, maxChars);
   $ttsReadPreviewMeta.textContent =
     `${text.length.toLocaleString()} 文字 / 約 ${sentences.length} 文 / ${groups.length} 吹き出し`;
@@ -4097,6 +4111,24 @@ $ttsReadMaxCharsInput.addEventListener('change', () => {
   _refreshTtsReadMeta();
 });
 
+// 括弧除去チェックボックス（即時グローバル反映・保存・再分割）
+$ttsReadStripEnabled.addEventListener('change', () => {
+  ttsReadStripEnabled = $ttsReadStripEnabled.checked;
+  saveSetting('tts_read_strip_enabled', ttsReadStripEnabled);
+  _recomputeTtsReadPreview();
+});
+
+// 括弧ペア入力（即時グローバル反映・保存・再分割）
+$ttsReadStripChars.addEventListener('input', () => {
+  ttsReadStripChars = $ttsReadStripChars.value;
+  _recomputeTtsReadPreview();
+});
+$ttsReadStripChars.addEventListener('change', () => {
+  ttsReadStripChars = $ttsReadStripChars.value;
+  saveSetting('tts_read_strip_chars', ttsReadStripChars);
+  _recomputeTtsReadPreview();
+});
+
 // プレビュー → キャンセル
 $ttsReadPreviewCancel.addEventListener('click', closeTtsReadPreview);
 $ttsReadPreviewBackdrop.addEventListener('click', e => {
@@ -4109,10 +4141,14 @@ $ttsReadPreviewStart.addEventListener('click', async () => {
   let maxChars    = parseInt($ttsReadMaxCharsInput.value, 10) || 1024;
   maxChars = Math.max(500, Math.min(4096, maxChars));
 
-  ttsFileBatchSize = batchSize;
-  ttsReadMaxChars  = maxChars;
-  saveSetting('tts_file_batch_size', batchSize);
-  saveSetting('tts_read_max_chars',  maxChars);
+  ttsFileBatchSize    = batchSize;
+  ttsReadMaxChars     = maxChars;
+  ttsReadStripEnabled = $ttsReadStripEnabled.checked;
+  ttsReadStripChars   = $ttsReadStripChars.value;
+  saveSetting('tts_file_batch_size',    batchSize);
+  saveSetting('tts_read_max_chars',     maxChars);
+  saveSetting('tts_read_strip_enabled', ttsReadStripEnabled);
+  saveSetting('tts_read_strip_chars',   ttsReadStripChars);
 
   const sentences = $ttsReadPreviewBackdrop._sentences ?? [];
   if (sentences.length === 0) {
@@ -4677,8 +4713,6 @@ const $acTtsUseEnv        = document.getElementById('ac-tts-use-env');
 const $acTtsEnvText       = document.getElementById('ac-tts-env-text');
 const $acNoVoiceOff          = document.getElementById('ac-no-voice-off');
 const $acNoVoiceDefault      = document.getElementById('ac-no-voice-default');
-const $acTtsReadStripEnabled = document.getElementById('ac-ttsread-strip-enabled');
-const $acTtsReadStripChars   = document.getElementById('ac-ttsread-strip-chars');
 
 // プリセットキャッシュ
 let _llmPresets = [];
@@ -4922,9 +4956,6 @@ async function openApiConfigModal() {
       const nvm = s.no_voice_mode || 'off';
       $acNoVoiceOff.checked     = (nvm !== 'default_voice');
       $acNoVoiceDefault.checked = (nvm === 'default_voice');
-      // テキスト読み上げ: 括弧除去設定
-      $acTtsReadStripEnabled.checked = s.tts_read_strip_enabled !== false;
-      $acTtsReadStripChars.value     = s.tts_read_strip_chars ?? '（）';
     }
   } catch(e) { /* ignore */ }
 
@@ -5005,8 +5036,6 @@ $acApplyBtn.addEventListener('click', async () => {
         char_dir_also_default: $acCharDirAlsoDefault.checked,
         log_auto_save:            $acLogAutoSave.checked,
         no_voice_mode:            $acNoVoiceDefault.checked ? 'default_voice' : 'off',
-        tts_read_strip_enabled:   $acTtsReadStripEnabled.checked,
-        tts_read_strip_chars:     $acTtsReadStripChars.value,
       }),
     });
     noVoiceMode = $acNoVoiceDefault.checked ? 'default_voice' : 'off';
@@ -5020,9 +5049,6 @@ $acApplyBtn.addEventListener('click', async () => {
     document.body.classList.toggle('text-shadow-mode', $acTextShadow.checked);
     document.body.classList.toggle('no-bubble-blur', !$acBubbleBlur.checked);
     await applyLogAutoSave($acLogAutoSave.checked);
-    // テキスト読み上げ: 括弧除去設定を即時反映
-    ttsReadStripEnabled = $acTtsReadStripEnabled.checked;
-    ttsReadStripChars   = $acTtsReadStripChars.value;
     showErrorToast('✓ 設定を保存しました', 'success');
   } catch(e) {
     showErrorToast('設定保存エラー: ' + e.message);
