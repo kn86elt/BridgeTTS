@@ -1089,6 +1089,12 @@ body { background: var(--body-gradient); }
   min-width: 28px; text-align: center; font-size: 13px;
   color: var(--accent2); font-weight: 600;
 }
+.ttsread-batch-row input[type="number"] {
+  width: 72px; padding: 2px 6px; border-radius: 4px;
+  border: 1px solid var(--border); background: var(--input-bg);
+  color: var(--text); font-size: 13px; font-family: 'Share Tech Mono', monospace;
+  text-align: right;
+}
 .ttsread-footer {
   display: flex; gap: 10px; justify-content: flex-end; margin-top: 4px;
 }
@@ -1728,6 +1734,11 @@ body.no-bubble-blur .msg-bubble {
       <span class="ttsread-batch-val" id="ttsread-batch-val">2</span>
       <span style="color:var(--muted)">文</span>
     </div>
+    <div class="ttsread-batch-row" style="margin-top:6px">
+      <span>送出文字数上限</span>
+      <input type="number" id="ttsread-maxchars-input" min="500" max="4096" value="1024">
+      <span style="color:var(--muted)">文字を超えたら強制分割</span>
+    </div>
     <div class="ttsread-footer">
       <button class="modal-btn secondary" id="ttsread-preview-cancel">キャンセル</button>
       <button class="modal-btn primary"   id="ttsread-preview-start">読み上げ開始</button>
@@ -1939,6 +1950,9 @@ function applySettings(s) {
   }
   if (s.tts_read_strip_chars !== undefined) {
     ttsReadStripChars = s.tts_read_strip_chars;
+  }
+  if (s.tts_read_max_chars !== undefined) {
+    ttsReadMaxChars = Math.max(500, Math.min(4096, s.tts_read_max_chars));
   }
   if (s.tts_batch_size !== undefined) {
     $ttsBatch.value = s.tts_batch_size;
@@ -3729,6 +3743,7 @@ let ttsReadAbort        = false;   // 中止フラグ
 let ttsFileBatchSize    = 2;       // 設定ファイルから読み込む
 let ttsReadStripEnabled = true;    // 読み上げ時の括弧除去 ON/OFF
 let ttsReadStripChars   = '（）';  // 除去対象の括弧ペア（2文字単位）
+let ttsReadMaxChars     = 1024;   // TTS送出1回あたりの最大文字数
 let _ttsReadFileData    = null;    // 読み込んだ ArrayBuffer (エンコード切替用)
 let _ttsReadCurrentAudio = null;  // 再生中の Audio 要素 (中止用)
 let _ttsReadQueue       = null;   // 生成/再生パイプラインキュー (中止時のアンブロック用)
@@ -3764,6 +3779,7 @@ const $ttsReadPreviewText     = document.getElementById('ttsread-preview-text');
 const $ttsReadPreviewMeta     = document.getElementById('ttsread-preview-meta');
 const $ttsReadBatchSlider     = document.getElementById('ttsread-batch-slider');
 const $ttsReadBatchVal        = document.getElementById('ttsread-batch-val');
+const $ttsReadMaxCharsInput   = document.getElementById('ttsread-maxchars-input');
 const $ttsReadPreviewCancel   = document.getElementById('ttsread-preview-cancel');
 const $ttsReadPreviewStart    = document.getElementById('ttsread-preview-start');
 const $ttsReadStopModal       = document.getElementById('ttsread-stop-modal');
@@ -3871,12 +3887,27 @@ function splitIntoSentences(text, maxLen = 255) {
   return sentences;
 }
 
-// 文章をバッチサイズでグループ化 → 結合文字列配列
-function groupSentences(sentences, batchSize) {
+// 文章をバッチサイズ＋文字数上限でグループ化 → 結合文字列配列
+// batchSize: 1グループに含める最大文数
+// maxChars:  1グループの最大文字数（超えたら文数未満でも強制的に区切る）
+function groupSentences(sentences, batchSize, maxChars = 1024) {
   const groups = [];
-  for (let i = 0; i < sentences.length; i += batchSize) {
-    groups.push(sentences.slice(i, i + batchSize).join(''));
+  let current = [];
+  let currentLen = 0;
+
+  for (const s of sentences) {
+    const sLen = s.length;
+    // 文字数上限 or 文数上限に達したら現在のグループを確定
+    if (current.length > 0 &&
+        (current.length >= batchSize || currentLen + sLen > maxChars)) {
+      groups.push(current.join(''));
+      current = [];
+      currentLen = 0;
+    }
+    current.push(s);
+    currentLen += sLen;
   }
+  if (current.length > 0) groups.push(current.join(''));
   return groups;
 }
 
@@ -3922,8 +3953,9 @@ async function openTtsReadPreview(rawText, isFromFile) {
   _updateTtsReadPreview(text, sentences);
 
   // スライダー初期値
-  $ttsReadBatchSlider.value = ttsFileBatchSize;
-  $ttsReadBatchVal.textContent = ttsFileBatchSize;
+  $ttsReadBatchSlider.value     = ttsFileBatchSize;
+  $ttsReadBatchVal.textContent  = ttsFileBatchSize;
+  $ttsReadMaxCharsInput.value   = ttsReadMaxChars;
 
   $ttsReadPreviewBackdrop.classList.add('open');
 }
@@ -3951,8 +3983,9 @@ async function openTtsReadPreviewFromFile(buffer) {
   const sentences = splitIntoSentences(_preStripForSplit(text));
   _updateTtsReadPreview(text, sentences);
 
-  $ttsReadBatchSlider.value = ttsFileBatchSize;
-  $ttsReadBatchVal.textContent = ttsFileBatchSize;
+  $ttsReadBatchSlider.value     = ttsFileBatchSize;
+  $ttsReadBatchVal.textContent  = ttsFileBatchSize;
+  $ttsReadMaxCharsInput.value   = ttsReadMaxChars;
 
   $ttsReadPreviewBackdrop.classList.add('open');
 }
@@ -3962,11 +3995,21 @@ function _updateTtsReadPreview(text, sentences) {
   $ttsReadPreviewText.textContent = text.length > 2000
     ? text.slice(0, 2000) + '\n…（以下省略）'
     : text;
+  // テキストをDataとして保存してからメタを描画
+  $ttsReadPreviewBackdrop._fullText   = text;
+  $ttsReadPreviewBackdrop._sentences  = sentences;
+  _refreshTtsReadMeta();
+}
+
+// バッチ数・文字数上限が変わるたびに吹き出し数見込みを再計算して表示
+function _refreshTtsReadMeta() {
+  const sentences = $ttsReadPreviewBackdrop._sentences ?? [];
+  const text      = $ttsReadPreviewBackdrop._fullText  ?? '';
+  const batchSize = parseInt($ttsReadBatchSlider.value, 10)       || 2;
+  const maxChars  = parseInt($ttsReadMaxCharsInput.value, 10)     || 1024;
+  const groups    = groupSentences(sentences, batchSize, maxChars);
   $ttsReadPreviewMeta.textContent =
-    `${text.length.toLocaleString()} 文字 / 約 ${sentences.length} 文`;
-  // テキストをDataとして保存
-  $ttsReadPreviewBackdrop._fullText = text;
-  $ttsReadPreviewBackdrop._sentences = sentences;
+    `${text.length.toLocaleString()} 文字 / 約 ${sentences.length} 文 / ${groups.length} 吹き出し`;
 }
 
 function closeTtsReadPreview() {
@@ -4036,9 +4079,22 @@ document.querySelectorAll('input[name="ttsread-enc"]').forEach(radio => {
   });
 });
 
-// スライダー
+// 文章数スライダー
 $ttsReadBatchSlider.addEventListener('input', () => {
   $ttsReadBatchVal.textContent = $ttsReadBatchSlider.value;
+  _refreshTtsReadMeta();
+});
+
+// 送出文字数上限入力（数値のみ、範囲チェック + メタ更新）
+$ttsReadMaxCharsInput.addEventListener('input', () => {
+  _refreshTtsReadMeta();
+});
+$ttsReadMaxCharsInput.addEventListener('change', () => {
+  let v = parseInt($ttsReadMaxCharsInput.value, 10);
+  if (isNaN(v) || v < 500) v = 500;
+  if (v > 4096)            v = 4096;
+  $ttsReadMaxCharsInput.value = v;
+  _refreshTtsReadMeta();
 });
 
 // プレビュー → キャンセル
@@ -4050,14 +4106,19 @@ $ttsReadPreviewBackdrop.addEventListener('click', e => {
 // プレビュー → 読み上げ開始
 $ttsReadPreviewStart.addEventListener('click', async () => {
   const batchSize = parseInt($ttsReadBatchSlider.value, 10) || 2;
+  let maxChars    = parseInt($ttsReadMaxCharsInput.value, 10) || 1024;
+  maxChars = Math.max(500, Math.min(4096, maxChars));
+
   ttsFileBatchSize = batchSize;
+  ttsReadMaxChars  = maxChars;
   saveSetting('tts_file_batch_size', batchSize);
+  saveSetting('tts_read_max_chars',  maxChars);
 
   const sentences = $ttsReadPreviewBackdrop._sentences ?? [];
   if (sentences.length === 0) {
     showErrorToast('読み上げる文章がありません'); return;
   }
-  const groups = groupSentences(sentences, batchSize);
+  const groups = groupSentences(sentences, batchSize, maxChars);
   closeTtsReadPreview();
   await runTtsFileReading(groups);
 });
@@ -4175,6 +4236,7 @@ async function runTtsFileReading(groups) {
 
   // ── プロデューサー ──
   // 吹き出し表示・TTS生成を先行して行い、完成次第キューへ積む
+  let consecutiveOverflow = 0; // 送出文字数超過の連続回数
   const producer = (async () => {
     try {
       for (const group of groups) {
@@ -4183,6 +4245,18 @@ async function runTtsFileReading(groups) {
         // 括弧除去設定が有効な場合はここで適用（吹き出し・TTS・ログすべてに反映）
         const displayText = _stripTtsReadChars(group);
         if (!displayText.trim()) continue; // 除去後に空になった場合はスキップ
+
+        // 送出文字数チェック（groupSentences が限界まで分割しても超過する場合を検出）
+        if (displayText.length > ttsReadMaxChars) {
+          consecutiveOverflow++;
+          if (consecutiveOverflow >= 3) {
+            appendSystemMsg('文章区切りのないファイルです。生成を停止します');
+            ttsReadAbort = true;
+            break;
+          }
+        } else {
+          consecutiveOverflow = 0;
+        }
 
         const refs = appendMessage('char', selectedName, selectedImageUrl);
         refs.textEl.textContent = displayText;

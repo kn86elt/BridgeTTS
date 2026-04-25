@@ -68,6 +68,7 @@ DEFAULT_SETTINGS = {
     "tts_file_batch_size": 2,      # 読み上げ1吹き出しあたりの文章数 (1〜5)
     "tts_read_strip_enabled": True,    # 読み上げ時に除去文字を適用するか
     "tts_read_strip_chars":   "（）",  # 除去する括弧ペア文字列
+    "tts_read_max_chars":     1024,    # TTS送出1回あたりの最大文字数
 }
 
 def load_settings() -> dict:
