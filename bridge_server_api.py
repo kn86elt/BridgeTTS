@@ -6,7 +6,7 @@ bridge_server.py  –  WebUI版 bridge3.py
     uvicorn bridge_server:app --host 0.0.0.0 --port 8000 --reload
 """
 
-import os, subprocess, time, re, threading, queue, asyncio, json, zipfile, shutil, urllib.parse
+import os, subprocess, time, re, threading, queue, asyncio, json, zipfile, shutil, urllib.parse, tempfile
 from pathlib import Path
 from openai import OpenAI
 from fastapi import FastAPI, HTTPException, Body
@@ -67,7 +67,7 @@ DEFAULT_SETTINGS = {
     # テキスト読み上げ（ファイル/ペースト）設定
     "tts_file_batch_size": 2,      # 読み上げ1吹き出しあたりの文章数 (1〜5)
     "tts_read_strip_enabled": True,    # 読み上げ時に除去文字を適用するか
-    "tts_read_strip_chars":   "（）",  # 除去する括弧ペア文字列
+    "tts_read_strip_chars":   "()（）",  # 除去する括弧ペア文字列
     "tts_read_max_chars":     1024,    # TTS送出1回あたりの最大文字数
 }
 
@@ -82,9 +82,21 @@ def load_settings() -> dict:
             pass
     return dict(DEFAULT_SETTINGS)
 
+_settings_lock = threading.Lock()
+
 def save_settings(data: dict):
-    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    """アトミック書き込み: 一時ファイルに書いてからリネームすることで
+    部分書き込みによる JSON 破損を防ぐ。"""
+    dir_name = os.path.dirname(os.path.abspath(SETTINGS_FILE))
+    fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix='.tmp', prefix='settings_')
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, SETTINGS_FILE)  # プラットフォーム問わずアトミック
+    except Exception:
+        try: os.unlink(tmp_path)
+        except OSError: pass
+        raise
 
 # --- 設定 ---
 # 環境変数（起動時参照用）
@@ -936,10 +948,11 @@ def get_settings():
 
 @app.post("/settings")
 def post_settings(data: dict = Body(...)):
-    """設定を保存する"""
-    current = load_settings()
-    current.update(data)
-    save_settings(current)
+    """設定を保存する（ロック付き read-modify-write でレースコンディションを防ぐ）"""
+    with _settings_lock:
+        current = load_settings()
+        current.update(data)
+        save_settings(current)
     return JSONResponse({"status": "ok"})
 
 

@@ -1733,13 +1733,14 @@ body.no-bubble-blur .msg-bubble {
     <div class="ttsread-batch-row">
       <label style="display:flex;align-items:center;gap:6px;flex:none">
         <input type="checkbox" id="ttsread-strip-enabled">
-        <span>括弧ペアと括弧内テキストを除去</span>
+        <span>読み上げ時に括弧文字を除去する</span>
       </label>
-      <input type="text" id="ttsread-strip-chars" placeholder="例: （）()">
+      <input type="text" id="ttsread-strip-chars" placeholder="例: ()（）">
     </div>
-    <div class="ttsread-strip-note">2文字ずつ「開き括弧・閉じ括弧」ペア（例: （）→（…）を除去）</div>
+    <div class="ttsread-strip-note">2文字ずつ「開き括弧・閉じ括弧」ペアを指定。括弧文字のみ除去し、括弧内のテキストは読み上げます。</div>
     <div class="ttsread-footer">
       <button class="modal-btn secondary" id="ttsread-preview-cancel">キャンセル</button>
+      <button class="modal-btn secondary" id="ttsread-preview-default">デフォルト設定</button>
       <button class="modal-btn primary"   id="ttsread-preview-start">読み上げ開始</button>
     </div>
   </div>
@@ -2752,9 +2753,22 @@ function appendLoadedCharFooter(row, footer, textEl, hasVoice) {
     const text = textEl ? textEl.textContent.trim() : '';
     if (!text) return;
     regenBtn.disabled = true;
-    const exportCache   = { data: null };
     const collectedAudio = (row._collectedAudio = row._collectedAudio || []);
     collectedAudio.length = 0;
+    // フル⋯メニューがすでに存在するか確認（ある場合は再生成後に再追加しない）
+    const alreadyHasFullMenu = !!footer.querySelector('.bubble-menu-btn:not(.loaded-menu-btn)');
+    // row._exportCache があればキャッシュを無効化（新音声に合わせて再生成させる）
+    if (row._exportCache) row._exportCache.data = null;
+    const exportCache = { data: null };
+    // 生成中スピナーを表示（なければ一時作成）
+    let tmpSpinner = footer.querySelector('.tts-spinner');
+    if (!tmpSpinner) {
+      tmpSpinner = document.createElement('div');
+      tmpSpinner.className = 'tts-spinner';
+      tmpSpinner.innerHTML = '<span></span><span></span><span></span>';
+      footer.appendChild(tmpSpinner);
+    }
+    tmpSpinner.style.display = 'flex';
     try {
       const res = await fetch(`${API}/tts_regen`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2762,10 +2776,12 @@ function appendLoadedCharFooter(row, footer, textEl, hasVoice) {
       });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const { req_id } = await res.json();
-      _pollRegenAudio(req_id, collectedAudio, null, regenBtn, footer, textEl, true, exportCache);
+      // alreadyHasFullMenu=true なら wasFailMode=false → 完了後に⋯/▶を再追加しない
+      _pollRegenAudio(req_id, collectedAudio, tmpSpinner, regenBtn, footer, textEl, !alreadyHasFullMenu, exportCache);
     } catch(e) {
       showErrorToast('再生成エラー: ' + e.message);
       regenBtn.disabled = false;
+      tmpSpinner.style.display = 'none';
     }
   });
   footer.appendChild(regenBtn);
@@ -3741,7 +3757,7 @@ function showErrorToast(message, type = 'error') {
 let ttsReadAbort        = false;   // 中止フラグ
 let ttsFileBatchSize    = 2;       // 設定ファイルから読み込む
 let ttsReadStripEnabled = true;    // 読み上げ時の括弧除去 ON/OFF
-let ttsReadStripChars   = '（）';  // 除去対象の括弧ペア（2文字単位）
+let ttsReadStripChars   = '()（）';  // 除去対象の括弧ペア（2文字単位）
 let ttsReadMaxChars     = 1024;   // TTS送出1回あたりの最大文字数
 let _ttsReadFileData    = null;    // 読み込んだ ArrayBuffer (エンコード切替用)
 let _ttsReadCurrentAudio = null;  // 再生中の Audio 要素 (中止用)
@@ -3782,6 +3798,7 @@ const $ttsReadMaxCharsInput   = document.getElementById('ttsread-maxchars-input'
 const $ttsReadStripEnabled    = document.getElementById('ttsread-strip-enabled');
 const $ttsReadStripChars      = document.getElementById('ttsread-strip-chars');
 const $ttsReadPreviewCancel   = document.getElementById('ttsread-preview-cancel');
+const $ttsReadPreviewDefault  = document.getElementById('ttsread-preview-default');
 const $ttsReadPreviewStart    = document.getElementById('ttsread-preview-start');
 const $ttsReadStopModal       = document.getElementById('ttsread-stop-modal');
 const $ttsReadStopCancel      = document.getElementById('ttsread-stop-cancel');
@@ -4131,6 +4148,28 @@ $ttsReadStripChars.addEventListener('change', () => {
 
 // プレビュー → キャンセル
 $ttsReadPreviewCancel.addEventListener('click', closeTtsReadPreview);
+
+// プレビュー → デフォルト設定
+$ttsReadPreviewDefault.addEventListener('click', () => {
+  // 文章数・文字数・除去設定をデフォルトに戻す
+  ttsFileBatchSize    = 2;
+  ttsReadMaxChars     = 1024;
+  ttsReadStripEnabled = true;
+  ttsReadStripChars   = '()（）';
+  // UI に反映
+  $ttsReadBatchSlider.value        = ttsFileBatchSize;
+  $ttsReadBatchVal.textContent     = ttsFileBatchSize;
+  $ttsReadMaxCharsInput.value      = ttsReadMaxChars;
+  $ttsReadStripEnabled.checked     = ttsReadStripEnabled;
+  $ttsReadStripChars.value         = ttsReadStripChars;
+  // 設定保存
+  saveSetting('tts_file_batch_size',    ttsFileBatchSize);
+  saveSetting('tts_read_max_chars',     ttsReadMaxChars);
+  saveSetting('tts_read_strip_enabled', ttsReadStripEnabled);
+  saveSetting('tts_read_strip_chars',   ttsReadStripChars);
+  // プレビュー再計算
+  _recomputeTtsReadPreview();
+});
 $ttsReadPreviewBackdrop.addEventListener('click', e => {
   if (e.target === $ttsReadPreviewBackdrop) closeTtsReadPreview();
 });
@@ -4173,27 +4212,16 @@ $ttsReadStopOk.addEventListener('click', () => {
   if (_ttsReadQueue) _ttsReadQueue.push(null);
 });
 
-// ── テキスト読み上げ用: 括弧ペアと括弧内テキストを除去 ──
-// ttsReadStripChars を 2文字ずつ「開き括弧 / 閉じ括弧」のペアとして解釈し、
-// 「開き括弧〜閉じ括弧」に囲まれた範囲（括弧自体を含む）をすべて削除する。
-// 文字数が奇数の場合、末尾の 1文字はそのまま削除対象の単独文字として扱う。
+// ── テキスト読み上げ用: 指定した括弧文字を除去（括弧内テキストは保持）──
+// ttsReadStripChars に含まれる各文字をテキストから逐次削除する。
+// 例: ttsReadStripChars = '()（）' → ( ) （ ） を除去、内側のテキストはそのまま残す
+// （あいうえお） → あいうえお  /  (hello) → hello
 function _stripTtsReadChars(text) {
   if (!ttsReadStripEnabled || !ttsReadStripChars) return text;
   const esc = c => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   let result = text;
-  const chars = ttsReadStripChars;
-  const len   = chars.length;
-  for (let i = 0; i + 1 < len; i += 2) {
-    const open  = chars[i];
-    const close = chars[i + 1];
-    // [^open close]* で括弧を含まない中身にマッチ（ネスト非対応）
-    const inner = '[^' + esc(open) + esc(close) + ']*';
-    const re    = new RegExp(esc(open) + inner + esc(close), 'g');
-    result = result.replace(re, '');
-  }
-  // 奇数長の場合は末尾の 1文字を単独削除
-  if (len % 2 === 1) {
-    result = result.replace(new RegExp(esc(chars[len - 1]), 'g'), '');
+  for (const ch of ttsReadStripChars) {
+    result = result.replace(new RegExp(esc(ch), 'g'), '');
   }
   return result;
 }
@@ -4336,18 +4364,11 @@ async function runTtsFileReading(groups) {
       if (item === null || ttsReadAbort) break; // センチネルまたは中止
 
       const { refs, group, audioB64 } = item;
-      if (audioB64) {
-        await _ttsReadPlayAndWait('data:audio/wav;base64,' + audioB64);
-      } else if (!ttsOn) {
-        // TTS オフ時: 次の吹き出しへ少し間を空ける
-        await new Promise(r => setTimeout(r, 200));
-      }
 
-      // ログバッファに記録（自動保存は抑制中なのでメモリのみ）
-      appendLog('assistant', group);
-
-      // 吹き出しフッターを確定する
+      // 吹き出しフッターを再生 前 に確定する
+      // → ▶ ボタンが存在した状態で再生でき、.playing クラスで外周リングを表示できる
       const row = refs.bubble ? refs.bubble.parentElement : null;
+      let playBtn = null;
       if (row) {
         const cachedAudio = audioB64 ? ['data:audio/wav;base64,' + audioB64] : [];
         row._collectedAudio = cachedAudio;
@@ -4357,9 +4378,25 @@ async function runTtsFileReading(groups) {
         if (cachedAudio.length > 0) {
           // 音声あり: ⋯ をフルメニューに昇格して ▶ 再生ボタンも追加
           const exportCache = { data: null };
+          row._exportCache = exportCache;  // ↻ 再生成時のキャッシュ無効化用
           _appendMenuAndPlay(refs.footer, cachedAudio, refs.textEl, exportCache);
+          playBtn = refs.footer.querySelector('.replay-btn');
         }
+        if (refs.spinner) refs.spinner.style.display = 'none'; // 生成スピナーを確実に消す
       }
+
+      // 再生中は ▶ ボタンに .playing クラスを付けて外周リングを表示
+      if (audioB64) {
+        if (playBtn) playBtn.classList.add('playing');
+        await _ttsReadPlayAndWait('data:audio/wav;base64,' + audioB64);
+        if (playBtn) playBtn.classList.remove('playing');
+      } else if (!ttsOn) {
+        // TTS オフ時: 次の吹き出しへ少し間を空ける
+        await new Promise(r => setTimeout(r, 200));
+      }
+
+      // ログバッファに記録（自動保存は抑制中なのでメモリのみ）
+      appendLog('assistant', group);
     }
   })();
 
