@@ -1663,6 +1663,7 @@ body.no-bubble-blur .msg-bubble {
 <div class="ttsread-backdrop" id="ttsread-method-backdrop">
   <div class="ttsread-modal">
     <div class="ttsread-title">🔊 テキストを読み上げ <span style="font-size:10px;opacity:.6">(実験的)</span></div>
+    <div style="font-size:12px;color:var(--muted);text-align:center;margin-bottom:8px">どちらかを選択してください。現在までのログは消去されます。</div>
     <div class="ttsread-method-btns">
       <button class="ttsread-method-btn" id="ttsread-file-btn">
         <span class="ttsread-method-icon">📄</span>
@@ -2333,6 +2334,7 @@ function stopReplay() {
 }
 
 function startReplayFromRow(sourceRow) {
+  if (isFileReading) { showErrorToast('テキスト読み上げ中は使用できません'); return; }
   stopReplay();  // 既存のリプレイを停止
 
   // sourceRow 以降の全 char メッセージ行をキューに積む
@@ -2955,7 +2957,7 @@ $logMenuBtn.addEventListener('click', e => {
 
 // ── ログ保存ダイアログ ──
 function openLogSaveDialog() {
-  if (!logSessionId) { showErrorToast('ログセッションがありません'); return; }
+  if (!logSessionId && logMessageBuffer.length === 0) { showErrorToast('ログセッションがありません'); return; }
   // デフォルトのファイル名は空(自動生成)にして表示
   $logSaveName.value = '';
   $logSaveBackdrop.classList.add('open');
@@ -2970,6 +2972,15 @@ $logSaveOk.addEventListener('click', async () => {
   const dir      = $logSaveDir.value.trim() || 'output';
   const filename = $logSaveName.value.trim() || '';
   try {
+    // セッションなしでバッファにデータがある場合（読み上げ後など）: オンデマンドでセッション作成
+    if (!logSessionId && logMessageBuffer.length > 0) {
+      const charName = pendingLogChar || selectedName || '不明';
+      await startLogSession(charName);
+      for (const msg of logMessageBuffer) {
+        await _doAppendLog(msg.role, msg.text);
+      }
+    }
+    if (!logSessionId) throw new Error('ログセッションがありません');
     const res = await fetch(`${API}/log/save`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -4040,6 +4051,29 @@ $ttsReadStopOk.addEventListener('click', () => {
   if (_ttsReadQueue) _ttsReadQueue.push(null);
 });
 
+// ── 読み上げ開始前にメッセージ画面とログ状態をリセットする ──
+function _clearMessagesForFileRead() {
+  // リプレイ中なら停止
+  if (isReplaying) stopReplay();
+  // 音声キューをクリア
+  audioQueue.length     = 0;
+  audioQueueMeta.length = 0;
+  isAudioPlaying = false;
+
+  // メッセージ画面をクリア（スクロールアンカーは再設置）
+  $messages.innerHTML = '';
+  $messages.appendChild($msgScrollTop);
+  $messages.appendChild($msgScrollBottom);
+
+  // ログ状態をリセット（新セッション待機状態へ）
+  logSessionId     = null;
+  pendingLogChar   = selectedName || '不明';
+  logMessageBuffer = [];
+  pendingLogBuffer = [];
+
+  appendSystemMsg('テキスト読み上げを開始します');
+}
+
 // ── 読み上げメインループ (プロデューサー/コンシューマー並行処理) ──
 //
 // プロデューサー: 吹き出し生成 + /tts_direct に順次リクエスト
@@ -4049,12 +4083,18 @@ $ttsReadStopOk.addEventListener('click', () => {
 async function runTtsFileReading(groups) {
   if (isGenerating || isFileReading) return;
 
+  _clearMessagesForFileRead();
+
   isFileReading  = true;
   ttsReadAbort   = false;
   isGenerating   = true;
   $sendBtn.innerHTML = '&#9632;'; // ■
   $sendBtn.title     = '読み上げを中止';
   $sendBtn.disabled  = false;
+
+  // 読み上げ中はログ自動保存を抑制（メモリバッファへの記録は継続）
+  const _savedAutoSave = logAutoSave;
+  logAutoSave = false;
 
   const ttsOn = $ttsToggle.checked && selectedHasVoice;
   const queue = new _AsyncQueue();
@@ -4115,13 +4155,31 @@ async function runTtsFileReading(groups) {
         // TTS オフ時: 次の吹き出しへ少し間を空ける
         await new Promise(r => setTimeout(r, 200));
       }
-      _ttsReadFinalizeFooter(refs, group, audioB64);
+
+      // ログバッファに記録（自動保存は抑制中なのでメモリのみ）
+      appendLog('assistant', group);
+
+      // 吹き出しフッターを確定する
+      const row = refs.bubble ? refs.bubble.parentElement : null;
+      if (row) {
+        const cachedAudio = audioB64 ? ['data:audio/wav;base64,' + audioB64] : [];
+        row._collectedAudio = cachedAudio;
+        row._hasVoice = selectedHasVoice;
+        // ↻ 再生成ボタンと ⋯ リプレイメニューを付与
+        appendLoadedCharFooter(row, refs.footer, refs.textEl, selectedHasVoice);
+        if (cachedAudio.length > 0) {
+          // 音声あり: ⋯ をフルメニューに昇格して ▶ 再生ボタンも追加
+          const exportCache = { data: null };
+          _appendMenuAndPlay(refs.footer, cachedAudio, refs.textEl, exportCache);
+        }
+      }
     }
   })();
 
   await Promise.all([producer, consumer]);
 
-  // 後片付け
+  // 後片付け: 自動保存設定を元に戻す
+  logAutoSave = _savedAutoSave;
   isFileReading    = false;
   isGenerating     = false;
   ttsReadAbort     = false;
@@ -4150,52 +4208,6 @@ function _ttsReadPlayAndWait(dataUrl) {
   });
 }
 
-// 吹き出しフッターを確定する（再生ボタン付与）
-function _ttsReadFinalizeFooter(refs, text, audioB64) {
-  if (!refs.footer) return;
-  // スピナーを消してリプレイボタンを付与
-  const btn = document.createElement('button');
-  btn.className = 'replay-btn';
-  btn.title = '再生';
-  btn.textContent = '▶';
-  btn.addEventListener('click', async () => {
-    if (btn.disabled) return;
-    btn.disabled = true;
-    try {
-      // キャッシュ済み音声があればそれを使う
-      const src = audioB64
-        ? 'data:audio/wav;base64,' + audioB64
-        : null;
-      if (src) {
-        const a = new Audio(src);
-        a.onended = () => { btn.disabled = false; };
-        a.onerror = () => { btn.disabled = false; };
-        a.play();
-      } else {
-        // 音声未生成: /tts_direct に再リクエスト
-        const res = await fetch(`${API}/tts_direct`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text }),
-        });
-        if (!res.ok) throw new Error(res.statusText);
-        const d = await res.json();
-        if (d.audio) {
-          const a = new Audio('data:audio/wav;base64,' + d.audio);
-          a.onended = () => { btn.disabled = false; };
-          a.onerror = () => { btn.disabled = false; };
-          a.play();
-        } else {
-          btn.disabled = false;
-        }
-      }
-    } catch(e) {
-      showErrorToast('再生失敗: ' + e.message);
-      btn.disabled = false;
-    }
-  });
-  refs.footer.appendChild(btn);
-}
 
 /* ══════════════════════════════
    iOS Safari ビューポート高さ補正
