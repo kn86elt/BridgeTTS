@@ -668,7 +668,12 @@ def generate_and_encode_tts(text, voice_path):
         
         if gen_path and os.path.exists(gen_path):
             with open(gen_path, "rb") as f:
-                return base64.b64encode(f.read()).decode('utf-8')
+                encoded = base64.b64encode(f.read()).decode('utf-8')
+            try:
+                os.unlink(gen_path)
+            except OSError:
+                pass
+            return encoded
     except Exception as e:
         print(f"TTS Error: {e}")
     return None
