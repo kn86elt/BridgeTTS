@@ -298,10 +298,20 @@ BridgeTTS/
 
 | キー | 説明 |
 |---|---|
+| `checkpoint_v3` | v3 接続時に使用するチェックポイント。HF リポジトリ ID またはローカルパス（後述） |
+| `checkpoint_v2` | v2 接続時に使用するチェックポイント。同上 |
 | `num_steps` | 生成ステップ数。下げると速くなるが品質が落ちる（推奨: 10〜20） |
 | `model_precision` / `codec_precision` | `fp32` または `bf16`。RTX 3000 以降なら `bf16` で高速化可能 |
 | `cfg_scale_text` | テキスト追従の強さ |
 | `cfg_scale_speaker` | 話者音声への追従の強さ |
+
+**ローカルモデルの使用：** `checkpoint_v2` / `checkpoint_v3` には HuggingFace リポジトリ ID（例: `Aratako/Irodori-TTS-500M-v3`）のほか、Irodori-TTS サーバ側に保存済みのモデルファイルへのローカルパスを指定できます。`.pt` または `.safetensors` で終わるパスがローカルファイルとして扱われます。
+
+```json
+"checkpoint_v3": "C:\\models\\Irodori-TTS-500M-v3\\model.safetensors"
+```
+
+ローカルパスを指定した場合、起動時の HuggingFace ダウンロードが発生しないため、オフライン環境や初回ロードを高速化したい場合に有効です。パスは BridgeTTS ではなく **Irodori-TTS サーバ側のファイルシステム上のパス** を指定してください（通常は同一 PC のため同じパスで問題ありません）。
 
 ### LLM サーバ設定
 
@@ -331,6 +341,8 @@ set LLM_API_URL=http://localhost:1234/v1
 ```bat
 set TTS_API_URL=http://localhost:7860/
 ```
+
+**Irodori-TTS バージョン**：環境設定の「Irodori-TTS バージョン」から **自動検出 / v3 / v2** を選択できます。「自動検出」（デフォルト）では接続時に Gradio API のパラメータ一覧を確認して v2/v3 を自動判定します。v2 / v3 サーバを使い分ける場合は手動で固定することもできます。
 
 ### チャットログ設定
 

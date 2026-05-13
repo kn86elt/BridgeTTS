@@ -254,8 +254,9 @@ def detect_tts_version(client) -> str:
     /_run_generation エンドポイントに t_schedule_mode パラメータがあれば v3。"""
     try:
         named = client._info.get("named_endpoints", {})
-        run_gen = named.get("/_run_generation", [])
-        param_names = [p.get("parameter_name") or p.get("label", "") for p in run_gen]
+        run_gen = named.get("/_run_generation", {})
+        params_list = run_gen.get("parameters", []) if isinstance(run_gen, dict) else []
+        param_names = [p.get("parameter_name") or p.get("label", "") for p in params_list]
         version = "v3" if "t_schedule_mode" in param_names else "v2"
         print(f"[TTS] API version detected: {version}")
         return version

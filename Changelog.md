@@ -12,6 +12,17 @@
 
 ---
 
+## v0.10.0 — 2026-05-14
+
+### 機能追加
+- **Irodori-TTS v3 サポート**
+  - 接続中のTTSサーバーが v2 / v3 のどちらかを起動時に自動検出し、バージョンに応じたパラメータセットで `/_run_generation` を呼び出すよう変更した。v3 では `t_schedule_mode` / `sway_coeff` を送信し、v2 では `cfg_min_t` / `cfg_max_t` / `truncation_factor_raw` 等を送信する
+  - 環境設定の「TTS サーバ設定」に「Irodori-TTS バージョン」セレクタ（自動検出 / v3 / v2）を追加。「自動検出」では Gradio API のパラメータ一覧を確認して判定し、失敗時は v2 にフォールバックする。手動で v2 / v3 を固定することも可能
+  - `tts_config.json` のチェックポイント設定を `checkpoint_v2` / `checkpoint_v3` に分割。接続バージョンに応じて対応するチェックポイントが自動的に選択されるため、v2 / v3 サーバを切り替えても都度設定変更が不要
+  - チェックポイントに HuggingFace リポジトリ ID のほか、Irodori-TTS サーバ側のローカルファイルパス（`.pt` または `.safetensors` で終わるパス）を指定可能。HuggingFace へのアクセスなしでローカル保存済みモデルを利用できる
+
+---
+
 ## 2026-04-25
 
 ### 機能追加
