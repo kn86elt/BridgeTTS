@@ -1,5 +1,6 @@
 {
-  "checkpoint": "Aratako/Irodori-TTS-500M-v2",
+  "checkpoint_v2": "Aratako/Irodori-TTS-500M-v2",
+  "checkpoint_v3": "Aratako/Irodori-TTS-500M-v3",
   "model_device": "cuda",
   "model_precision": "fp32",
   "codec_device": "cuda",
@@ -11,13 +12,15 @@
   "cfg_scale_text": 3,
   "cfg_scale_speaker": 5,
   "cfg_scale_raw": "",
-  "cfg_min_t": 0.5,
-  "cfg_max_t": 1,
   "context_kv_cache": true,
-  "truncation_factor_raw": "",
-  "rescale_k_raw": "",
-  "rescale_sigma_raw": "",
   "speaker_kv_scale_raw": "",
   "speaker_kv_min_t_raw": "0.9",
-  "speaker_kv_max_layers_raw": ""
+  "speaker_kv_max_layers_raw": "",
+  "t_schedule_mode": "sway",
+  "sway_coeff": 0.0,
+  "cfg_min_t": 0.5,
+  "cfg_max_t": 1,
+  "truncation_factor_raw": "",
+  "rescale_k_raw": "",
+  "rescale_sigma_raw": ""
 }

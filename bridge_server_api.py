@@ -154,8 +154,9 @@ WINDOW_WIDTH    = 300
 
 # ── TTS詳細設定 (tts_config.json から読み込み) ────────────────────────────
 DEFAULT_TTS_CONFIG = {
-    # モデル設定
-    "checkpoint": "Aratako/Irodori-TTS-500M-v3",
+    # モデル設定（バージョン別チェックポイント）
+    "checkpoint_v2": "Aratako/Irodori-TTS-500M-v2",
+    "checkpoint_v3": "Aratako/Irodori-TTS-500M-v3",
     "model_device": "cuda",
     "model_precision": "fp32",
     "codec_device": "cuda",
@@ -210,7 +211,7 @@ TTS_CONFIG: dict = load_tts_config()
 
 # バージョン別に /_run_generation へ送るパラメータキーセット
 _TTS_V2_SEND_KEYS = frozenset({
-    "checkpoint", "model_device", "model_precision", "codec_device", "codec_precision",
+    "model_device", "model_precision", "codec_device", "codec_precision",
     "num_steps", "num_candidates", "seed_raw",
     "cfg_guidance_mode", "cfg_scale_text", "cfg_scale_speaker", "cfg_scale_raw",
     "cfg_min_t", "cfg_max_t",
@@ -219,7 +220,7 @@ _TTS_V2_SEND_KEYS = frozenset({
     "speaker_kv_scale_raw", "speaker_kv_min_t_raw", "speaker_kv_max_layers_raw",
 })
 _TTS_V3_SEND_KEYS = frozenset({
-    "checkpoint", "model_device", "model_precision", "codec_device", "codec_precision",
+    "model_device", "model_precision", "codec_device", "codec_precision",
     "num_steps", "num_candidates", "seed_raw",
     "cfg_guidance_mode", "cfg_scale_text", "cfg_scale_speaker", "cfg_scale_raw",
     "t_schedule_mode", "sway_coeff",
@@ -708,6 +709,8 @@ def generate_and_encode_tts(text, voice_path):
     try:
         send_keys = _TTS_V3_SEND_KEYS if tts_api_version == "v3" else _TTS_V2_SEND_KEYS
         filtered_config = {k: v for k, v in TTS_CONFIG.items() if k in send_keys}
+        ck_key = "checkpoint_v3" if tts_api_version == "v3" else "checkpoint_v2"
+        filtered_config["checkpoint"] = TTS_CONFIG.get(ck_key, "")
         predict_kwargs = {**filtered_config, "text": text, "api_name": "/_run_generation",
                           "uploaded_audio": handle_file(voice_path) if voice_path else None}
         result = tts.predict(**predict_kwargs)
