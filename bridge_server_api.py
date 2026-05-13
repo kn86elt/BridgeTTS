@@ -64,6 +64,7 @@ DEFAULT_SETTINGS = {
     "tts_port":     7860,          # TTSサーバのポート
     # 参照音声なしキャラのTTS動作
     "no_voice_mode": "off",        # "off"=音声オフで使用 / "default_voice"=デフォルト音声で使用
+    "tts_api_version": "auto",     # "auto"=自動検出 / "v2" / "v3"
     # テキスト読み上げ（ファイル/ペースト）設定
     "tts_file_batch_size": 2,      # 読み上げ1吹き出しあたりの文章数 (1〜5)
     "tts_read_strip_enabled": True,    # 読み上げ時に除去文字を適用するか
@@ -154,30 +155,34 @@ WINDOW_WIDTH    = 300
 # ── TTS詳細設定 (tts_config.json から読み込み) ────────────────────────────
 DEFAULT_TTS_CONFIG = {
     # モデル設定
-    "checkpoint": "Aratako/Irodori-TTS-500M-v2",
+    "checkpoint": "Aratako/Irodori-TTS-500M-v3",
     "model_device": "cuda",
     "model_precision": "fp32",
     "codec_device": "cuda",
     "codec_precision": "fp32",
-    # 生成パラメータ
+    # 生成パラメータ (v2/v3 共通)
     "num_steps": 20,
     "num_candidates": 1,
     "seed_raw": "",
-    # CFG設定
+    # CFG設定 (v2/v3 共通)
     "cfg_guidance_mode": "independent",
     "cfg_scale_text": 3,
     "cfg_scale_speaker": 5,
     "cfg_scale_raw": "",
-    "cfg_min_t": 0.5,
-    "cfg_max_t": 1,
-    # キャッシュ / スケーリング
+    # キャッシュ / スケーリング (v2/v3 共通)
     "context_kv_cache": True,
-    "truncation_factor_raw": "",
-    "rescale_k_raw": "",
-    "rescale_sigma_raw": "",
     "speaker_kv_scale_raw": "",
     "speaker_kv_min_t_raw": "0.9",
     "speaker_kv_max_layers_raw": "",
+    # v3 専用パラメータ
+    "t_schedule_mode": "sway",
+    "sway_coeff": 0.0,
+    # v2 専用パラメータ（v2サーバー接続時のみ送信）
+    "cfg_min_t": 0.5,
+    "cfg_max_t": 1,
+    "truncation_factor_raw": "",
+    "rescale_k_raw": "",
+    "rescale_sigma_raw": "",
 }
 
 def load_tts_config() -> dict:
@@ -203,6 +208,25 @@ def save_tts_config(data: dict):
 # 起動時に読み込み（グローバル変数として保持）
 TTS_CONFIG: dict = load_tts_config()
 
+# バージョン別に /_run_generation へ送るパラメータキーセット
+_TTS_V2_SEND_KEYS = frozenset({
+    "checkpoint", "model_device", "model_precision", "codec_device", "codec_precision",
+    "num_steps", "num_candidates", "seed_raw",
+    "cfg_guidance_mode", "cfg_scale_text", "cfg_scale_speaker", "cfg_scale_raw",
+    "cfg_min_t", "cfg_max_t",
+    "context_kv_cache",
+    "truncation_factor_raw", "rescale_k_raw", "rescale_sigma_raw",
+    "speaker_kv_scale_raw", "speaker_kv_min_t_raw", "speaker_kv_max_layers_raw",
+})
+_TTS_V3_SEND_KEYS = frozenset({
+    "checkpoint", "model_device", "model_precision", "codec_device", "codec_precision",
+    "num_steps", "num_candidates", "seed_raw",
+    "cfg_guidance_mode", "cfg_scale_text", "cfg_scale_speaker", "cfg_scale_raw",
+    "t_schedule_mode", "sway_coeff",
+    "context_kv_cache",
+    "speaker_kv_scale_raw", "speaker_kv_min_t_raw", "speaker_kv_max_layers_raw",
+})
+
 
 # --- OpenAI クライアント ---
 client = OpenAI(base_url=LLM_API_URL, api_key=LLM_API_KEY)
@@ -221,15 +245,38 @@ error_queue = queue.Queue()
 
 # --- 共通クライアントの保持 ---
 tts_client = None
+tts_api_version: str = "v2"  # get_tts_client() 接続時に設定・検出
+
+
+def detect_tts_version(client) -> str:
+    """接続中の Gradio TTS サーバーが v2 か v3 かを検出する。
+    /_run_generation エンドポイントに t_schedule_mode パラメータがあれば v3。"""
+    try:
+        named = client._info.get("named_endpoints", {})
+        run_gen = named.get("/_run_generation", [])
+        param_names = [p.get("parameter_name") or p.get("label", "") for p in run_gen]
+        version = "v3" if "t_schedule_mode" in param_names else "v2"
+        print(f"[TTS] API version detected: {version}")
+        return version
+    except Exception as e:
+        print(f"[TTS] Version detection failed, falling back to v2: {e}")
+        return "v2"
+
 
 def get_tts_client():
-    """Gradio Clientをシングルトンで取得"""
-    global tts_client
+    """Gradio Clientをシングルトンで取得。接続時にAPIバージョンを設定/検出する。"""
+    global tts_client, tts_api_version
     if tts_client is None:
         try:
             print(f"Connecting to TTS Server at {TTS_API_URL}...")
             tts_client = Client(TTS_API_URL)
-            print("Successfully connected to TTS Server.")
+            configured = load_settings().get("tts_api_version", "auto")
+            if configured in ("v2", "v3"):
+                tts_api_version = configured
+                print(f"[TTS] API version (manual): {tts_api_version}")
+            else:
+                tts_api_version = detect_tts_version(tts_client)
+            print(f"Successfully connected to TTS Server (API: {tts_api_version}).")
         except Exception as e:
             print(f"Failed to connect to TTS Server: {e}")
     return tts_client
@@ -659,7 +706,9 @@ def generate_and_encode_tts(text, voice_path):
         return None
 
     try:
-        predict_kwargs = {**TTS_CONFIG, "text": text, "api_name": "/_run_generation",
+        send_keys = _TTS_V3_SEND_KEYS if tts_api_version == "v3" else _TTS_V2_SEND_KEYS
+        filtered_config = {k: v for k, v in TTS_CONFIG.items() if k in send_keys}
+        predict_kwargs = {**filtered_config, "text": text, "api_name": "/_run_generation",
                           "uploaded_audio": handle_file(voice_path) if voice_path else None}
         result = tts.predict(**predict_kwargs)
         

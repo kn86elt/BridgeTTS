@@ -1356,6 +1356,14 @@ body.no-bubble-blur .msg-bubble {
           <input type="checkbox" id="ac-tts-use-env">
           <span id="ac-tts-env-text">環境変数 TTS_API_URL を使用</span>
         </label>
+        <div style="margin-top:10px">
+          <div class="api-field-label">Irodori-TTS バージョン</div>
+          <select class="api-field-select" id="ac-tts-version" style="margin-top:4px">
+            <option value="auto">自動検出</option>
+            <option value="v3">v3</option>
+            <option value="v2">v2</option>
+          </select>
+        </div>
         <div class="api-field-label" style="margin-top:8px">参照音声のないキャラクター</div>
         <div style="display:flex; gap:16px; align-items:center; margin-top:4px">
           <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:13px">
@@ -4749,6 +4757,7 @@ const $acTtsHost          = document.getElementById('ac-tts-host');
 const $acTtsPort          = document.getElementById('ac-tts-port');
 const $acTtsUseEnv        = document.getElementById('ac-tts-use-env');
 const $acTtsEnvText       = document.getElementById('ac-tts-env-text');
+const $acTtsVersion       = document.getElementById('ac-tts-version');
 const $acNoVoiceOff          = document.getElementById('ac-no-voice-off');
 const $acNoVoiceDefault      = document.getElementById('ac-no-voice-default');
 
@@ -4994,6 +5003,8 @@ async function openApiConfigModal() {
       const nvm = s.no_voice_mode || 'off';
       $acNoVoiceOff.checked     = (nvm !== 'default_voice');
       $acNoVoiceDefault.checked = (nvm === 'default_voice');
+      // Irodori-TTSバージョン設定
+      $acTtsVersion.value = s.tts_api_version || 'auto';
     }
   } catch(e) { /* ignore */ }
 
@@ -5030,6 +5041,7 @@ $acResetBtn.addEventListener('click', () => {
   }
   $acTtsHost.value = 'localhost';
   $acTtsPort.value = '7860';
+  $acTtsVersion.value = 'auto';
 });
 
 // 適用
@@ -5074,6 +5086,7 @@ $acApplyBtn.addEventListener('click', async () => {
         char_dir_also_default: $acCharDirAlsoDefault.checked,
         log_auto_save:            $acLogAutoSave.checked,
         no_voice_mode:            $acNoVoiceDefault.checked ? 'default_voice' : 'off',
+        tts_api_version:          $acTtsVersion.value,
       }),
     });
     noVoiceMode = $acNoVoiceDefault.checked ? 'default_voice' : 'off';
