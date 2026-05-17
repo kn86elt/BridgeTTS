@@ -157,53 +157,87 @@ WINDOW_WIDTH    = 300
 
 
 # ── TTS詳細設定 (tts_config.json から読み込み) ────────────────────────────
-DEFAULT_TTS_CONFIG = {
-    # モデル設定（バージョン別チェックポイント）
-    "checkpoint_v2": "Aratako/Irodori-TTS-500M-v2",
-    "checkpoint_v3": "Aratako/Irodori-TTS-500M-v3",
-    "model_device": "cuda",
-    "model_precision": "fp32",
-    "codec_device": "cuda",
-    "codec_precision": "fp32",
-    # 生成パラメータ (v2/v3 共通)
-    "num_steps": 20,
-    "num_candidates": 1,
-    "seed_raw": "",
-    # CFG設定 (v2/v3 共通)
-    "cfg_guidance_mode": "independent",
-    "cfg_scale_text": 3,
-    "cfg_scale_speaker": 5,
-    "cfg_scale_raw": "",
-    # キャッシュ / スケーリング (v2/v3 共通)
-    "context_kv_cache": True,
-    "speaker_kv_scale_raw": "",
-    "speaker_kv_min_t_raw": "0.9",
+# v2 デフォルト設定
+_DEFAULT_TTS_V2 = {
+    "checkpoint_v2":          "Aratako/Irodori-TTS-500M-v2",
+    "model_device":           "cuda",
+    "model_precision":        "fp32",
+    "codec_device":           "cuda",
+    "codec_precision":        "fp32",
+    "num_steps":              20,
+    "num_candidates":         1,
+    "seed_raw":               "",
+    "cfg_guidance_mode":      "independent",
+    "cfg_scale_text":         3,
+    "cfg_scale_speaker":      5,
+    "cfg_scale_raw":          "",
+    "context_kv_cache":       True,
+    "speaker_kv_scale_raw":   "",
+    "speaker_kv_min_t_raw":   "0.9",
     "speaker_kv_max_layers_raw": "",
-    # v3 専用パラメータ
-    "t_schedule_mode": "sway",
-    "sway_coeff": 0.0,
-    # v2 専用パラメータ（v2サーバー接続時のみ送信）
-    "cfg_min_t": 0.5,
-    "cfg_max_t": 1,
-    "truncation_factor_raw": "",
-    "rescale_k_raw": "",
-    "rescale_sigma_raw": "",
+    "cfg_min_t":              0.5,
+    "cfg_max_t":              1,
+    "truncation_factor_raw":  "",
+    "rescale_k_raw":          "",
+    "rescale_sigma_raw":      "",
 }
 
+# v3 デフォルト設定
+_DEFAULT_TTS_V3 = {
+    "checkpoint_v3":          "Aratako/Irodori-TTS-500M-v3",
+    "model_device":           "cuda",
+    "model_precision":        "fp32",
+    "codec_device":           "cuda",
+    "codec_precision":        "fp32",
+    "num_steps":              20,
+    "num_candidates":         1,
+    "seed_raw":               "",
+    "cfg_guidance_mode":      "independent",
+    "cfg_scale_text":         3,
+    "cfg_scale_speaker":      5,
+    "cfg_scale_raw":          "",
+    "context_kv_cache":       True,
+    "speaker_kv_scale_raw":   "",
+    "speaker_kv_min_t_raw":   "0.9",
+    "speaker_kv_max_layers_raw": "",
+    "t_schedule_mode":        "sway",
+    "sway_coeff":             0.0,
+}
+
+DEFAULT_TTS_CONFIG = {"v2": _DEFAULT_TTS_V2, "v3": _DEFAULT_TTS_V3}
+
 def load_tts_config() -> dict:
-    """tts_config.json を読み込む。なければデフォルトを書き出して返す。"""
+    """tts_config.json を読み込む。なければデフォルトを書き出して返す。
+    旧形式（平坦な辞書）は自動マイグレーションして v2/v3 構造に変換する。"""
     if os.path.exists(TTS_CONFIG_FILE):
         try:
             with open(TTS_CONFIG_FILE, "r", encoding="utf-8") as f:
                 saved = json.load(f)
-            # 新しいキーをデフォルトで補完
-            merged = {**DEFAULT_TTS_CONFIG, **saved}
-            return merged
+            # 旧形式マイグレーション: トップレベルに "v2"/"v3" キーがなければ旧形式
+            if "v2" not in saved and "v3" not in saved:
+                print("[TTS Config] 旧形式を検出: v2/v3 構造にマイグレーションします")
+                old_flat = saved
+                migrated = {
+                    "v2": {**_DEFAULT_TTS_V2,
+                           **{k: v for k, v in old_flat.items() if k in _DEFAULT_TTS_V2}},
+                    "v3": {**_DEFAULT_TTS_V3,
+                           **{k: v for k, v in old_flat.items() if k in _DEFAULT_TTS_V3}},
+                }
+                if "checkpoint_v2" in old_flat:
+                    migrated["v2"]["checkpoint_v2"] = old_flat["checkpoint_v2"]
+                if "checkpoint_v3" in old_flat:
+                    migrated["v3"]["checkpoint_v3"] = old_flat["checkpoint_v3"]
+                save_tts_config(migrated)
+                return migrated
+            # 新形式: 各バージョンをデフォルトで補完
+            return {
+                "v2": {**_DEFAULT_TTS_V2, **saved.get("v2", {})},
+                "v3": {**_DEFAULT_TTS_V3, **saved.get("v3", {})},
+            }
         except Exception as e:
             print(f"[TTS Config] Failed to load {TTS_CONFIG_FILE}: {e}")
-    # ファイルがなければデフォルトを生成
     save_tts_config(DEFAULT_TTS_CONFIG)
-    return dict(DEFAULT_TTS_CONFIG)
+    return {"v2": dict(_DEFAULT_TTS_V2), "v3": dict(_DEFAULT_TTS_V3)}
 
 def save_tts_config(data: dict):
     with open(TTS_CONFIG_FILE, "w", encoding="utf-8") as f:
@@ -686,8 +720,14 @@ def update_system_prompt():
     settings = load_settings()
     sys_prompt_text = _build_system_prompt("", char_setting, settings)
 
-    # 会話履歴を完全リセット（system メッセージのみ残す）
+    # 会話履歴をリセット。ただし最後のキャラ発言は保持して
+    # 自動応答が直後にトリガーされても /user_reply_gen が機能するようにする。
+    last_assistant = next(
+        (m for m in reversed(list(state.memory)) if m.get("role") == "assistant"), None
+    )
     state.memory = [{"role": "system", "content": sys_prompt_text}]
+    if last_assistant:
+        state.memory.append(last_assistant)
 
     return {"status": "ok"}
 
@@ -713,9 +753,11 @@ def generate_and_encode_tts(text, voice_path):
 
     try:
         send_keys = _TTS_V3_SEND_KEYS if tts_api_version == "v3" else _TTS_V2_SEND_KEYS
-        filtered_config = {k: v for k, v in TTS_CONFIG.items() if k in send_keys}
+        ver_key   = "v3" if tts_api_version == "v3" else "v2"
+        ver_cfg   = TTS_CONFIG.get(ver_key, {})
+        filtered_config = {k: v for k, v in ver_cfg.items() if k in send_keys}
         ck_key = "checkpoint_v3" if tts_api_version == "v3" else "checkpoint_v2"
-        filtered_config["checkpoint"] = TTS_CONFIG.get(ck_key, "")
+        filtered_config["checkpoint"] = ver_cfg.get(ck_key, "")
         predict_kwargs = {**filtered_config, "text": text, "api_name": "/_run_generation",
                           "uploaded_audio": handle_file(voice_path) if voice_path else None}
         result = tts.predict(**predict_kwargs)
@@ -1001,12 +1043,18 @@ def user_reply_gen():
     if not last_char_msg:
         raise HTTPException(400, "キャラクターの発言履歴がありません")
 
-    # ローカルLLM向け: 会話履歴を使わず「タスク依頼」形式で投げる。
-    # 末尾を assistant で終わらせると Gemma 等が即 EOS を返すため、
-    # system + user の2メッセージ構成にする。
-    task_text = f"{user_prompt}\n\n---\nキャラクターの最新発言:\n{last_char_msg}\n---\nユーザーの返答:"
+    # キャラのシステムプロンプト（state.memory 先頭）をユーザー役プロンプトと結合して
+    # system に設定し、タスク指示を user に置く。
+    # → LLM がキャラの設定・口調を踏まえたユーザー返答を生成できる。
+    # → 末尾を assistant で終わらせないため Gemma 等の空返答を回避できる。
+    char_sys = next(
+        (m["content"] for m in state.memory if m.get("role") == "system"), ""
+    )
+    system_content = f"{char_sys}\n\n---\n{user_prompt}" if char_sys else user_prompt
+
     messages = [
-        {"role": "user", "content": task_text},
+        {"role": "system", "content": system_content},
+        {"role": "user",   "content": f"キャラクターの最新発言:\n{last_char_msg}\n---\nユーザーの返答:"},
     ]
 
     try:
@@ -1023,6 +1071,103 @@ def user_reply_gen():
 
 
 # --- 直接TTS (LLMを通さずTTSだけ実行) ---
+class ReadUrlRequest(BaseModel):
+    url:       str
+    summarize: bool = False
+
+
+@app.post("/read_url")
+def read_url(req: ReadUrlRequest):
+    """URLの本文を抽出し、オプションでLLM要約して返す"""
+    import trafilatura, json as _json, requests as _req
+    from charset_normalizer import from_bytes as _from_bytes
+
+    # フェッチ（charset-normalizer でエンコーディングを精密検出）
+    try:
+        r = _req.get(
+            req.url, timeout=20,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; BridgeTTS/1.0)"},
+        )
+        r.raise_for_status()
+    except Exception as e:
+        raise HTTPException(400, f"URLの取得に失敗しました: {e}")
+
+    import re as _re
+
+    def _detect_encoding(resp) -> str:
+        """HTTP ヘッダー → meta charset → charset-normalizer の順で検出"""
+        # 1. HTTP Content-Type ヘッダーの charset
+        ct = resp.headers.get("content-type", "")
+        m = _re.search(r"charset=([^\s;]+)", ct, _re.IGNORECASE)
+        enc = m.group(1).strip() if m else None
+
+        # 2. HTML 先頭 2KB の meta charset
+        if not enc:
+            head = resp.content[:2048]
+            m = _re.search(rb'charset=["\']?([^"\';\s>]+)', head, _re.IGNORECASE)
+            enc = m.group(1).decode("ascii", errors="ignore").strip() if m else None
+
+        if enc:
+            # Shift-JIS 系のバリエーションを cp932 に統一
+            enc_lower = enc.lower().replace("-", "").replace("_", "")
+            if enc_lower in ("shiftjis", "sjis", "xsjis", "windows31j",
+                             "cp932", "mskanji", "csshiftjis"):
+                return "cp932"
+            return enc
+
+        # 3. charset-normalizer による統計的推定
+        best = _from_bytes(resp.content).best()
+        return best.first().encoding if best else "utf-8"
+
+    enc = _detect_encoding(r)
+    try:
+        html_str = r.content.decode(enc, errors="replace")
+    except (LookupError, Exception):
+        html_str = r.content.decode("utf-8", errors="replace")
+
+    # 本文抽出（メタデータ付き JSON 形式）
+    meta_str = trafilatura.extract(
+        html_str,
+        output_format="json",
+        include_links=False,
+        include_tables=False,
+        include_images=False,
+    )
+    if meta_str:
+        meta_obj = _json.loads(meta_str)
+        raw_text = meta_obj.get("text") or ""
+        title    = meta_obj.get("title") or ""
+    else:
+        raw_text = ""
+        title    = ""
+
+    if not raw_text.strip():
+        raise HTTPException(400, "本文の抽出に失敗しました（ペイウォール・JS必須のページは非対応）")
+
+    text = raw_text.strip()
+
+    # LLM要約（オプション）
+    if req.summarize:
+        excerpt = text[:6000]  # トークン上限対策
+        summary_user = (
+            "以下のWebページ本文を日本語で読み上げ用に要約してください。\n"
+            "重要なポイントを箇条書きにせず、自然な文章でまとめてください。\n"
+            "分量の目安: 200〜400文字程度。\n\n"
+            f"【本文】\n{excerpt}"
+        )
+        try:
+            resp = client.chat.completions.create(
+                model=LLM_MODEL or "local-model",
+                messages=[{"role": "user", "content": summary_user}],
+                stream=False,
+            )
+            text = (resp.choices[0].message.content or "").strip() or text
+        except Exception:
+            pass  # 要約失敗時は原文をそのまま使用
+
+    return {"title": title, "text": text, "summarized": req.summarize}
+
+
 class DirectTTSRequest(BaseModel):
     text: str
 
@@ -1101,18 +1246,36 @@ def get_prompt(filename: str):
 # ══════════════════════════════════════════════════════
 
 @app.get("/tts_config")
-def get_tts_config_api():
-    """TTS詳細設定を返す"""
-    return JSONResponse(load_tts_config())
+def get_tts_config_api(version: str = ""):
+    """TTS詳細設定を返す。version="v2"|"v3" で特定バージョンのみ返す（省略時は全体）"""
+    cfg = load_tts_config()
+    if version in ("v2", "v3"):
+        return JSONResponse(cfg.get(version, {}))
+    return JSONResponse(cfg)
 
 @app.post("/tts_config")
 def post_tts_config_api(data: dict = Body(...)):
-    """TTS詳細設定を保存する"""
-    current = load_tts_config()
-    current.update(data)
-    save_tts_config(current)
-    # グローバル変数も更新
+    """TTS詳細設定を保存する。
+    {"version": "v2", ...params} または {"v2": {...}, "v3": {...}} 形式を受け付ける"""
     global TTS_CONFIG
+    current = load_tts_config()
+
+    if "version" in data:
+        # バージョン指定形式: {"version": "v2", "num_steps": 10, ...}
+        ver = data.pop("version")
+        if ver in ("v2", "v3"):
+            current[ver].update(data)
+    elif "v2" in data or "v3" in data:
+        # 全体形式: {"v2": {...}, "v3": {...}}
+        for ver in ("v2", "v3"):
+            if ver in data:
+                current[ver].update(data[ver])
+    else:
+        # バージョン指定なし: 現在の tts_api_version に適用
+        ver = "v3" if tts_api_version == "v3" else "v2"
+        current[ver].update(data)
+
+    save_tts_config(current)
     TTS_CONFIG = current
     return JSONResponse({"status": "ok"})
 

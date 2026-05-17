@@ -1712,7 +1712,7 @@ body.no-bubble-blur .msg-bubble {
 <div class="ttsread-backdrop" id="ttsread-method-backdrop">
   <div class="ttsread-modal">
     <div class="ttsread-title">🔊 テキストを読み上げ <span style="font-size:10px;opacity:.6">(実験的)</span></div>
-    <div style="font-size:12px;color:var(--muted);text-align:center;margin-bottom:8px">どちらかを選択してください。現在までのログは消去されます。</div>
+    <div style="font-size:12px;color:var(--muted);text-align:center;margin-bottom:8px">方法を選択してください。現在までのログは消去されます。</div>
     <div class="ttsread-method-btns">
       <button class="ttsread-method-btn" id="ttsread-file-btn">
         <span class="ttsread-method-icon">📄</span>
@@ -1722,6 +1722,10 @@ body.no-bubble-blur .msg-bubble {
         <span class="ttsread-method-icon">📋</span>
         <span>テキストをペースト</span>
       </button>
+      <button class="ttsread-method-btn" id="ttsread-url-btn">
+        <span class="ttsread-method-icon">🌐</span>
+        <span>URLから読み上げ</span>
+      </button>
     </div>
     <!-- ペースト欄（ファイル選択時は非表示） -->
     <div id="ttsread-paste-wrap" style="display:none; flex-direction:column; gap:8px">
@@ -1729,6 +1733,20 @@ body.no-bubble-blur .msg-bubble {
       <div class="ttsread-footer">
         <button class="modal-btn secondary" id="ttsread-paste-cancel">戻る</button>
         <button class="modal-btn primary"   id="ttsread-paste-ok">プレビューへ</button>
+      </div>
+    </div>
+    <!-- URL入力欄 -->
+    <div id="ttsread-url-wrap" style="display:none; flex-direction:column; gap:8px">
+      <input type="url" id="ttsread-url-input"
+             placeholder="https://..."
+             style="padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:13px">
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);cursor:pointer">
+        <input type="checkbox" id="ttsread-url-summarize"> LLMで要約してから読み上げる
+      </label>
+      <div id="ttsread-url-status" style="font-size:12px;color:var(--muted);min-height:16px"></div>
+      <div class="ttsread-footer">
+        <button class="modal-btn secondary" id="ttsread-url-cancel">戻る</button>
+        <button class="modal-btn primary"   id="ttsread-url-ok">取得してプレビューへ</button>
       </div>
     </div>
     <!-- ファイル選択時はボタンクリックでダイアログを開くだけ -->
@@ -3709,6 +3727,7 @@ async function sendMessage() {
   if (text.trim()) {
     const { textEl: userTextEl } = appendMessage('user', 'あなた', null);
     userTextEl.textContent = text.trim();
+    wrapEmojis(userTextEl);
     appendLog('user', text.trim());
   }
 
@@ -3961,6 +3980,13 @@ const $ttsReadPasteCancel     = document.getElementById('ttsread-paste-cancel');
 const $ttsReadPasteOk         = document.getElementById('ttsread-paste-ok');
 const $ttsReadFileInput       = document.getElementById('ttsread-file-input');
 const $ttsReadMethodCancel    = document.getElementById('ttsread-method-cancel');
+const $ttsReadUrlBtn       = document.getElementById('ttsread-url-btn');
+const $ttsReadUrlWrap      = document.getElementById('ttsread-url-wrap');
+const $ttsReadUrlInput     = document.getElementById('ttsread-url-input');
+const $ttsReadUrlSummarize = document.getElementById('ttsread-url-summarize');
+const $ttsReadUrlStatus    = document.getElementById('ttsread-url-status');
+const $ttsReadUrlCancel    = document.getElementById('ttsread-url-cancel');
+const $ttsReadUrlOk        = document.getElementById('ttsread-url-ok');
 const $ttsReadMethodFooter    = document.getElementById('ttsread-method-footer');
 const $ttsReadPreviewBackdrop = document.getElementById('ttsread-preview-backdrop');
 const $ttsReadEncodingRow     = document.getElementById('ttsread-encoding-row');
@@ -4122,6 +4148,10 @@ function openTtsReadMethodModal() {
   // リセット
   _ttsReadFileData = null;
   $ttsReadPasteWrap.style.display = 'none';
+  $ttsReadUrlWrap.style.display  = 'none';
+  document.querySelector('.ttsread-method-btns').style.display = '';
+  $ttsReadUrlInput.value         = '';
+  $ttsReadUrlStatus.textContent  = '';
   $ttsReadMethodFooter.style.display = '';
   $ttsReadPasteArea.value = '';
   $ttsReadMethodBackdrop.classList.add('open');
@@ -4262,6 +4292,54 @@ $ttsReadPasteBtn.addEventListener('click', () => {
 $ttsReadPasteCancel.addEventListener('click', () => {
   $ttsReadPasteWrap.style.display = 'none';
   $ttsReadMethodFooter.style.display = '';
+});
+
+// URL読み上げ
+$ttsReadUrlBtn.addEventListener('click', () => {
+  $ttsReadMethodFooter.style.display = 'none';
+  document.querySelector('.ttsread-method-btns').style.display = 'none';
+  $ttsReadUrlWrap.style.display = 'flex';
+  $ttsReadUrlInput.focus();
+});
+
+$ttsReadUrlCancel.addEventListener('click', () => {
+  $ttsReadUrlWrap.style.display = 'none';
+  document.querySelector('.ttsread-method-btns').style.display = '';
+  $ttsReadMethodFooter.style.display = '';
+  $ttsReadUrlStatus.textContent = '';
+});
+
+$ttsReadUrlOk.addEventListener('click', async () => {
+  const url = $ttsReadUrlInput.value.trim();
+  if (!url) { showErrorToast('URLを入力してください'); return; }
+
+  $ttsReadUrlOk.disabled     = true;
+  $ttsReadUrlCancel.disabled = true;
+  $ttsReadUrlStatus.textContent = '🌐 取得中...';
+
+  try {
+    const res = await fetch(`${API}/read_url`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        url,
+        summarize: $ttsReadUrlSummarize.checked,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'エラー' }));
+      throw new Error(err.detail || 'HTTP ' + res.status);
+    }
+    const data = await res.json();
+    $ttsReadUrlStatus.textContent = '';
+    const fullText = data.title ? `${data.title}\n\n${data.text}` : data.text;
+    await openTtsReadPreview(fullText, false);
+  } catch(e) {
+    $ttsReadUrlStatus.textContent = '❌ ' + e.message;
+  } finally {
+    $ttsReadUrlOk.disabled     = false;
+    $ttsReadUrlCancel.disabled = false;
+  }
 });
 $ttsReadPasteOk.addEventListener('click', () => {
   const text = $ttsReadPasteArea.value.trim();

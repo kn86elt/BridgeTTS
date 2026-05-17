@@ -12,6 +12,9 @@ dependencies = [
     "Pillow>=10.0.0",
     "pydantic>=2.0.0",
     "python-multipart>=0.0.9",  # FastAPI ファイルアップロード (UploadFile) に必要
+    "trafilatura>=1.12.0",      # WEB読み上げ: URLから本文抽出
+    "requests>=2.32.0",         # WEB読み上げ: HTTPフェッチ
+    "charset-normalizer>=3.0.0", # WEB読み上げ: 文字コード自動検出
 ]
 
 [dependency-groups]
