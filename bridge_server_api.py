@@ -70,6 +70,10 @@ DEFAULT_SETTINGS = {
     "tts_read_strip_enabled": True,    # 読み上げ時に除去文字を適用するか
     "tts_read_strip_chars":   "()（）",  # 除去する括弧ペア文字列
     "tts_read_max_chars":     1024,    # TTS送出1回あたりの最大文字数
+    # 自動応答設定
+    "auto_reply_delay":   3,       # 自動応答待機秒数 (1〜30)
+    "auto_reply_trigger": "audio", # "audio"=音声完了後 / "llm"=テキスト生成完了後
+    "auto_reply_user_prompt": "",  # 空=デフォルトプロンプト使用
 }
 
 def load_settings() -> dict:
@@ -964,6 +968,58 @@ def audio_poll(req_id: str):
 @app.on_event("startup")
 def on_startup():
     threading.Thread(target=open_browser, daemon=True).start()
+
+
+# --- 自動応答: ユーザー役返答生成 ---
+_DEFAULT_USER_REPLY_PROMPT = (
+    "あなたはユーザー役のライターです。"
+    "与えられた「キャラクターの最新発言」に対して、"
+    "ユーザーが自然に返しそうな一言を1〜2文で作ってください。\n"
+    "発言内容・質問・話題に具体的に反応すること。"
+    "キャラの口調は真似しない。話し言葉で書く。"
+    "返答テキストのみ出力し、前置きや説明は一切不要。"
+)
+
+@app.post("/user_reply_gen")
+def user_reply_gen():
+    """自動応答用: ユーザー役の返答テキストを生成して返す"""
+    if not state.selected:
+        raise HTTPException(400, "キャラクターが選択されていません")
+
+    settings = load_settings()
+    user_prompt = (settings.get("auto_reply_user_prompt") or "").strip()
+    if not user_prompt:
+        user_prompt = _DEFAULT_USER_REPLY_PROMPT
+
+    # キャラクターの最新発言を取得
+    last_char_msg = ""
+    for m in reversed(list(state.memory)):
+        if m.get("role") == "assistant":
+            last_char_msg = m.get("content", "").strip()
+            break
+
+    if not last_char_msg:
+        raise HTTPException(400, "キャラクターの発言履歴がありません")
+
+    # ローカルLLM向け: 会話履歴を使わず「タスク依頼」形式で投げる。
+    # 末尾を assistant で終わらせると Gemma 等が即 EOS を返すため、
+    # system + user の2メッセージ構成にする。
+    task_text = f"{user_prompt}\n\n---\nキャラクターの最新発言:\n{last_char_msg}\n---\nユーザーの返答:"
+    messages = [
+        {"role": "user", "content": task_text},
+    ]
+
+    try:
+        model_name = LLM_MODEL or "local-model"
+        resp = client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            stream=False,
+        )
+        text = (resp.choices[0].message.content or "").strip()
+        return {"text": text}
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 
 # --- 直接TTS (LLMを通さずTTSだけ実行) ---
