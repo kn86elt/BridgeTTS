@@ -280,6 +280,7 @@ finished_audios_lock = threading.Lock()
 # --- TTS キュー ---
 generate_queue: queue.Queue = queue.Queue()
 error_queue = queue.Queue()
+tts_generate_lock = threading.Lock()  # tts_client はスレッドセーフでないため排他制御
 
 
 # --- 共通クライアントの保持 ---
@@ -746,35 +747,58 @@ class ChatRequest(BaseModel):
 
 # --- 補助関数 ---
 def generate_and_encode_tts(text, voice_path):
-    """TTSを生成してBase64文字列で返す。voice_path=None の場合はデフォルト音声で生成。"""
+    """TTSを生成してBase64文字列で返す。voice_path=None の場合はデフォルト音声で生成。
+    tts_client はスレッドセーフでないため tts_generate_lock で排他制御する。"""
     tts = get_tts_client()
     if tts is None:
         return None
 
-    try:
-        send_keys = _TTS_V3_SEND_KEYS if tts_api_version == "v3" else _TTS_V2_SEND_KEYS
-        ver_key   = "v3" if tts_api_version == "v3" else "v2"
-        ver_cfg   = TTS_CONFIG.get(ver_key, {})
-        filtered_config = {k: v for k, v in ver_cfg.items() if k in send_keys}
-        ck_key = "checkpoint_v3" if tts_api_version == "v3" else "checkpoint_v2"
-        filtered_config["checkpoint"] = ver_cfg.get(ck_key, "")
-        predict_kwargs = {**filtered_config, "text": text, "api_name": "/_run_generation",
-                          "uploaded_audio": handle_file(voice_path) if voice_path else None}
-        result = tts.predict(**predict_kwargs)
-        
-        res_data = result[0]
-        gen_path = res_data["value"] if isinstance(res_data, dict) and "value" in res_data else res_data
-        
-        if gen_path and os.path.exists(gen_path):
-            with open(gen_path, "rb") as f:
-                encoded = base64.b64encode(f.read()).decode('utf-8')
-            try:
-                os.unlink(gen_path)
-            except OSError:
-                pass
-            return encoded
-    except Exception as e:
-        print(f"TTS Error: {e}")
+    with tts_generate_lock:
+        try:
+            print(f"[TTS] generate start: voice_path={voice_path!r} text={text[:20]!r}")
+            send_keys = _TTS_V3_SEND_KEYS if tts_api_version == "v3" else _TTS_V2_SEND_KEYS
+            ver_key   = "v3" if tts_api_version == "v3" else "v2"
+            ver_cfg   = TTS_CONFIG.get(ver_key, {})
+            filtered_config = {k: v for k, v in ver_cfg.items() if k in send_keys}
+            ck_key = "checkpoint_v3" if tts_api_version == "v3" else "checkpoint_v2"
+            filtered_config["checkpoint"] = ver_cfg.get(ck_key, "")
+            uploaded_audio = None
+            if voice_path:
+                if not os.path.exists(voice_path):
+                    print(f"[TTS] WARNING: voice_path が見つかりません: {voice_path}")
+                else:
+                    for attempt in range(2):
+                        try:
+                            result_hf = handle_file(voice_path)
+                            # handle_file の戻り値を詳細ログに残す（no_ref 問題の追跡用）
+                            print(f"[TTS] handle_file attempt {attempt + 1}: type={type(result_hf).__name__} value={result_hf!r}")
+                            # 戻り値が空でないことを確認してから採用
+                            if result_hf is not None and result_hf != "" and result_hf != {}:
+                                uploaded_audio = result_hf
+                                break
+                            else:
+                                print(f"[TTS] WARNING: handle_file が空値を返しました (attempt {attempt + 1}): {result_hf!r}")
+                        except Exception as hf_err:
+                            print(f"[TTS] handle_file attempt {attempt + 1} failed: {hf_err}")
+                    if uploaded_audio is None:
+                        print(f"[TTS] WARNING: リファレンス音声の読み込みに失敗。音声なしで生成します: {voice_path}")
+            predict_kwargs = {**filtered_config, "text": text, "api_name": "/_run_generation",
+                              "uploaded_audio": uploaded_audio}
+            result = tts.predict(**predict_kwargs)
+
+            res_data = result[0]
+            gen_path = res_data["value"] if isinstance(res_data, dict) and "value" in res_data else res_data
+
+            if gen_path and os.path.exists(gen_path):
+                with open(gen_path, "rb") as f:
+                    encoded = base64.b64encode(f.read()).decode('utf-8')
+                try:
+                    os.unlink(gen_path)
+                except OSError:
+                    pass
+                return encoded
+        except Exception as e:
+            print(f"TTS Error: {e}")
     return None
 
 
@@ -798,7 +822,7 @@ def clean_for_tts(text: str) -> str:
 
 
 def stream_llm_with_tts(messages: list, tts_enabled: bool):
-    req_id = f"req_{int(time.time() * 1000)}"
+    req_id = f"req_{int(time.time() * 1000)}_{threading.get_ident() % 10000}"
 
     with finished_audios_lock:
         finished_audios[req_id] = {"audios": [], "queued": 0, "completed": 0}
@@ -1029,9 +1053,11 @@ def user_reply_gen():
         raise HTTPException(400, "キャラクターが選択されていません")
 
     settings = load_settings()
-    user_prompt = (settings.get("auto_reply_user_prompt") or "").strip()
-    if not user_prompt:
-        user_prompt = _DEFAULT_USER_REPLY_PROMPT
+    custom_prompt = (settings.get("auto_reply_user_prompt") or "").strip()
+    user_prompt = (
+        f"{_DEFAULT_USER_REPLY_PROMPT}\n\n{custom_prompt}" if custom_prompt
+        else _DEFAULT_USER_REPLY_PROMPT
+    )
 
     # キャラクターの最新発言を取得
     last_char_msg = ""
@@ -1043,17 +1069,12 @@ def user_reply_gen():
     if not last_char_msg:
         raise HTTPException(400, "キャラクターの発言履歴がありません")
 
-    # キャラのシステムプロンプト（state.memory 先頭）をユーザー役プロンプトと結合して
-    # system に設定し、タスク指示を user に置く。
-    # → LLM がキャラの設定・口調を踏まえたユーザー返答を生成できる。
-    # → 末尾を assistant で終わらせないため Gemma 等の空返答を回避できる。
-    char_sys = next(
-        (m["content"] for m in state.memory if m.get("role") == "system"), ""
-    )
-    system_content = f"{char_sys}\n\n---\n{user_prompt}" if char_sys else user_prompt
-
+    # ユーザー役プロンプトのみを system に設定する。
+    # キャラのシステムプロンプトを含めると LLM がキャラ役を優先して
+    # オウム返しになるため、意図的に除外している。
+    # last_char_msg の文脈だけで十分なユーザー返答が生成できる。
     messages = [
-        {"role": "system", "content": system_content},
+        {"role": "system", "content": user_prompt},
         {"role": "user",   "content": f"キャラクターの最新発言:\n{last_char_msg}\n---\nユーザーの返答:"},
     ]
 
@@ -1071,9 +1092,16 @@ def user_reply_gen():
 
 
 # --- 直接TTS (LLMを通さずTTSだけ実行) ---
+_DEFAULT_SUMMARY_PROMPT = (
+    "以下のWebページ本文を日本語で読み上げ用に要約してください。\n"
+    "重要なポイントを箇条書きにせず、自然な文章でまとめてください。\n"
+    "分量の目安: 200〜400文字程度。"
+)
+
 class ReadUrlRequest(BaseModel):
-    url:       str
-    summarize: bool = False
+    url:            str
+    summarize:      bool = False
+    summary_prompt: str  = ""   # 空=デフォルト使用
 
 
 @app.post("/read_url")
@@ -1149,12 +1177,8 @@ def read_url(req: ReadUrlRequest):
     # LLM要約（オプション）
     if req.summarize:
         excerpt = text[:6000]  # トークン上限対策
-        summary_user = (
-            "以下のWebページ本文を日本語で読み上げ用に要約してください。\n"
-            "重要なポイントを箇条書きにせず、自然な文章でまとめてください。\n"
-            "分量の目安: 200〜400文字程度。\n\n"
-            f"【本文】\n{excerpt}"
-        )
+        prompt_text  = req.summary_prompt.strip() if req.summary_prompt.strip() else _DEFAULT_SUMMARY_PROMPT
+        summary_user = f"{prompt_text}\n\n【本文】\n{excerpt}"
         try:
             resp = client.chat.completions.create(
                 model=LLM_MODEL or "local-model",

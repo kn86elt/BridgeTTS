@@ -1743,6 +1743,23 @@ body.no-bubble-blur .msg-bubble {
       <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);cursor:pointer">
         <input type="checkbox" id="ttsread-url-summarize"> LLMで要約してから読み上げる
       </label>
+      <!-- 要約プロンプトスロット（LLMで要約チェック時のみ表示） -->
+      <div id="ttsread-summary-slot-wrap" style="display:none; flex-direction:column; gap:6px">
+        <div style="display:flex; gap:6px; align-items:center">
+          <select id="ttsread-summary-slot-select"
+                  style="flex:1;padding:4px 6px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:12px"></select>
+          <button class="modal-btn secondary" id="ttsread-summary-slot-copy"
+                  style="font-size:11px;padding:4px 8px;white-space:nowrap">コピーして編集</button>
+        </div>
+        <textarea id="ttsread-summary-slot-text" rows="4"
+                  style="padding:6px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:12px;resize:vertical;font-family:inherit;width:100%;box-sizing:border-box"></textarea>
+        <div id="ttsread-summary-slot-user-btns" style="display:none; flex-direction:row; gap:6px; align-items:center">
+          <input id="ttsread-summary-slot-name" type="text" placeholder="スロット名"
+                 style="flex:1;padding:4px 6px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:12px">
+          <button class="modal-btn primary"   id="ttsread-summary-slot-save"   style="font-size:11px;padding:4px 8px">保存</button>
+          <button class="modal-btn secondary" id="ttsread-summary-slot-delete" style="font-size:11px;padding:4px 8px">削除</button>
+        </div>
+      </div>
       <div id="ttsread-url-status" style="font-size:12px;color:var(--muted);min-height:16px"></div>
       <div class="ttsread-footer">
         <button class="modal-btn secondary" id="ttsread-url-cancel">戻る</button>
@@ -2016,6 +2033,10 @@ function applySettings(s) {
   }
   if (s.tts_read_max_chars !== undefined) {
     ttsReadMaxChars = Math.max(500, Math.min(4096, s.tts_read_max_chars));
+  }
+  if (Array.isArray(s.summary_prompt_slots)) {
+    summaryPromptSlots = s.summary_prompt_slots;
+    rebuildSummarySlotSelect();
   }
   if (s.tts_batch_size !== undefined) {
     $ttsBatch.value = s.tts_batch_size;
@@ -3952,6 +3973,7 @@ let ttsFileBatchSize    = 2;       // 設定ファイルから読み込む
 let ttsReadStripEnabled = true;    // 読み上げ時の括弧除去 ON/OFF
 let ttsReadStripChars   = '()（）';  // 除去対象の括弧ペア（2文字単位）
 let ttsReadMaxChars     = 1024;   // TTS送出1回あたりの最大文字数
+let summaryPromptSlots  = [];      // [{name, text}] ユーザー定義の要約プロンプトスロット
 let _ttsReadFileData    = null;    // 読み込んだ ArrayBuffer (エンコード切替用)
 let _ttsReadCurrentAudio = null;  // 再生中の Audio 要素 (中止用)
 let _ttsReadQueue       = null;   // 生成/再生パイプラインキュー (中止時のアンブロック用)
@@ -3987,6 +4009,14 @@ const $ttsReadUrlSummarize = document.getElementById('ttsread-url-summarize');
 const $ttsReadUrlStatus    = document.getElementById('ttsread-url-status');
 const $ttsReadUrlCancel    = document.getElementById('ttsread-url-cancel');
 const $ttsReadUrlOk        = document.getElementById('ttsread-url-ok');
+const $summarySlotWrap     = document.getElementById('ttsread-summary-slot-wrap');
+const $summarySlotSelect   = document.getElementById('ttsread-summary-slot-select');
+const $summarySlotCopy     = document.getElementById('ttsread-summary-slot-copy');
+const $summarySlotText     = document.getElementById('ttsread-summary-slot-text');
+const $summarySlotUserBtns = document.getElementById('ttsread-summary-slot-user-btns');
+const $summarySlotName     = document.getElementById('ttsread-summary-slot-name');
+const $summarySlotSave     = document.getElementById('ttsread-summary-slot-save');
+const $summarySlotDelete   = document.getElementById('ttsread-summary-slot-delete');
 const $ttsReadMethodFooter    = document.getElementById('ttsread-method-footer');
 const $ttsReadPreviewBackdrop = document.getElementById('ttsread-preview-backdrop');
 const $ttsReadEncodingRow     = document.getElementById('ttsread-encoding-row');
@@ -4152,6 +4182,8 @@ function openTtsReadMethodModal() {
   document.querySelector('.ttsread-method-btns').style.display = '';
   $ttsReadUrlInput.value         = '';
   $ttsReadUrlStatus.textContent  = '';
+  $summarySlotWrap.style.display = 'none';
+  $ttsReadUrlSummarize.checked   = false;
   $ttsReadMethodFooter.style.display = '';
   $ttsReadPasteArea.value = '';
   $ttsReadMethodBackdrop.classList.add('open');
@@ -4309,6 +4341,89 @@ $ttsReadUrlCancel.addEventListener('click', () => {
   $ttsReadUrlStatus.textContent = '';
 });
 
+// ─── 要約プロンプトスロット管理 ───────────────────────────────────────────
+const SUMMARY_DEFAULT_PROMPT =
+  "以下のWebページ本文を日本語で読み上げ用に要約してください。\n" +
+  "重要なポイントを箇条書きにせず、自然な文章でまとめてください。\n" +
+  "分量の目安: 200〜400文字程度。";
+
+function rebuildSummarySlotSelect() {
+  $summarySlotSelect.innerHTML = '<option value="__default__">システムデフォルト</option>';
+  summaryPromptSlots.forEach((slot, i) => {
+    const opt = document.createElement('option');
+    opt.value = i;
+    opt.textContent = slot.name;
+    $summarySlotSelect.appendChild(opt);
+  });
+  updateSummarySlotUI();
+}
+
+function updateSummarySlotUI() {
+  const val = $summarySlotSelect.value;
+  if (val === '__default__') {
+    $summarySlotText.value    = SUMMARY_DEFAULT_PROMPT;
+    $summarySlotText.readOnly = true;
+    $summarySlotText.style.opacity = '0.7';
+    $summarySlotCopy.style.display = '';
+    $summarySlotUserBtns.style.display = 'none';
+  } else {
+    const idx  = parseInt(val, 10);
+    const slot = summaryPromptSlots[idx];
+    $summarySlotText.value    = slot ? slot.text : '';
+    $summarySlotName.value    = slot ? slot.name : '';
+    $summarySlotText.readOnly = false;
+    $summarySlotText.style.opacity = '1';
+    $summarySlotCopy.style.display = 'none';
+    $summarySlotUserBtns.style.display = 'flex';
+  }
+}
+
+function getSelectedSummaryPrompt() {
+  const val = $summarySlotSelect.value;
+  if (val === '__default__') return '';
+  const idx = parseInt(val, 10);
+  return (summaryPromptSlots[idx]?.text) || '';
+}
+
+$ttsReadUrlSummarize.addEventListener('change', () => {
+  $summarySlotWrap.style.display = $ttsReadUrlSummarize.checked ? 'flex' : 'none';
+});
+
+$summarySlotSelect.addEventListener('change', updateSummarySlotUI);
+
+$summarySlotCopy.addEventListener('click', () => {
+  const name = `カスタム${summaryPromptSlots.length + 1}`;
+  summaryPromptSlots.push({ name, text: SUMMARY_DEFAULT_PROMPT });
+  saveSetting('summary_prompt_slots', summaryPromptSlots);
+  rebuildSummarySlotSelect();
+  $summarySlotSelect.value = summaryPromptSlots.length - 1;
+  updateSummarySlotUI();
+  $summarySlotName.focus();
+});
+
+$summarySlotSave.addEventListener('click', () => {
+  const idx = parseInt($summarySlotSelect.value, 10);
+  if (isNaN(idx) || !summaryPromptSlots[idx]) return;
+  summaryPromptSlots[idx] = {
+    name: $summarySlotName.value.trim() || summaryPromptSlots[idx].name,
+    text: $summarySlotText.value,
+  };
+  saveSetting('summary_prompt_slots', summaryPromptSlots);
+  rebuildSummarySlotSelect();
+  $summarySlotSelect.value = idx;
+  updateSummarySlotUI();
+  showErrorToast('保存しました', 'success');
+});
+
+$summarySlotDelete.addEventListener('click', () => {
+  const idx = parseInt($summarySlotSelect.value, 10);
+  if (isNaN(idx) || !summaryPromptSlots[idx]) return;
+  summaryPromptSlots.splice(idx, 1);
+  saveSetting('summary_prompt_slots', summaryPromptSlots);
+  rebuildSummarySlotSelect();
+});
+// ─────────────────────────────────────────────────────────────────────────
+
 $ttsReadUrlOk.addEventListener('click', async () => {
   const url = $ttsReadUrlInput.value.trim();
   if (!url) { showErrorToast('URLを入力してください'); return; }
@@ -4323,7 +4438,8 @@ $ttsReadUrlOk.addEventListener('click', async () => {
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({
         url,
-        summarize: $ttsReadUrlSummarize.checked,
+        summarize:      $ttsReadUrlSummarize.checked,
+        summary_prompt: $ttsReadUrlSummarize.checked ? getSelectedSummaryPrompt() : '',
       }),
     });
     if (!res.ok) {
