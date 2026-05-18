@@ -4423,6 +4423,7 @@ $summarySlotDelete.addEventListener('click', () => {
   rebuildSummarySlotSelect();
 });
 // ─────────────────────────────────────────────────────────────────────────
+rebuildSummarySlotSelect();   // 初期化: セレクトに「システムデフォルト」を確実に追加
 
 $ttsReadUrlOk.addEventListener('click', async () => {
   const url = $ttsReadUrlInput.value.trim();
