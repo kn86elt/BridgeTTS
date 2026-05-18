@@ -6,7 +6,7 @@ bridge_server.py  –  WebUI版 bridge3.py
     uvicorn bridge_server:app --host 0.0.0.0 --port 8000 --reload
 """
 
-import os, subprocess, time, re, threading, queue, asyncio, json, zipfile, shutil, urllib.parse, tempfile
+import os, subprocess, time, re, threading, queue, asyncio, json, zipfile, shutil, urllib.parse, tempfile, uuid
 from pathlib import Path
 from openai import OpenAI
 from fastapi import FastAPI, HTTPException, Body
@@ -285,6 +285,7 @@ error_queue = queue.Queue()
 # --- 共通クライアントの保持 ---
 tts_client = None
 tts_api_version: str = "v2"  # get_tts_client() 接続時に設定・検出
+_tts_client_lock = threading.Lock()
 
 
 def detect_tts_version(client) -> str:
@@ -306,19 +307,22 @@ def detect_tts_version(client) -> str:
 def get_tts_client():
     """Gradio Clientをシングルトンで取得。接続時にAPIバージョンを設定/検出する。"""
     global tts_client, tts_api_version
-    if tts_client is None:
-        try:
-            print(f"Connecting to TTS Server at {TTS_API_URL}...")
-            tts_client = Client(TTS_API_URL)
-            configured = load_settings().get("tts_api_version", "auto")
-            if configured in ("v2", "v3"):
-                tts_api_version = configured
-                print(f"[TTS] API version (manual): {tts_api_version}")
-            else:
-                tts_api_version = detect_tts_version(tts_client)
-            print(f"Successfully connected to TTS Server (API: {tts_api_version}).")
-        except Exception as e:
-            print(f"Failed to connect to TTS Server: {e}")
+    if tts_client is not None:
+        return tts_client
+    with _tts_client_lock:
+        if tts_client is None:
+            try:
+                print(f"Connecting to TTS Server at {TTS_API_URL}...")
+                tts_client = Client(TTS_API_URL)
+                configured = load_settings().get("tts_api_version", "auto")
+                if configured in ("v2", "v3"):
+                    tts_api_version = configured
+                    print(f"[TTS] API version (manual): {tts_api_version}")
+                else:
+                    tts_api_version = detect_tts_version(tts_client)
+                print(f"Successfully connected to TTS Server (API: {tts_api_version}).")
+            except Exception as e:
+                print(f"Failed to connect to TTS Server: {e}")
     return tts_client
 
 
@@ -798,7 +802,7 @@ def clean_for_tts(text: str) -> str:
 
 
 def stream_llm_with_tts(messages: list, tts_enabled: bool):
-    req_id = f"req_{int(time.time() * 1000)}"
+    req_id = f"req_{uuid.uuid4().hex}"
 
     with finished_audios_lock:
         finished_audios[req_id] = {"audios": [], "queued": 0, "completed": 0}
@@ -807,13 +811,15 @@ def stream_llm_with_tts(messages: list, tts_enabled: bool):
     tts_batch_size: int = settings.get("tts_batch_size", 0)  # 0=すべて
     no_voice_mode: str  = settings.get("no_voice_mode", "off")
 
+    # state.selected をスナップショットして競合状態を防ぐ
+    _selected = state.selected
     # TTS使用可否: 音声ありキャラ、またはデフォルト音声モードで音声なしキャラ
     tts_available = (
-        state.selected.get("has_voice")
+        _selected.get("has_voice")
         or no_voice_mode == "default_voice"
     )
     # デフォルト音声モード時は voice_path=None でTTSを呼ぶ
-    tts_voice_path = state.selected.get("voice_path") if state.selected.get("has_voice") else None
+    tts_voice_path = _selected.get("voice_path") if _selected.get("has_voice") else None
 
     full_answer = ""
     llm_buffer = ""
@@ -1291,9 +1297,11 @@ class TtsRegenRequest(BaseModel):
 def tts_regen(req: TtsRegenRequest):
     """テキストをsettingsの文章数に従って分割・バッチキューに積み req_id を返す。
     フロントエンドは /audio_poll/{req_id} でポーリングして音声を受け取る。"""
-    if not state.selected:
+    # state.selected をスナップショットして競合状態を防ぐ
+    _selected = state.selected
+    if not _selected:
         raise HTTPException(400, "キャラクターが選択されていません")
-    voice_path = state.selected.get("voice_path")
+    voice_path = _selected.get("voice_path")
     settings = load_settings()
     no_voice_mode = settings.get("no_voice_mode", "off")
     if not voice_path and no_voice_mode != "default_voice":
@@ -1306,7 +1314,7 @@ def tts_regen(req: TtsRegenRequest):
     settings = load_settings()
     tts_batch_size: int = settings.get("tts_batch_size", 0)
 
-    req_id = f"regen_{int(time.time() * 1000)}"
+    req_id = f"regen_{uuid.uuid4().hex}"
     with finished_audios_lock:
         finished_audios[req_id] = {"audios": [], "queued": 0, "completed": 0}
 
