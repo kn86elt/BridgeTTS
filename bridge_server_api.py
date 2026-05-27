@@ -1094,8 +1094,10 @@ def user_reply_gen():
 # --- 直接TTS (LLMを通さずTTSだけ実行) ---
 _DEFAULT_SUMMARY_PROMPT = (
     "以下のWebページ本文を日本語で読み上げ用に要約してください。\n"
-    "重要なポイントを箇条書きにせず、自然な文章でまとめてください。\n"
-    "分量の目安: 200〜400文字程度。"
+    "聴いて内容が理解できるよう、重要な情報（主題・主要な事実・結論）を漏らさず、"
+    "自然な話し言葉の文章でまとめてください。\n"
+    "箇条書きは使わず、段落を意識した読みやすい文体にしてください。\n"
+    "分量の目安: 400〜800文字程度（元の内容が短い場合はそれに応じて短くして構いません）。"
 )
 
 class ReadUrlRequest(BaseModel):
@@ -1190,6 +1192,44 @@ def read_url(req: ReadUrlRequest):
             pass  # 要約失敗時は原文をそのまま使用
 
     return {"title": title, "text": text, "summarized": req.summarize}
+
+
+_DEFAULT_TEXT_SUMMARY_PROMPT = (
+    "以下のテキストを日本語で読み上げ用に要約してください。\n"
+    "聴いて内容が理解できるよう、重要な情報（主題・主要な事実・結論）を漏らさず、"
+    "自然な話し言葉の文章でまとめてください。\n"
+    "箇条書きは使わず、段落を意識した読みやすい文体にしてください。\n"
+    "分量の目安: 400〜800文字程度（元の内容が短い場合はそれに応じて短くして構いません）。"
+)
+
+class SummarizeTextRequest(BaseModel):
+    text:           str
+    summary_prompt: str = ""
+
+@app.post("/summarize_text")
+def summarize_text_endpoint(req: SummarizeTextRequest):
+    """プレーンテキストをLLMで要約して返す"""
+    text = req.text.strip()
+    if not text:
+        raise HTTPException(400, "テキストが空です")
+
+    excerpt = text[:6000]
+    prompt_text = req.summary_prompt.strip() if req.summary_prompt.strip() else _DEFAULT_TEXT_SUMMARY_PROMPT
+    summary_user = f"{prompt_text}\n\n【本文】\n{excerpt}"
+    try:
+        resp = client.chat.completions.create(
+            model=LLM_MODEL or "local-model",
+            messages=[{"role": "user", "content": summary_user}],
+            stream=False,
+        )
+        result = (resp.choices[0].message.content or "").strip()
+        if not result:
+            raise HTTPException(500, "要約の生成に失敗しました")
+        return {"text": result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"要約エラー: {e}")
 
 
 class DirectTTSRequest(BaseModel):

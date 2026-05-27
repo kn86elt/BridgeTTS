@@ -1730,6 +1730,28 @@ body.no-bubble-blur .msg-bubble {
     <!-- ペースト欄（ファイル選択時は非表示） -->
     <div id="ttsread-paste-wrap" style="display:none; flex-direction:column; gap:8px">
       <textarea id="ttsread-paste-area" placeholder="読み上げたいテキストをここに貼り付けてください…"></textarea>
+      <!-- 要約オプション -->
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);cursor:pointer">
+        <input type="checkbox" id="ttsread-text-summarize"> LLMで要約してから読み上げる
+      </label>
+      <!-- 要約プロンプトスロット（LLMで要約チェック時のみ表示） -->
+      <div id="ttsread-text-summary-slot-wrap" style="display:none; flex-direction:column; gap:6px">
+        <div style="display:flex; gap:6px; align-items:center">
+          <select id="ttsread-text-summary-slot-select"
+                  style="flex:1;padding:4px 6px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:12px"></select>
+          <button class="modal-btn secondary" id="ttsread-text-summary-slot-copy"
+                  style="font-size:11px;padding:4px 8px;white-space:nowrap">コピーして編集</button>
+        </div>
+        <textarea id="ttsread-text-summary-slot-text" rows="4"
+                  style="padding:6px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:12px;resize:vertical;font-family:inherit;width:100%;box-sizing:border-box"></textarea>
+        <div id="ttsread-text-summary-slot-user-btns" style="display:none; flex-direction:row; gap:6px; align-items:center">
+          <input id="ttsread-text-summary-slot-name" type="text" placeholder="スロット名"
+                 style="flex:1;padding:4px 6px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:12px">
+          <button class="modal-btn primary"   id="ttsread-text-summary-slot-save"   style="font-size:11px;padding:4px 8px">保存</button>
+          <button class="modal-btn secondary" id="ttsread-text-summary-slot-delete" style="font-size:11px;padding:4px 8px">削除</button>
+        </div>
+      </div>
+      <div id="ttsread-text-status" style="font-size:12px;color:var(--muted);min-height:16px"></div>
       <div class="ttsread-footer">
         <button class="modal-btn secondary" id="ttsread-paste-cancel">戻る</button>
         <button class="modal-btn primary"   id="ttsread-paste-ok">プレビューへ</button>
@@ -4018,6 +4040,17 @@ const $summarySlotName     = document.getElementById('ttsread-summary-slot-name'
 const $summarySlotSave     = document.getElementById('ttsread-summary-slot-save');
 const $summarySlotDelete   = document.getElementById('ttsread-summary-slot-delete');
 const $ttsReadMethodFooter    = document.getElementById('ttsread-method-footer');
+// テキスト読み上げ要約スロット
+const $ttsReadTextSummarize       = document.getElementById('ttsread-text-summarize');
+const $textSummarySlotWrap        = document.getElementById('ttsread-text-summary-slot-wrap');
+const $textSummarySlotSelect      = document.getElementById('ttsread-text-summary-slot-select');
+const $textSummarySlotCopy        = document.getElementById('ttsread-text-summary-slot-copy');
+const $textSummarySlotText        = document.getElementById('ttsread-text-summary-slot-text');
+const $textSummarySlotUserBtns    = document.getElementById('ttsread-text-summary-slot-user-btns');
+const $textSummarySlotName        = document.getElementById('ttsread-text-summary-slot-name');
+const $textSummarySlotSave        = document.getElementById('ttsread-text-summary-slot-save');
+const $textSummarySlotDelete      = document.getElementById('ttsread-text-summary-slot-delete');
+const $ttsReadTextStatus          = document.getElementById('ttsread-text-status');
 const $ttsReadPreviewBackdrop = document.getElementById('ttsread-preview-backdrop');
 const $ttsReadEncodingRow     = document.getElementById('ttsread-encoding-row');
 const $ttsReadPreviewText     = document.getElementById('ttsread-preview-text');
@@ -4182,8 +4215,11 @@ function openTtsReadMethodModal() {
   document.querySelector('.ttsread-method-btns').style.display = '';
   $ttsReadUrlInput.value         = '';
   $ttsReadUrlStatus.textContent  = '';
-  $summarySlotWrap.style.display = 'none';
-  $ttsReadUrlSummarize.checked   = false;
+  $summarySlotWrap.style.display     = 'none';
+  $ttsReadUrlSummarize.checked       = false;
+  $ttsReadTextSummarize.checked      = false;
+  $textSummarySlotWrap.style.display = 'none';
+  $ttsReadTextStatus.textContent     = '';
   $ttsReadMethodFooter.style.display = '';
   $ttsReadPasteArea.value = '';
   $ttsReadMethodBackdrop.classList.add('open');
@@ -4322,8 +4358,11 @@ $ttsReadPasteBtn.addEventListener('click', () => {
   $ttsReadPasteArea.focus();
 });
 $ttsReadPasteCancel.addEventListener('click', () => {
-  $ttsReadPasteWrap.style.display = 'none';
+  $ttsReadPasteWrap.style.display    = 'none';
   $ttsReadMethodFooter.style.display = '';
+  $ttsReadTextSummarize.checked      = false;
+  $textSummarySlotWrap.style.display = 'none';
+  $ttsReadTextStatus.textContent     = '';
 });
 
 // URL読み上げ
@@ -4344,18 +4383,57 @@ $ttsReadUrlCancel.addEventListener('click', () => {
 // ─── 要約プロンプトスロット管理 ───────────────────────────────────────────
 const SUMMARY_DEFAULT_PROMPT =
   "以下のWebページ本文を日本語で読み上げ用に要約してください。\n" +
-  "重要なポイントを箇条書きにせず、自然な文章でまとめてください。\n" +
-  "分量の目安: 200〜400文字程度。";
+  "聴いて内容が理解できるよう、重要な情報（主題・主要な事実・結論）を漏らさず、" +
+  "自然な話し言葉の文章でまとめてください。\n" +
+  "箇条書きは使わず、段落を意識した読みやすい文体にしてください。\n" +
+  "分量の目安: 400〜800文字程度（元の内容が短い場合はそれに応じて短くして構いません）。";
 
 function rebuildSummarySlotSelect() {
-  $summarySlotSelect.innerHTML = '<option value="__default__">システムデフォルト</option>';
-  summaryPromptSlots.forEach((slot, i) => {
-    const opt = document.createElement('option');
-    opt.value = i;
-    opt.textContent = slot.name;
-    $summarySlotSelect.appendChild(opt);
-  });
+  for (const sel of [$summarySlotSelect, $textSummarySlotSelect]) {
+    sel.innerHTML = '<option value="__default__">システムデフォルト</option>';
+    summaryPromptSlots.forEach((slot, i) => {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = slot.name;
+      sel.appendChild(opt);
+    });
+  }
   updateSummarySlotUI();
+  updateTextSummarySlotUI();
+}
+
+const TEXT_SUMMARY_DEFAULT_PROMPT =
+  "以下のテキストを日本語で読み上げ用に要約してください。\n" +
+  "聴いて内容が理解できるよう、重要な情報（主題・主要な事実・結論）を漏らさず、" +
+  "自然な話し言葉の文章でまとめてください。\n" +
+  "箇条書きは使わず、段落を意識した読みやすい文体にしてください。\n" +
+  "分量の目安: 400〜800文字程度（元の内容が短い場合はそれに応じて短くして構いません）。";
+
+function updateTextSummarySlotUI() {
+  const val = $textSummarySlotSelect.value;
+  if (val === '__default__') {
+    $textSummarySlotText.value    = TEXT_SUMMARY_DEFAULT_PROMPT;
+    $textSummarySlotText.readOnly = true;
+    $textSummarySlotText.style.opacity = '0.7';
+    $textSummarySlotCopy.style.display = '';
+    $textSummarySlotUserBtns.style.display = 'none';
+  } else {
+    const idx  = parseInt(val, 10);
+    const slot = summaryPromptSlots[idx];
+    $textSummarySlotText.value    = slot ? slot.text : '';
+    $textSummarySlotName.value    = slot ? slot.name : '';
+    $textSummarySlotText.readOnly = false;
+    $textSummarySlotText.style.opacity = '1';
+    $textSummarySlotCopy.style.display = 'none';
+    $textSummarySlotUserBtns.style.display = 'flex';
+  }
+}
+
+function getSelectedTextSummaryPrompt() {
+  const val = $textSummarySlotSelect.value;
+  if (val === '__default__') return '';
+  const idx = parseInt(val, 10);
+  return (summaryPromptSlots[idx]?.text) || '';
 }
 
 function updateSummarySlotUI() {
@@ -4423,6 +4501,46 @@ $summarySlotDelete.addEventListener('click', () => {
   rebuildSummarySlotSelect();
 });
 // ─────────────────────────────────────────────────────────────────────────
+
+// テキスト読み上げ要約スロット イベントハンドラ
+$ttsReadTextSummarize.addEventListener('change', () => {
+  $textSummarySlotWrap.style.display = $ttsReadTextSummarize.checked ? 'flex' : 'none';
+});
+
+$textSummarySlotSelect.addEventListener('change', updateTextSummarySlotUI);
+
+$textSummarySlotCopy.addEventListener('click', () => {
+  const name = `カスタム${summaryPromptSlots.length + 1}`;
+  summaryPromptSlots.push({ name, text: TEXT_SUMMARY_DEFAULT_PROMPT });
+  saveSetting('summary_prompt_slots', summaryPromptSlots);
+  rebuildSummarySlotSelect();
+  $textSummarySlotSelect.value = summaryPromptSlots.length - 1;
+  updateTextSummarySlotUI();
+  $textSummarySlotName.focus();
+});
+
+$textSummarySlotSave.addEventListener('click', () => {
+  const idx = parseInt($textSummarySlotSelect.value, 10);
+  if (isNaN(idx) || !summaryPromptSlots[idx]) return;
+  summaryPromptSlots[idx] = {
+    name: $textSummarySlotName.value.trim() || summaryPromptSlots[idx].name,
+    text: $textSummarySlotText.value,
+  };
+  saveSetting('summary_prompt_slots', summaryPromptSlots);
+  rebuildSummarySlotSelect();
+  $textSummarySlotSelect.value = idx;
+  updateTextSummarySlotUI();
+  showErrorToast('保存しました', 'success');
+});
+
+$textSummarySlotDelete.addEventListener('click', () => {
+  const idx = parseInt($textSummarySlotSelect.value, 10);
+  if (isNaN(idx) || !summaryPromptSlots[idx]) return;
+  summaryPromptSlots.splice(idx, 1);
+  saveSetting('summary_prompt_slots', summaryPromptSlots);
+  rebuildSummarySlotSelect();
+});
+// ─────────────────────────────────────────────────────────────────────────
 rebuildSummarySlotSelect();   // 初期化: セレクトに「システムデフォルト」を確実に追加
 
 $ttsReadUrlOk.addEventListener('click', async () => {
@@ -4458,10 +4576,42 @@ $ttsReadUrlOk.addEventListener('click', async () => {
     $ttsReadUrlCancel.disabled = false;
   }
 });
-$ttsReadPasteOk.addEventListener('click', () => {
+$ttsReadPasteOk.addEventListener('click', async () => {
   const text = $ttsReadPasteArea.value.trim();
   if (!text) { showErrorToast('テキストを入力してください'); return; }
-  openTtsReadPreview(text, false);
+
+  if (!$ttsReadTextSummarize.checked) {
+    openTtsReadPreview(text, false);
+    return;
+  }
+
+  // LLM要約
+  $ttsReadPasteOk.disabled     = true;
+  $ttsReadPasteCancel.disabled = true;
+  $ttsReadTextStatus.textContent = '🤖 要約中...';
+
+  try {
+    const res = await fetch(`${API}/summarize_text`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        text,
+        summary_prompt: getSelectedTextSummaryPrompt(),
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'エラー' }));
+      throw new Error(err.detail || 'HTTP ' + res.status);
+    }
+    const data = await res.json();
+    $ttsReadTextStatus.textContent = '';
+    await openTtsReadPreview(data.text, false);
+  } catch(e) {
+    $ttsReadTextStatus.textContent = '❌ ' + e.message;
+  } finally {
+    $ttsReadPasteOk.disabled     = false;
+    $ttsReadPasteCancel.disabled = false;
+  }
 });
 
 // エンコーディング切替（ファイルのみ）
