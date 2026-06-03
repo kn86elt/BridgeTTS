@@ -74,6 +74,8 @@ DEFAULT_SETTINGS = {
     "auto_reply_delay":   3,       # 自動応答待機秒数 (1〜30)
     "auto_reply_trigger": "audio", # "audio"=音声完了後 / "llm"=テキスト生成完了後
     "auto_reply_user_prompt": "",  # 空=デフォルトプロンプト使用
+    # Speaker Embedding設定
+    "prefer_speaker_embedding": True,   # True=Embeddingを優先(両方ある場合)
 }
 
 def load_settings() -> dict:
@@ -285,7 +287,8 @@ tts_generate_lock = threading.Lock()  # tts_client はスレッドセーフで�
 
 # --- 共通クライアントの保持 ---
 tts_client = None
-tts_api_version: str = "v2"  # get_tts_client() 接続時に設定・検出
+tts_api_version: str = "v2"      # get_tts_client() 接続時に設定・検出
+tts_supports_embedding: bool = False  # /_run_generation に uploaded_speaker_embedding があるか
 
 
 def detect_tts_version(client) -> str:
@@ -304,9 +307,45 @@ def detect_tts_version(client) -> str:
         return "v2"
 
 
+def detect_speaker_embedding_support(client) -> bool:
+    """接続中のTTSサーバーがSpeaker Embeddingに対応しているか検出する。
+    /_run_generation に uploaded_speaker_embedding パラメータがあれば対応。"""
+    try:
+        named = client._info.get("named_endpoints", {})
+        run_gen = named.get("/_run_generation", {})
+        params_list = run_gen.get("parameters", []) if isinstance(run_gen, dict) else []
+        param_names = [p.get("parameter_name") or p.get("label", "") for p in params_list]
+        supported = "uploaded_speaker_embedding" in param_names
+        print(f"[TTS] Speaker Embedding support: {supported}")
+        return supported
+    except Exception as e:
+        print(f"[TTS] Speaker Embedding detection failed: {e}")
+        return False
+
+
+def _refresh_embedding_support() -> None:
+    """キャラクター選択の都度 TTSサーバーに直接問い合わせて
+    tts_supports_embedding を更新する。
+    Gradio クライアントを再初期化せずに済む軽量な HTTP リクエスト。
+    サーバーが応答しない場合は既存の値を維持する。"""
+    global tts_supports_embedding
+    try:
+        url = TTS_API_URL.rstrip('/') + '/gradio_api/info'
+        req = _urllib_req.Request(url)
+        with _urllib_req.urlopen(req, timeout=3) as resp:
+            info = json.loads(resp.read())
+        run_gen    = info.get("named_endpoints", {}).get("/_run_generation", {})
+        params     = run_gen.get("parameters", []) if isinstance(run_gen, dict) else []
+        names      = [p.get("parameter_name") or p.get("label", "") for p in params]
+        tts_supports_embedding = "uploaded_speaker_embedding" in names
+        print(f"[TTS] Speaker Embedding support (refreshed): {tts_supports_embedding}")
+    except Exception as e:
+        print(f"[TTS] Embedding support refresh failed, keeping current value ({tts_supports_embedding}): {e}")
+
+
 def get_tts_client():
-    """Gradio Clientをシングルトンで取得。接続時にAPIバージョンを設定/検出する。"""
-    global tts_client, tts_api_version
+    """Gradio Clientをシングルトンで取得。接続時にAPIバージョンとEmbedding対応を検出する。"""
+    global tts_client, tts_api_version, tts_supports_embedding
     if tts_client is None:
         try:
             print(f"Connecting to TTS Server at {TTS_API_URL}...")
@@ -317,6 +356,7 @@ def get_tts_client():
                 print(f"[TTS] API version (manual): {tts_api_version}")
             else:
                 tts_api_version = detect_tts_version(tts_client)
+            tts_supports_embedding = detect_speaker_embedding_support(tts_client)
             print(f"Successfully connected to TTS Server (API: {tts_api_version}).")
         except Exception as e:
             print(f"Failed to connect to TTS Server: {e}")
@@ -332,9 +372,9 @@ def tts_generator_worker():
         if item is None:
             break
 
-        text, voice_path, req_id = item
+        text, voice_path, embedding_path, req_id = item
         try:
-            audio_b64 = generate_and_encode_tts(text, voice_path)
+            audio_b64 = generate_and_encode_tts(text, voice_path, embedding_path)
         except Exception as e:
             print(f"Worker Error: {e}")
             audio_b64 = None
@@ -450,14 +490,36 @@ def _char_from_dir(base: str, directory: str) -> dict | None:
 
     has_voice = active_voice is not None
 
+    # Speaker Embedding: <base>.speaker.safetensors のみを認識（完全一致）
+    # フラット配置では複数キャラが同一ディレクトリを共有するため fallback は使わない
+    embedding_path = None
+    try:
+        target = base + '.speaker.safetensors'
+        candidate = os.path.join(directory, target)
+        if not os.path.exists(candidate):
+            # 大文字小文字が異なるケースに対応（Windows以外）
+            target_lower = target.lower()
+            candidate = next(
+                (os.path.join(directory, f) for f in os.listdir(directory)
+                 if f.lower() == target_lower),
+                None,
+            )
+        else:
+            candidate = candidate
+        embedding_path = candidate if candidate and os.path.exists(candidate) else None
+    except OSError:
+        pass
+
     return {
-        "name":       base if has_voice else f"{base} (音声なし)",
-        "prompt":     txt_path,
-        "voice_path": active_voice,
-        "mp3_path":   mp3_path if has_mp3 else None,
-        "image_path": _find_image(directory, base),
-        "has_voice":  has_voice,
-        "has_mp3":    has_mp3,
+        "name":           base if has_voice else f"{base} (音声なし)",
+        "prompt":         txt_path,
+        "voice_path":     active_voice,
+        "mp3_path":       mp3_path if has_mp3 else None,
+        "image_path":     _find_image(directory, base),
+        "has_voice":      has_voice,
+        "has_mp3":        has_mp3,
+        "embedding_path": embedding_path,
+        "has_embedding":  embedding_path is not None,
     }
 
 
@@ -580,10 +642,11 @@ def root():
 def list_characters():
     state.chars = get_dynamic_characters()
     return [{
-        "index": i, 
-        "name": c["name"], 
-        "has_image": c["image_path"] is not None,
-        "has_voice": c["has_voice"]
+        "index":         i,
+        "name":          c["name"],
+        "has_image":     c["image_path"] is not None,
+        "has_voice":     c["has_voice"],
+        "has_embedding": c.get("has_embedding", False),
     } for i, c in enumerate(state.chars)]
 
 # --- キャラクター画像 ---
@@ -704,7 +767,21 @@ def select_character(req: SelectRequest):
     sys_prompt_text = _build_system_prompt(base_prompt, char_setting, settings)
 
     state.memory = [{"role": "system", "content": sys_prompt_text}]
-    return {"status": "ok", "name": state.selected["name"]}
+
+    # キャラ選択のたびにEmbedding対応を再確認（TTSサーバーが再起動された可能性があるため）
+    _refresh_embedding_support()
+
+    # Speaker Embedding非対応APIの場合に警告メッセージを生成
+    embedding_warning = None
+    if state.selected.get("has_embedding") and not tts_supports_embedding:
+        if state.selected.get("has_voice"):
+            embedding_warning = "APIがSpeaker Embedding非対応です。リファレンスオーディオを使用します。"
+        elif settings.get("no_voice_mode") == "default_voice":
+            embedding_warning = "APIがSpeaker Embedding非対応です。標準音声を使用します。"
+        else:
+            embedding_warning = "APIがSpeaker Embedding非対応です。"
+
+    return {"status": "ok", "name": state.selected["name"], "embedding_warning": embedding_warning}
 
 
 @app.post("/update_system_prompt")
@@ -746,8 +823,23 @@ class ChatRequest(BaseModel):
 
 
 # --- 補助関数 ---
-def generate_and_encode_tts(text, voice_path):
-    """TTSを生成してBase64文字列で返す。voice_path=None の場合はデフォルト音声で生成。
+def _handle_file_with_retry(file_path: str, label: str):
+    """handle_file を最大2回試行して結果を返す。失敗時は None。"""
+    for attempt in range(2):
+        try:
+            result_hf = handle_file(file_path)
+            print(f"[TTS] handle_file({label}) attempt {attempt + 1}: type={type(result_hf).__name__} value={result_hf!r}")
+            if result_hf is not None and result_hf != "" and result_hf != {}:
+                return result_hf
+            print(f"[TTS] WARNING: handle_file({label}) が空値を返しました (attempt {attempt + 1}): {result_hf!r}")
+        except Exception as hf_err:
+            print(f"[TTS] handle_file({label}) attempt {attempt + 1} failed: {hf_err}")
+    return None
+
+
+def generate_and_encode_tts(text, voice_path, embedding_path=None):
+    """TTSを生成してBase64文字列で返す。
+    embedding_path が指定されAPIが対応している場合はSpeaker Embeddingを使用する。
     tts_client はスレッドセーフでないため tts_generate_lock で排他制御する。"""
     tts = get_tts_client()
     if tts is None:
@@ -755,35 +847,48 @@ def generate_and_encode_tts(text, voice_path):
 
     with tts_generate_lock:
         try:
-            print(f"[TTS] generate start: voice_path={voice_path!r} text={text[:20]!r}")
+            settings = load_settings()
+            prefer_embedding = settings.get("prefer_speaker_embedding", True)
+            # Embeddingを使うか判定: API対応 かつ Embeddingあり かつ (優先設定ON または 音声なし)
+            use_embedding = (
+                tts_supports_embedding
+                and embedding_path is not None
+                and (prefer_embedding or voice_path is None)
+            )
+
+            print(f"[TTS] generate start: use_embedding={use_embedding} voice_path={voice_path!r} text={text[:20]!r}")
             send_keys = _TTS_V3_SEND_KEYS if tts_api_version == "v3" else _TTS_V2_SEND_KEYS
             ver_key   = "v3" if tts_api_version == "v3" else "v2"
             ver_cfg   = TTS_CONFIG.get(ver_key, {})
             filtered_config = {k: v for k, v in ver_cfg.items() if k in send_keys}
             ck_key = "checkpoint_v3" if tts_api_version == "v3" else "checkpoint_v2"
             filtered_config["checkpoint"] = ver_cfg.get(ck_key, "")
+
             uploaded_audio = None
-            if voice_path:
+            uploaded_embedding = None
+
+            if use_embedding:
+                if not os.path.exists(embedding_path):
+                    print(f"[TTS] WARNING: embedding_path が見つかりません: {embedding_path}")
+                    use_embedding = False
+                else:
+                    uploaded_embedding = _handle_file_with_retry(embedding_path, "embedding")
+                    if uploaded_embedding is None:
+                        print(f"[TTS] WARNING: Embedding読み込み失敗。音声ファイルにフォールバック: {embedding_path}")
+                        use_embedding = False
+
+            if not use_embedding and voice_path:
                 if not os.path.exists(voice_path):
                     print(f"[TTS] WARNING: voice_path が見つかりません: {voice_path}")
                 else:
-                    for attempt in range(2):
-                        try:
-                            result_hf = handle_file(voice_path)
-                            # handle_file の戻り値を詳細ログに残す（no_ref 問題の追跡用）
-                            print(f"[TTS] handle_file attempt {attempt + 1}: type={type(result_hf).__name__} value={result_hf!r}")
-                            # 戻り値が空でないことを確認してから採用
-                            if result_hf is not None and result_hf != "" and result_hf != {}:
-                                uploaded_audio = result_hf
-                                break
-                            else:
-                                print(f"[TTS] WARNING: handle_file が空値を返しました (attempt {attempt + 1}): {result_hf!r}")
-                        except Exception as hf_err:
-                            print(f"[TTS] handle_file attempt {attempt + 1} failed: {hf_err}")
+                    uploaded_audio = _handle_file_with_retry(voice_path, "audio")
                     if uploaded_audio is None:
                         print(f"[TTS] WARNING: リファレンス音声の読み込みに失敗。音声なしで生成します: {voice_path}")
+
             predict_kwargs = {**filtered_config, "text": text, "api_name": "/_run_generation",
                               "uploaded_audio": uploaded_audio}
+            if tts_supports_embedding:
+                predict_kwargs["uploaded_speaker_embedding"] = uploaded_embedding
             result = tts.predict(**predict_kwargs)
 
             res_data = result[0]
@@ -802,12 +907,12 @@ def generate_and_encode_tts(text, voice_path):
     return None
 
 
-def enqueue_tts(sentence: str, voice_path: str, req_id: str):
+def enqueue_tts(sentence: str, voice_path: str, req_id: str, embedding_path=None):
     """キューに積む前に queued カウンターをインクリメントする（必ずペアで使う）"""
     with finished_audios_lock:
         if req_id in finished_audios:
             finished_audios[req_id]["queued"] += 1
-    generate_queue.put((sentence, voice_path, req_id))
+    generate_queue.put((sentence, voice_path, embedding_path, req_id))
 
 
 EMOJI_PAT = re.compile(
@@ -831,13 +936,16 @@ def stream_llm_with_tts(messages: list, tts_enabled: bool):
     tts_batch_size: int = settings.get("tts_batch_size", 0)  # 0=すべて
     no_voice_mode: str  = settings.get("no_voice_mode", "off")
 
-    # TTS使用可否: 音声ありキャラ、またはデフォルト音声モードで音声なしキャラ
+    has_embedding = state.selected.get("has_embedding", False)
+    # TTS使用可否: 音声/Embeddingありキャラ、またはデフォルト音声モードで音声なしキャラ
     tts_available = (
         state.selected.get("has_voice")
+        or (has_embedding and tts_supports_embedding)
         or no_voice_mode == "default_voice"
     )
     # デフォルト音声モード時は voice_path=None でTTSを呼ぶ
     tts_voice_path = state.selected.get("voice_path") if state.selected.get("has_voice") else None
+    tts_embedding_path = state.selected.get("embedding_path") if has_embedding else None
 
     full_answer = ""
     llm_buffer = ""
@@ -867,7 +975,7 @@ def stream_llm_with_tts(messages: list, tts_enabled: bool):
             combined = "".join(chunk_sentences)
             s = clean_for_tts(combined)
             if len(s) > 1:
-                enqueue_tts(s, tts_voice_path, req_id)
+                enqueue_tts(s, tts_voice_path, req_id, tts_embedding_path)
                 enqueued_count += 1
 
     try:
@@ -918,7 +1026,7 @@ def stream_llm_with_tts(messages: list, tts_enabled: bool):
                     pending_sentences = []
                     s = clean_for_tts(combined)
                     if len(s) > 1:
-                        enqueue_tts(s, tts_voice_path, req_id)
+                        enqueue_tts(s, tts_voice_path, req_id, tts_embedding_path)
                 else:
                     # 残りをバッチサイズで処理（端数は1つにまとめる）
                     while len(pending_sentences) >= tts_batch_size:
@@ -927,14 +1035,14 @@ def stream_llm_with_tts(messages: list, tts_enabled: bool):
                         combined = "".join(chunk)
                         s = clean_for_tts(combined)
                         if len(s) > 1:
-                            enqueue_tts(s, tts_voice_path, req_id)
+                            enqueue_tts(s, tts_voice_path, req_id, tts_embedding_path)
                     # 端数
                     if pending_sentences:
                         combined = "".join(pending_sentences)
                         pending_sentences = []
                         s = clean_for_tts(combined)
                         if len(s) > 1:
-                            enqueue_tts(s, tts_voice_path, req_id)
+                            enqueue_tts(s, tts_voice_path, req_id, tts_embedding_path)
 
         state.memory.append({"role": "assistant", "content": full_answer})
 
@@ -967,7 +1075,7 @@ def stream_llm_with_tts(messages: list, tts_enabled: bool):
         yield f"data: {json.dumps({'token': friendly})}\n\n"
         # TTS が有効ならフレンドリーメッセージも発声させる
         if tts_enabled and tts_available:
-            enqueue_tts(friendly, tts_voice_path, req_id)
+            enqueue_tts(friendly, tts_voice_path, req_id, tts_embedding_path)
             yield f"data: {json.dumps({'done': True, 'req_id': req_id, 'error_detail': err_str})}\n\n"
             # finished_audios の解放はポーリング側（audio_poll）に任せる
         else:
@@ -1241,16 +1349,22 @@ def tts_direct(req: DirectTTSRequest):
     if not state.selected:
         raise HTTPException(400, "キャラクターが選択されていません")
     voice_path = state.selected.get("voice_path")
+    embedding_path = state.selected.get("embedding_path")
     settings = load_settings()
     no_voice_mode = settings.get("no_voice_mode", "off")
-    if not voice_path and no_voice_mode != "default_voice":
+    has_tts_source = (
+        voice_path
+        or (embedding_path and tts_supports_embedding)
+        or no_voice_mode == "default_voice"
+    )
+    if not has_tts_source:
         raise HTTPException(400, "音声ファイルが設定されていません")
 
     text = clean_for_tts(req.text.strip())
     if not text:
         raise HTTPException(400, "テキストが空です")
 
-    audio_b64 = generate_and_encode_tts(text, voice_path)
+    audio_b64 = generate_and_encode_tts(text, voice_path, embedding_path)
     if audio_b64 is None:
         raise HTTPException(500, "TTS生成に失敗しました")
 
@@ -1358,9 +1472,15 @@ def tts_regen(req: TtsRegenRequest):
     if not state.selected:
         raise HTTPException(400, "キャラクターが選択されていません")
     voice_path = state.selected.get("voice_path")
+    embedding_path = state.selected.get("embedding_path")
     settings = load_settings()
     no_voice_mode = settings.get("no_voice_mode", "off")
-    if not voice_path and no_voice_mode != "default_voice":
+    has_tts_source = (
+        voice_path
+        or (embedding_path and tts_supports_embedding)
+        or no_voice_mode == "default_voice"
+    )
+    if not has_tts_source:
         raise HTTPException(400, "音声ファイルが設定されていません")
 
     text = req.text.strip()
@@ -1397,7 +1517,7 @@ def tts_regen(req: TtsRegenRequest):
         combined = "".join(chunk)
         s = clean_for_tts(combined)
         if len(s) > 1:
-            enqueue_tts(s, voice_path, req_id)
+            enqueue_tts(s, voice_path, req_id, embedding_path)
 
     if tts_batch_size == 0:
         enqueue_batch(sentences)
@@ -1528,9 +1648,15 @@ def tts_export(req: TtsExportRequest):
     if not state.selected:
         raise HTTPException(400, "キャラクターが選択されていません")
     voice_path = state.selected.get("voice_path")
+    embedding_path = state.selected.get("embedding_path")
     settings = load_settings()
     no_voice_mode = settings.get("no_voice_mode", "off")
-    if not voice_path and no_voice_mode != "default_voice":
+    has_tts_source = (
+        voice_path
+        or (embedding_path and tts_supports_embedding)
+        or no_voice_mode == "default_voice"
+    )
+    if not has_tts_source:
         raise HTTPException(400, "音声ファイルが設定されていません")
 
     text = req.text.strip()
@@ -1547,7 +1673,7 @@ def tts_export(req: TtsExportRequest):
         s = clean_for_tts(batch_text)
         if len(s) <= 1:
             continue
-        audio_b64 = generate_and_encode_tts(s, voice_path)
+        audio_b64 = generate_and_encode_tts(s, voice_path, embedding_path)
         if audio_b64 is None:
             raise HTTPException(500, "TTS生成に失敗しました")
         wav_bytes_list.append(base64.b64decode(audio_b64))
@@ -1805,6 +1931,7 @@ async def create_character(
     prompt: str = Form(...),
     image: Optional[UploadFile] = File(None),
     voice: Optional[UploadFile] = File(None),
+    embedding: Optional[UploadFile] = File(None),
 ):
     """新規キャラクターをサブフォルダ形式で作成する"""
     safe_name = _safe_char_name(name)
@@ -1833,6 +1960,12 @@ async def create_character(
         with open(wav_path, "wb") as f:
             f.write(await voice.read())
 
+    # Speaker Embedding
+    if embedding and embedding.filename:
+        emb_path = os.path.join(char_dir, safe_name + ".speaker.safetensors")
+        with open(emb_path, "wb") as f:
+            f.write(await embedding.read())
+
     return JSONResponse({"status": "ok", "name": safe_name})
 
 
@@ -1843,6 +1976,9 @@ async def duplicate_character(
     prompt: Optional[str] = Form(None),
     image: Optional[UploadFile] = File(None),
     voice: Optional[UploadFile] = File(None),
+    embedding: Optional[UploadFile] = File(None),
+    copy_voice: str = Form("true"),       # "false" = 複製しない（ファイルを削除）
+    copy_embedding: str = Form("true"),   # "false" = 複製しない（ファイルを削除）
 ):
     """既存キャラクターを複製する。name/prompt/image/voice が指定された場合はその値を使う。"""
     state.chars = get_dynamic_characters()
@@ -1876,12 +2012,19 @@ async def duplicate_character(
             ext  = Path(fname).suffix
             if stem == base_name and ext in [".txt", ".wav", ".mp3"] + IMAGE_EXTS:
                 os.rename(fpath, os.path.join(dest_dir, new_name + ext))
+            # <base>.speaker.safetensors → <new_name>.speaker.safetensors
+            elif stem == base_name + ".speaker" and ext == ".safetensors":
+                os.rename(fpath, os.path.join(dest_dir, new_name + ".speaker.safetensors"))
     else:
         os.makedirs(dest_dir, exist_ok=True)
         for ext in [".txt", ".wav", ".mp3"] + IMAGE_EXTS:
             src = os.path.join(CHAR_DIR, base_name + ext)
             if os.path.exists(src):
                 shutil.copy2(src, os.path.join(dest_dir, new_name + ext))
+        # Speaker Embedding もコピー
+        src_emb = os.path.join(CHAR_DIR, base_name + ".speaker.safetensors")
+        if os.path.exists(src_emb):
+            shutil.copy2(src_emb, os.path.join(dest_dir, new_name + ".speaker.safetensors"))
 
     # プロンプトを上書き
     txt_path = os.path.join(dest_dir, new_name + ".txt")
@@ -1901,13 +2044,30 @@ async def duplicate_character(
         with open(os.path.join(dest_dir, new_name + ext), "wb") as f:
             f.write(await image.read())
 
-    # 音声を上書き
+    # 音声を上書き（新ファイルあり）または削除（copy_voice=false）
     if voice and voice.filename:
         old_wav = os.path.join(dest_dir, new_name + ".wav")
         if os.path.exists(old_wav):
             os.remove(old_wav)
         with open(os.path.join(dest_dir, new_name + ".wav"), "wb") as f:
             f.write(await voice.read())
+    elif copy_voice.lower() == "false":
+        for ext in [".wav", ".mp3"]:
+            p = os.path.join(dest_dir, new_name + ext)
+            if os.path.exists(p):
+                os.remove(p)
+
+    # Speaker Embedding を上書き（新ファイルあり）または削除（copy_embedding=false）
+    if embedding and embedding.filename:
+        old_emb = os.path.join(dest_dir, new_name + ".speaker.safetensors")
+        if os.path.exists(old_emb):
+            os.remove(old_emb)
+        with open(old_emb, "wb") as f:
+            f.write(await embedding.read())
+    elif copy_embedding.lower() == "false":
+        p = os.path.join(dest_dir, new_name + ".speaker.safetensors")
+        if os.path.exists(p):
+            os.remove(p)
 
     return JSONResponse({"status": "ok", "name": new_name})
 
@@ -1926,14 +2086,16 @@ def get_character_info(idx: int):
     except Exception:
         pass
     return JSONResponse({
-        "name":        char["name"].replace(" (音声なし)", ""),
-        "prompt":      prompt_text,
-        "has_voice":   char["has_voice"],
-        "has_image":   char["image_path"] is not None,
-        "has_mp3":     char.get("has_mp3", False),
-        "char_format": char.get("char_format", "subfolder"),
-        "voice_file":  os.path.basename(char["voice_path"]) if char.get("voice_path") else None,
-        "folder":      os.path.basename(os.path.dirname(char["prompt"])),
+        "name":           char["name"].replace(" (音声なし)", ""),
+        "prompt":         prompt_text,
+        "has_voice":      char["has_voice"],
+        "has_image":      char["image_path"] is not None,
+        "has_mp3":        char.get("has_mp3", False),
+        "char_format":    char.get("char_format", "subfolder"),
+        "voice_file":     os.path.basename(char["voice_path"]) if char.get("voice_path") else None,
+        "folder":         os.path.basename(os.path.dirname(char["prompt"])),
+        "has_embedding":  char.get("has_embedding", False),
+        "embedding_file": os.path.basename(char["embedding_path"]) if char.get("embedding_path") else None,
     })
 
 
@@ -1981,8 +2143,9 @@ async def edit_character(
     prompt: str = Form(...),
     image: Optional[UploadFile] = File(None),
     voice: Optional[UploadFile] = File(None),
+    embedding: Optional[UploadFile] = File(None),
 ):
-    """既存キャラクターの名前・プロンプト・画像・音声を更新する"""
+    """既存キャラクターの名前・プロンプト・画像・音声・Embeddingを更新する"""
     state.chars = get_dynamic_characters()
     if idx < 0 or idx >= len(state.chars):
         raise HTTPException(404)
@@ -2016,6 +2179,15 @@ async def edit_character(
         wav_path = os.path.join(char_dir, Path(char["prompt"]).stem + ".wav")
         with open(wav_path, "wb") as f:
             f.write(await voice.read())
+
+    # Speaker Embedding 更新
+    if embedding and embedding.filename:
+        old_emb = char.get("embedding_path")
+        if old_emb and os.path.exists(old_emb):
+            os.remove(old_emb)
+        emb_path = os.path.join(char_dir, Path(char["prompt"]).stem + ".speaker.safetensors")
+        with open(emb_path, "wb") as f:
+            f.write(await embedding.read())
 
     return JSONResponse({"status": "ok"})
 

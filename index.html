@@ -230,6 +230,7 @@ body { background: var(--body-gradient); }
 .char-name { font-size: 13px; font-weight: 500; color: var(--text); }
 .char-sub  { font-family: 'Share Tech Mono', monospace; font-size: 10px; color: var(--muted); }
 .char-sub.no-voice { color: #ff4d4d; font-weight: bold; }
+.char-emb-badge { display:inline-block; font-size:9px; padding:1px 4px; border-radius:3px; background:var(--accent); color:#fff; vertical-align:middle; margin-left:4px; opacity:0.85; font-weight:bold; }
 
 #char-image-area { padding: 10px; border-top: 1px solid var(--border); }
 #char-big-img {
@@ -901,6 +902,10 @@ body { background: var(--body-gradient); }
   opacity: .35; cursor: not-allowed;
   border-color: var(--border) !important; color: var(--muted) !important;
 }
+.ce-copy-label {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--muted); cursor: pointer; user-select: none;
+}
 #char-edit-footer {
   padding: 12px 18px;
   border-top: 1px solid var(--border);
@@ -1421,6 +1426,10 @@ body.no-bubble-blur .msg-bubble {
           <input type="checkbox" id="ac-char-dir-also-default">
           <span>CHAR_DIR環境変数が設定されている場合もデフォルトのフォルダを追加で読み込む</span>
         </label>
+        <label class="api-check-label" style="margin-top:6px">
+          <input type="checkbox" id="ac-prefer-speaker-embedding">
+          <span>Speaker Embeddingsが利用可能な場合優先して使用する（両方ある場合の優先順位）</span>
+        </label>
       </div>
 
       <!-- ── チャットログ設定 ── -->
@@ -1492,6 +1501,12 @@ body.no-bubble-blur .msg-bubble {
       </div>
       <div class="ce-field">
         <label class="ce-label">音声ファイル (.wav / .mp3) — 話者サンプル</label>
+        <div id="ce-copy-voice-row" style="display:none; margin-bottom:4px;">
+          <label class="ce-copy-label">
+            <input type="checkbox" id="ce-copy-voice">
+            <span>複製元からコピーする</span>
+          </label>
+        </div>
         <div class="ce-file-row">
           <span class="ce-file-label" id="ce-voice-label">未選択</span>
           <button class="ce-file-btn" id="ce-voice-btn">選択</button>
@@ -1502,6 +1517,20 @@ body.no-bubble-blur .msg-bubble {
         <div class="ce-file-row">
           <span class="ce-file-label" id="ce-mp3-label" style="font-size:10px"></span>
           <button class="ce-file-btn" id="ce-mp3-btn" disabled>MP3→WAV 変換</button>
+        </div>
+      </div>
+      <div class="ce-field">
+        <label class="ce-label">Speaker Embedding (.speaker.safetensors) — オプション</label>
+        <div id="ce-copy-embedding-row" style="display:none; margin-bottom:4px;">
+          <label class="ce-copy-label">
+            <input type="checkbox" id="ce-copy-embedding">
+            <span>複製元からコピーする</span>
+          </label>
+        </div>
+        <div class="ce-file-row">
+          <span class="ce-file-label" id="ce-embedding-label">未選択</span>
+          <button class="ce-file-btn" id="ce-embedding-btn">選択</button>
+          <input type="file" id="ce-embedding-input" accept=".safetensors" style="display:none">
         </div>
       </div>
     </div>
@@ -1869,7 +1898,8 @@ let selectedIndex    = null;
 let selectedName     = '';
 let selectedImageUrl = null;
 let selectedHasVoice = false;
-let noVoiceMode      = 'off';   // 'off' | 'default_voice'
+let noVoiceMode           = 'off';   // 'off' | 'default_voice'
+let preferSpeakerEmbedding = false;
 let isGenerating     = false;
 let isFileReading    = false;   // テキスト読み上げ中フラグ
 let audioQueue       = [];
@@ -2083,6 +2113,9 @@ function applySettings(s) {
   // 参照音声なしキャラのTTS設定
   if (s.no_voice_mode !== undefined) {
     noVoiceMode = s.no_voice_mode;
+  }
+  if (s.prefer_speaker_embedding !== undefined) {
+    preferSpeakerEmbedding = !!s.prefer_speaker_embedding;
   }
   // 自動応答設定の反映
   if (s.auto_reply_delay !== undefined) {
@@ -3395,13 +3428,17 @@ async function loadCharacters() {
     }
 
     list.forEach(c => {
-      const hasVoice = (c.has_voice !== undefined) ? c.has_voice : !c.name.includes('(音声なし)');
+      const hasVoice     = (c.has_voice !== undefined) ? c.has_voice : !c.name.includes('(音声なし)');
+      const hasEmbedding = !!c.has_embedding;
       const subText  = hasVoice ? 'voice ready'
                      : noVoiceMode === 'default_voice' ? 'デフォルト音声'
                      : 'Voice not ready';
       const subClass = hasVoice ? 'char-sub'
                      : noVoiceMode === 'default_voice' ? 'char-sub'
                      : 'char-sub no-voice';
+      const embBadge = hasEmbedding
+        ? '<span class="char-emb-badge" title="Speaker Embedding あり">EMB</span>'
+        : '';
 
       const card = document.createElement('div');
       card.className = 'char-card';
@@ -3415,7 +3452,7 @@ async function loadCharacters() {
       card.innerHTML = `
         <div class="char-avatar">${avatarHtml}</div>
         <div style="display:flex;flex-direction:column;justify-content:center;flex:1;min-width:0;">
-          <div class="char-name">${c.name}</div>
+          <div class="char-name">${c.name}${embBadge}</div>
           <div class="${subClass}">${subText}</div>
         </div>
         <button class="char-card-menu-btn" title="オプション" data-idx="${c.index}">•••</button>`;
@@ -3452,6 +3489,7 @@ async function selectCharacter(idx, name, hasImage, hasVoice) {
     body: JSON.stringify({ index: idx }),
   });
   if (!res.ok) return;
+  const selectData = await res.json();
 
   selectedIndex    = idx;
   selectedName     = name;
@@ -3482,6 +3520,7 @@ async function selectCharacter(idx, name, hasImage, hasVoice) {
   $messages.appendChild($msgScrollTop);
   $messages.appendChild($msgScrollBottom);
   appendSystemMsg(`${name} がログインしました`);
+  if (selectData.embedding_warning) appendSystemMsg(selectData.embedding_warning);
   setBackgroundImage(selectedImageUrl);
   logSessionId      = null;
   pendingLogChar    = name;
@@ -5005,9 +5044,15 @@ const $ceName     = document.getElementById('ce-name');
 const $cePrompt   = document.getElementById('ce-prompt');
 const $ceImageLbl = document.getElementById('ce-image-label');
 const $ceImageInp = document.getElementById('ce-image-input');
-const $ceVoiceLbl = document.getElementById('ce-voice-label');
-const $ceVoiceInp = document.getElementById('ce-voice-input');
-const $ceMp3Row   = document.getElementById('ce-mp3-row');
+const $ceVoiceLbl        = document.getElementById('ce-voice-label');
+const $ceVoiceInp        = document.getElementById('ce-voice-input');
+const $ceEmbeddingLbl    = document.getElementById('ce-embedding-label');
+const $ceEmbeddingInp    = document.getElementById('ce-embedding-input');
+const $ceMp3Row          = document.getElementById('ce-mp3-row');
+const $ceCopyVoiceRow    = document.getElementById('ce-copy-voice-row');
+const $ceCopyVoice       = document.getElementById('ce-copy-voice');
+const $ceCopyEmbRow      = document.getElementById('ce-copy-embedding-row');
+const $ceCopyEmbedding   = document.getElementById('ce-copy-embedding');
 const $ceMp3Lbl   = document.getElementById('ce-mp3-label');
 const $ceMp3Btn   = document.getElementById('ce-mp3-btn');
 
@@ -5015,11 +5060,36 @@ let ceMp3Info = null;  // { idx, hasWav } — MP3変換ボタン用の状態
 
 document.getElementById('ce-image-btn').addEventListener('click', () => $ceImageInp.click());
 document.getElementById('ce-voice-btn').addEventListener('click', () => $ceVoiceInp.click());
+document.getElementById('ce-embedding-btn').addEventListener('click', () => $ceEmbeddingInp.click());
 $ceImageInp.addEventListener('change', () => {
   $ceImageLbl.textContent = $ceImageInp.files[0]?.name || '未選択';
 });
 $ceVoiceInp.addEventListener('change', () => {
-  $ceVoiceLbl.textContent = $ceVoiceInp.files[0]?.name || '未選択';
+  const f = $ceVoiceInp.files[0];
+  $ceVoiceLbl.textContent = f?.name || '未選択';
+  if (f) $ceCopyVoice.checked = false;  // ファイル選択 → 複製チェックを外す
+});
+$ceEmbeddingInp.addEventListener('change', () => {
+  const f = $ceEmbeddingInp.files[0];
+  $ceEmbeddingLbl.textContent = f?.name || '未選択';
+  if (f) $ceCopyEmbedding.checked = false;  // ファイル選択 → 複製チェックを外す
+});
+$ceCopyVoice.addEventListener('change', () => {
+  if ($ceCopyVoice.checked) {
+    // チェック復帰 → 選択ファイルを無効にしてコピー元に戻す
+    $ceVoiceInp.value = '';
+    $ceVoiceLbl.textContent = '（既存ファイルをコピー）';
+  } else {
+    $ceVoiceLbl.textContent = '未選択';
+  }
+});
+$ceCopyEmbedding.addEventListener('change', () => {
+  if ($ceCopyEmbedding.checked) {
+    $ceEmbeddingInp.value = '';
+    $ceEmbeddingLbl.textContent = '（既存ファイルをコピー）';
+  } else {
+    $ceEmbeddingLbl.textContent = '未選択';
+  }
 });
 
 function _updateMp3Btn(d, idx) {
@@ -5048,10 +5118,17 @@ function openCharEditModal(mode, idx = null) {
   charEditTarget = idx;
   $ceName.value     = '';
   $cePrompt.value   = '';
-  $ceImageLbl.textContent = '未選択';
-  $ceVoiceLbl.textContent = '未選択';
-  $ceImageInp.value = '';
-  $ceVoiceInp.value = '';
+  $ceImageLbl.textContent     = '未選択';
+  $ceVoiceLbl.textContent     = '未選択';
+  $ceEmbeddingLbl.textContent = '未選択';
+  $ceImageInp.value     = '';
+  $ceVoiceInp.value     = '';
+  $ceEmbeddingInp.value = '';
+  // 複製チェックボックス行は duplicate 時のみ表示
+  $ceCopyVoiceRow.style.display  = 'none';
+  $ceCopyEmbRow.style.display    = 'none';
+  $ceCopyVoice.checked     = false;
+  $ceCopyEmbedding.checked = false;
   // MP3変換行をリセット（create / duplicate では非表示）
   $ceMp3Row.style.display = 'none';
   $ceMp3Btn.disabled = true;
@@ -5061,28 +5138,39 @@ function openCharEditModal(mode, idx = null) {
     $ceTitle.textContent = '✦ NEW CHARACTER';
   } else if (mode === 'edit') {
     $ceTitle.textContent = '✦ EDIT CHARACTER';
-    // 既存データを取得してフォームに反映
     fetch(`${API}/characters/${idx}/info`)
       .then(r => r.json())
       .then(d => {
         $ceName.value   = d.name;
         $cePrompt.value = d.prompt;
-        if (d.has_image) $ceImageLbl.textContent = '（既存ファイル）';
-        if (d.has_voice) $ceVoiceLbl.textContent = d.voice_file ? `（既存: ${d.voice_file}）` : '（既存ファイル）';
+        if (d.has_image)     $ceImageLbl.textContent     = '（既存ファイル）';
+        if (d.has_voice)     $ceVoiceLbl.textContent     = d.voice_file ? `（既存: ${d.voice_file}）` : '（既存ファイル）';
+        if (d.has_embedding) $ceEmbeddingLbl.textContent = d.embedding_file ? `（既存: ${d.embedding_file}）` : '（既存ファイル）';
         _updateMp3Btn(d, idx);
       })
       .catch(() => {});
   } else {
     $ceTitle.textContent = '✦ DUPLICATE CHARACTER';
-    // 既存データをテンプレートとして取得
     fetch(`${API}/characters/${idx}/info`)
       .then(r => r.json())
       .then(d => {
         $ceName.value   = d.name + '_copy';
         $cePrompt.value = d.prompt;
         if (d.has_image) $ceImageLbl.textContent = '（既存ファイルをコピー）';
-        if (d.has_voice) $ceVoiceLbl.textContent = d.voice_file ? `（既存: ${d.voice_file}）` : '（既存ファイルをコピー）';
-        // 複製モードではボタン非表示（複製先はまだ存在しない）
+        // 音声チェックボックスは常に表示。複製元にファイルがあればON+有効、なければOFF+disabled
+        $ceCopyVoiceRow.style.display = '';
+        $ceCopyVoice.checked  = d.has_voice;
+        $ceCopyVoice.disabled = !d.has_voice;
+        $ceCopyVoiceRow.querySelector('label').style.opacity = d.has_voice ? '' : '0.4';
+        if (d.has_voice)
+          $ceVoiceLbl.textContent = d.voice_file ? `（既存: ${d.voice_file}）` : '（既存ファイルをコピー）';
+        // Embeddingチェックボックスも同様
+        $ceCopyEmbRow.style.display = '';
+        $ceCopyEmbedding.checked  = d.has_embedding;
+        $ceCopyEmbedding.disabled = !d.has_embedding;
+        $ceCopyEmbRow.querySelector('label').style.opacity = d.has_embedding ? '' : '0.4';
+        if (d.has_embedding)
+          $ceEmbeddingLbl.textContent = d.embedding_file ? `（既存: ${d.embedding_file}）` : '（既存ファイルをコピー）';
       })
       .catch(() => {});
   }
@@ -5126,8 +5214,13 @@ document.getElementById('char-edit-ok').addEventListener('click', async () => {
   const fd = new FormData();
   fd.append('name',   name);
   fd.append('prompt', prompt);
-  if ($ceImageInp.files[0]) fd.append('image', $ceImageInp.files[0]);
-  if ($ceVoiceInp.files[0]) fd.append('voice', $ceVoiceInp.files[0]);
+  if ($ceImageInp.files[0])     fd.append('image',     $ceImageInp.files[0]);
+  if ($ceVoiceInp.files[0])     fd.append('voice',     $ceVoiceInp.files[0]);
+  if ($ceEmbeddingInp.files[0]) fd.append('embedding', $ceEmbeddingInp.files[0]);
+  if (charEditMode === 'duplicate') {
+    fd.append('copy_voice',     $ceCopyVoice.checked     ? 'true' : 'false');
+    fd.append('copy_embedding', $ceCopyEmbedding.checked ? 'true' : 'false');
+  }
 
   try {
     let url;
@@ -5242,6 +5335,7 @@ const $acBubbleBlur          = document.getElementById('ac-bubble-blur');
 const $acCharDirStatus       = document.getElementById('ac-char-dir-status');
 const $acCharDirAlsoDefault  = document.getElementById('ac-char-dir-also-default');
 const $acCharDirAlsoDefaultLabel = document.getElementById('ac-char-dir-also-default-label');
+const $acPreferSpeakerEmbedding = document.getElementById('ac-prefer-speaker-embedding');
 const $acLogAutoSave         = document.getElementById('ac-log-auto-save');
 const $acAutoReplyDelay      = document.getElementById('ac-auto-reply-delay');
 const $acArTriggerAudio      = document.getElementById('ac-ar-trigger-audio');
@@ -5511,6 +5605,7 @@ async function openApiConfigModal() {
       $acFfmpegPath.value          = s.ffmpeg_path || '';
       $acFfmpegPathRow.style.display = $acFfmpegPathEnabled.checked ? '' : 'none';
       $acCharDirAlsoDefault.checked = !!s.char_dir_also_default;
+      $acPreferSpeakerEmbedding.checked = !!s.prefer_speaker_embedding;
       $acLogAutoSave.checked = s.log_auto_save !== false;
       // 参照音声なしキャラのTTS設定
       const nvm = s.no_voice_mode || 'off';
@@ -5601,8 +5696,9 @@ $acApplyBtn.addEventListener('click', async () => {
         ffmpeg_to_mp3:         $acFfmpegMp3.checked,
         ffmpeg_path_enabled:   $acFfmpegPathEnabled.checked,
         ffmpeg_path:           $acFfmpegPath.value.trim(),
-        char_dir_also_default: $acCharDirAlsoDefault.checked,
-        log_auto_save:            $acLogAutoSave.checked,
+        char_dir_also_default:      $acCharDirAlsoDefault.checked,
+        prefer_speaker_embedding:   $acPreferSpeakerEmbedding.checked,
+        log_auto_save:              $acLogAutoSave.checked,
         no_voice_mode:            $acNoVoiceDefault.checked ? 'default_voice' : 'off',
         tts_api_version:          $acTtsVersion.value,
         auto_reply_delay:         parseInt($acAutoReplyDelay.value, 10) || 3,
