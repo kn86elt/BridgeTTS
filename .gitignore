@@ -7,6 +7,7 @@ __pycache__/
 log/
 output/
 exports/
+memory/
 *~
 run-bridge-test.bat
 changelog_detail.md

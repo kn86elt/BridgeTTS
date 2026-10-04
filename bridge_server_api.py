@@ -6,16 +6,19 @@ bridge_server.py  –  WebUI版 bridge3.py
     uvicorn bridge_server:app --host 0.0.0.0 --port 8000 --reload
 """
 
-import os, subprocess, time, re, threading, queue, asyncio, json, zipfile, shutil, urllib.parse, tempfile
+import os, subprocess, time, re, threading, queue, asyncio, json, zipfile, shutil, urllib.parse, tempfile, uuid, copy
 from pathlib import Path
 from openai import OpenAI
-from fastapi import FastAPI, HTTPException, Body
-from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
+from fastapi import FastAPI, HTTPException, Body, Request
+from fastapi.responses import StreamingResponse, JSONResponse, FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, model_validator
 from gradio_client import Client, handle_file
 from PIL import Image
+from game_mode import GameEngine, GameError
+from game_mode.llm import OpenAIGameLLM
+from game_mode.transcript import GameTranscriptWriter
 import io
 import webbrowser
 import base64
@@ -76,6 +79,11 @@ DEFAULT_SETTINGS = {
     "auto_reply_user_prompt": "",  # 空=デフォルトプロンプト使用
     # Speaker Embedding設定
     "prefer_speaker_embedding": True,   # True=Embeddingを優先(両方ある場合)
+    # 記憶・関係性設定
+    "memory_enabled":         True,  # True=キャラごとにユーザーを記憶する
+    "memory_update_interval": 6,     # ユーザー発言N回ごとに記憶を更新 (1〜30)
+    # 会話履歴設定
+    "history_max_messages":   30,    # LLMに渡す履歴の最大メッセージ数 (0=無制限)
 }
 
 def load_settings() -> dict:
@@ -610,11 +618,124 @@ class AppState:
         self.selected:       dict  = {}
         self.memory:         list  = []
         self.base_prompt:    str   = ""
+        self.mem_pending:    list  = []    # 記憶抽出待ちの発言 (人間の入力とその応答のみ)
+        self.mem_user_turns: int   = 0     # mem_pending 内のユーザー発言数
+        self.session_ctx:    dict  = {}    # 会話開始時の状況 (前回からの経過など)
 
 state = AppState()
 
+# Normal chat and game mode share only this short reservation gate. The lock is
+# never held across an LLM request or a streaming response.
+_conversation_gate = threading.RLock()
+_conversation_epoch = str(uuid.uuid4())
+_normal_revision = 0
+_normal_generations: dict[str, dict] = {}
+_view_reset_records: dict[tuple[str, str], tuple[str, dict, float]] = {}
+_game_transcript_writer = GameTranscriptWriter()
+
+
+def _conversation_snapshot() -> tuple[str, int]:
+    return _conversation_epoch, _normal_revision
+
+
+class _GameLLMFactory:
+    def snapshot(self):
+        settings = load_settings()
+        client = OpenAI(
+            base_url=_build_llm_url(settings),
+            api_key=settings.get("llm_api_key") or "lm-studio",
+        )
+        return OpenAIGameLLM(client, settings.get("llm_model") or "local-model")
+
+
+def _save_game_transcript(session) -> str | None:
+    if not load_settings().get("log_auto_save", True):
+        return None
+    try:
+        _game_transcript_writer.save(session)
+        return None
+    except Exception:
+        return "公開ログを自動保存できませんでした。記録はこのゲーム中のRAMに保持しています。"
+
+
+def _normal_busy() -> bool:
+    if _normal_generations:
+        return True
+    audio_lock = globals().get("finished_audios_lock")
+    audio_state = globals().get("finished_audios")
+    if audio_lock is not None and audio_state is not None:
+        with audio_lock:
+            return any(item.get("queued", 0) > item.get("completed", 0) for item in audio_state.values())
+    return False
+
+
+_game_engine = GameEngine(
+    _GameLLMFactory(),
+    gate_lock=_conversation_gate,
+    normal_busy=_normal_busy,
+    conversation_state=_conversation_snapshot,
+    transcript_save=_save_game_transcript,
+)
+
+
+def _reserve_normal_generation(request: Request, *, bump_revision: bool = True) -> str:
+    global _normal_revision
+    page_id = request.headers.get("X-Bridge-Page-Id")
+    epoch = request.headers.get("X-Conversation-Epoch")
+    with _conversation_gate:
+        if epoch and epoch != _conversation_epoch:
+            raise HTTPException(409, detail={"code": "STALE_CONVERSATION"})
+        try:
+            _game_engine.guard_normal(page_id, epoch)
+        except GameError as exc:
+            raise HTTPException(exc.status_code, detail={"code": exc.code}) from exc
+        token = str(uuid.uuid4())
+        _normal_generations[token] = {"page_id": page_id, "epoch": _conversation_epoch}
+        if bump_revision:
+            _normal_revision += 1
+        return token
+
+
+def _release_normal_generation(token: str):
+    with _conversation_gate:
+        _normal_generations.pop(token, None)
+
+
+def _tracked_normal_stream(stream, token: str):
+    try:
+        yield from stream
+    finally:
+        _release_normal_generation(token)
+
+
+def _conversation_transition(request: Request | None = None, *, page_id: str | None = None, epoch: str | None = None, view_reset: bool = False):
+    global _conversation_epoch, _normal_revision
+    page_id = page_id or (request.headers.get("X-Bridge-Page-Id") if request else None)
+    epoch = epoch or (request.headers.get("X-Conversation-Epoch") if request else None)
+    with _conversation_gate:
+        if _normal_generations:
+            raise HTTPException(409, detail={"code": "GAME_BUSY"})
+        if epoch and epoch != _conversation_epoch:
+            raise HTTPException(409, detail={"code": "STALE_CONVERSATION"})
+        if view_reset:
+            session = _game_engine.current(page_id or "")
+            if session and session.status != "suspended":
+                raise HTTPException(409, detail={"code": "GAME_BUSY"})
+        try:
+            _game_engine.transition(page_id, epoch)
+        except GameError as exc:
+            raise HTTPException(exc.status_code, detail={"code": exc.code}) from exc
+        _conversation_epoch = str(uuid.uuid4())
+        _normal_revision = 0
+        return {"conversation_epoch": _conversation_epoch, "normal_revision": _normal_revision}
+
 # --- FastAPI ---
 app = FastAPI(title="Bridge WebUI")
+
+
+@app.exception_handler(GameError)
+async def _game_error_handler(request: Request, exc: GameError):
+    return JSONResponse(status_code=exc.status_code, content={"detail": {"code": exc.code}})
 
 app.add_middleware(
     CORSMiddleware,
@@ -742,31 +863,459 @@ def _build_system_prompt(base_prompt: str, char_setting: str, settings: dict) ->
     return "\n\n".join(parts)
 
 
+# ══════════════════════════════════════════════════════
+#  キャラクター長期記憶 / 関係性 (memory/<キャラ名>.json)
+# ══════════════════════════════════════════════════════
+
+from datetime import datetime as _datetime
+
+MEMORY_DIR          = "memory"
+MEMORY_MAX_FACTS    = 40   # ユーザーに関する事実の上限
+MEMORY_MAX_EPISODES = 20   # エピソード要約の上限
+MEMORY_MAX_PROMISES = 10   # 約束の上限
+SESSION_GAP_MINUTES = 30   # この分数以上空いたら新しい会話(セッション)とみなす
+
+_memory_file_lock   = threading.Lock()   # ファイル読み書きの排他
+_memory_update_lock = threading.Lock()   # LLM抽出処理の直列化
+_memory_updating: set = set()            # 抽出中のキャラキー
+
+# (親密度の下限, 段階名, 振る舞いのヒント)
+RELATIONSHIP_STAGES = [
+    (0,  "まだ手探り",     "相手のことをまだよく知らない。少し距離を保ち、様子をうかがいながら話す。踏み込んだ話や甘えは控えめ。"),
+    (20, "打ち解けてきた", "気軽に話せるようになってきた。冗談や本音が少しずつ出る。相手の話を覚えていて時々持ち出す。"),
+    (45, "気心の知れた仲", "遠慮が減り、自分の話や弱みも見せる。相手の癖や好みを踏まえてからかったり気遣ったりする。"),
+    (70, "特別な相手",     "強い信頼と愛着がある。素の自分で接し、相手の機嫌や小さな変化に敏感に反応する。沈黙も気にしない。"),
+]
+
+
+def _memory_key(char_name: str) -> str:
+    """キャラ名からメモリファイル名に使う安全なキーを作る"""
+    name = (char_name or "").replace(" (音声なし)", "").strip()
+    name = re.sub(r'[\\/:*?"<>|]', '_', name)
+    return name or "unknown"
+
+
+def _memory_path(char_name: str) -> str:
+    return os.path.join(MEMORY_DIR, _memory_key(char_name) + ".json")
+
+
+def _default_memory(char_name: str) -> dict:
+    return {
+        "char_name":            _memory_key(char_name),
+        "relationship_enabled": False,  # キャラ設定: 関係性の変化を有効にする (既定: 無効)
+        "user_facts":           [],     # ユーザーに関する事実
+        "episodes":             [],     # {"date": "YYYY-MM-DD", "summary": "..."}
+        "promises":             [],     # 約束・次に話すこと
+        "affinity":             10,     # 親密度 0〜100
+        "relationship_note":    "",     # キャラ視点のユーザーへの印象
+        "sessions":             0,      # 会話(セッション)回数
+        "turns":                0,      # 記憶対象になったユーザー発言の累計
+        "last_seen":            None,   # 最後に会話した日時 (ISO)
+    }
+
+
+def load_memory(char_name: str) -> dict:
+    path = _memory_path(char_name)
+    mem  = _default_memory(char_name)
+    with _memory_file_lock:
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    saved = json.load(f)
+                if isinstance(saved, dict):
+                    mem.update({k: v for k, v in saved.items() if k in mem})
+            except Exception as e:
+                print(f"[Memory] Failed to load {path}: {e}")
+    return mem
+
+
+def save_memory(char_name: str, mem: dict) -> None:
+    """アトミック書き込み (save_settings と同方式)"""
+    os.makedirs(MEMORY_DIR, exist_ok=True)
+    path = _memory_path(char_name)
+    with _memory_file_lock:
+        fd, tmp_path = tempfile.mkstemp(dir=MEMORY_DIR, suffix=".tmp", prefix="mem_")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(mem, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, path)
+        except Exception:
+            try: os.unlink(tmp_path)
+            except OSError: pass
+            raise
+
+
+def reset_memory(char_name: str) -> dict:
+    """記憶を初期状態に戻す。キャラ設定(relationship_enabled)は保持する"""
+    old = load_memory(char_name)
+    mem = _default_memory(char_name)
+    mem["relationship_enabled"] = bool(old.get("relationship_enabled", False))
+    save_memory(char_name, mem)
+    return mem
+
+
+def set_relationship_enabled(char_name: str, enabled: bool) -> None:
+    mem = load_memory(char_name)
+    mem["relationship_enabled"] = bool(enabled)
+    save_memory(char_name, mem)
+
+
+def relationship_stage(affinity: int) -> tuple[str, str]:
+    """親密度から (段階名, 振る舞いヒント) を返す"""
+    stage = RELATIONSHIP_STAGES[0]
+    for s in RELATIONSHIP_STAGES:
+        if affinity >= s[0]:
+            stage = s
+    return stage[1], stage[2]
+
+
+def _time_of_day(now: _datetime) -> str:
+    h = now.hour
+    if 4 <= h < 7:   return "早朝"
+    if 7 <= h < 11:  return "朝"
+    if 11 <= h < 14: return "昼"
+    if 14 <= h < 17: return "午後"
+    if 17 <= h < 19: return "夕方"
+    if 19 <= h < 23: return "夜"
+    return "深夜"
+
+
+def _format_now(now: _datetime) -> str:
+    wd = "月火水木金土日"[now.weekday()]
+    return f"{now.year}年{now.month}月{now.day}日({wd}) {now.hour}時{now.minute:02d}分 ({_time_of_day(now)})"
+
+
+def _elapsed_text(last_seen_iso, now: _datetime) -> str:
+    """前回会話からの経過を自然な日本語で返す"""
+    if not last_seen_iso:
+        return "初めての会話"
+    try:
+        last = _datetime.fromisoformat(last_seen_iso)
+    except Exception:
+        return ""
+    delta = now - last
+    mins  = int(delta.total_seconds() // 60)
+    if mins < SESSION_GAP_MINUTES: return "さっきまで話していた続き"
+    if mins < 180:                 return f"{mins // 60 or 1}時間ほど前にも話した"
+    if delta.days < 1:             return "今日すでに一度話している"
+    if delta.days == 1:            return "昨日ぶり"
+    if delta.days < 7:             return f"{delta.days}日ぶり"
+    if delta.days < 30:            return f"{delta.days // 7}週間ぶり"
+    if delta.days < 365:           return f"{delta.days // 30}か月ぶり"
+    return "1年以上ぶり"
+
+
+def _build_context_block(settings: dict) -> str:
+    """system プロンプト末尾に付ける「現在の状況 / 記憶 / 関係性」ブロックを組み立てる"""
+    now   = _datetime.now()
+    lines = ["# 現在の状況", f"- 現在の日時: {_format_now(now)}"]
+
+    if not settings.get("memory_enabled", True) or not state.selected:
+        return "\n".join(lines)
+
+    mem     = load_memory(state.selected["name"])
+    sctx    = state.session_ctx or {}
+    elapsed = sctx.get("elapsed") or _elapsed_text(mem.get("last_seen"), now)
+    sess    = int(mem.get("sessions", 0))
+    if elapsed == "初めての会話" or (sess <= 1 and int(mem.get("turns", 0)) == 0):
+        lines.append("- ユーザーとの会話: これが初めての会話。")
+    else:
+        lines.append(f"- ユーザーとの会話: {sess}回目。{elapsed}。")
+
+    facts    = [f for f in mem.get("user_facts", []) if f]
+    episodes = mem.get("episodes", [])[-6:]
+    promises = [p for p in mem.get("promises", []) if p]
+
+    if facts or episodes or promises:
+        lines.append("")
+        lines.append("# ユーザーについての記憶(会話の中で自然に活かす。列挙したり「覚えてるよ」と確認したりしない)")
+        for f in facts:
+            lines.append(f"- {f}")
+        if episodes:
+            lines.append("## 最近の会話で起きたこと")
+            for ep in episodes:
+                lines.append(f"- {ep.get('date', '')}: {ep.get('summary', '')}".rstrip())
+        if promises:
+            lines.append("## 約束・次に話そうと言っていたこと")
+            for p in promises:
+                lines.append(f"- {p}")
+
+    if mem.get("relationship_enabled"):
+        affinity    = int(mem.get("affinity", 10))
+        stage, hint = relationship_stage(affinity)
+        lines.append("")
+        lines.append("# 関係性(【ペルソナ設定】の関係を土台に、今の距離感として反映する)")
+        lines.append(f"- 今の段階: {stage} (親密度 {affinity}/100)")
+        lines.append(f"- 距離感の目安: {hint}")
+        if mem.get("relationship_note"):
+            lines.append(f"- あなたが相手に抱いている印象: {mem['relationship_note']}")
+    return "\n".join(lines)
+
+
+def _begin_session(char_name: str, settings: dict, private: bool = False) -> None:
+    """キャラ選択時に呼ぶ。前回からの経過を記録し、必要ならセッション数を増やす。
+    private=True (プライベートモード) のときはファイルを更新しない"""
+    state.session_ctx = {}
+    if not settings.get("memory_enabled", True):
+        return
+    now     = _datetime.now()
+    mem     = load_memory(char_name)
+    elapsed = _elapsed_text(mem.get("last_seen"), now)
+    new_session = True
+    if mem.get("last_seen"):
+        try:
+            gap = now - _datetime.fromisoformat(mem["last_seen"])
+            new_session = gap.total_seconds() >= SESSION_GAP_MINUTES * 60
+        except Exception:
+            pass
+    if not private:
+        if new_session:
+            mem["sessions"] = int(mem.get("sessions", 0)) + 1
+        mem["last_seen"] = now.isoformat(timespec="seconds")
+        save_memory(char_name, mem)
+    state.session_ctx = {"elapsed": elapsed, "new_session": new_session}
+
+
+def _touch_memory_turn(char_name: str) -> None:
+    """記憶対象の1往復が完了したときに呼ぶ (最終会話日時・発言数を更新)"""
+    try:
+        mem = load_memory(char_name)
+        mem["turns"]     = int(mem.get("turns", 0)) + 1
+        mem["last_seen"] = _datetime.now().isoformat(timespec="seconds")
+        save_memory(char_name, mem)
+    except Exception as e:
+        print(f"[Memory] touch failed: {e}")
+
+
+def _greeting_instruction(settings: dict) -> str:
+    """会話開始時の挨拶指示。時間帯と前回からの経過に合わせて変える"""
+    now  = _datetime.now()
+    base = (f"会話開始時の最初の一言をください。今は{_time_of_day(now)}です。"
+            "挨拶だけで終わらず、今の自分の様子や気分、ふと思ったことをひとこと添えて、"
+            "自然に話しかけてください。1〜2文。")
+    if not settings.get("memory_enabled", True):
+        return base
+    elapsed = (state.session_ctx or {}).get("elapsed", "")
+    if elapsed == "初めての会話":
+        return base + "相手とはまだ知り合ったばかりなので、距離感に気をつけて。"
+    if elapsed == "さっきまで話していた続き":
+        return base + "さっきまで話していた続きなので、改めての挨拶は不要です。"
+    if elapsed:
+        return base + f"相手と話すのは{elapsed}です。それを踏まえた一言にしてください。記憶にあることに触れてもかまいません。"
+    return base
+
+
+# ── LLM による記憶抽出 ──────────────────────────────────────────────
+
+_MEMORY_EXTRACT_PROMPT = """あなたは会話ログを読み、キャラクターが相手(ユーザー)について覚えておくべきことを整理する係です。
+キャラクター自身の発言や設定は記憶の対象ではありません。ユーザーについて分かったことだけを扱います。
+
+次のJSONオブジェクトだけを出力してください。説明文やコードブロックは不要です。
+{
+  "new_user_facts": ["ユーザー本人に関する新しい事実(名前・呼び方・好き嫌い・仕事や学校・家族・住んでいる場所・近況など)。既知の事実と重複するものは含めない。なければ空配列"],
+  "episode_summary": "今回の会話で起きたことの要約(1〜2文、日本語)。特筆すべきことがなければ空文字",
+  "promises": ["約束したこと・次に話そうと言ったこと。なければ空配列"],
+  "resolved_promises": ["既存の約束のうち果たされた・不要になったもの(既存の文言をそのまま)。なければ空配列"],
+  "affinity_delta": 0,
+  "relationship_note": "キャラクターの視点で見た、ユーザーへの今の印象(1〜2文)。前回の印象を踏まえて更新する"
+}
+
+affinity_delta は -5〜5 の整数。楽しい・心が通った・相手が自分を気遣ってくれた会話は +1〜+5、
+冷たい・そっけない・不快な会話は -1〜-5、普通の雑談は 0〜+1。"""
+
+
+def _extract_json(text: str) -> dict | None:
+    """LLM出力からJSONオブジェクトを取り出す (コードブロック・前後の説明文に耐える)"""
+    if not text:
+        return None
+    text = re.sub(r"```(?:json)?", "", text)
+    m = re.search(r"\{.*\}", text, re.S)
+    if not m:
+        return None
+    try:
+        obj = json.loads(m.group(0))
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        return None
+
+
+def _as_str_list(v) -> list[str]:
+    if isinstance(v, str):
+        v = [v]
+    if not isinstance(v, list):
+        return []
+    return [str(x).strip() for x in v if str(x).strip()]
+
+
+def _run_memory_update(char_name: str, transcript: list[dict]) -> None:
+    """バックグラウンドスレッドで実行: transcript から記憶を抽出して保存する"""
+    key = _memory_key(char_name)
+    with _memory_update_lock:
+        _memory_updating.add(key)
+        try:
+            mem         = load_memory(char_name)
+            known_facts = list(mem.get("user_facts", []))
+            convo = "\n".join(
+                f"{'ユーザー' if m['role'] == 'user' else 'キャラクター'}: {m['content']}"
+                for m in transcript if m.get("content", "").strip()
+            )
+            user_msg = (
+                f"【キャラクター名】{key}\n"
+                "【既知のユーザー情報】\n" + ("\n".join(f"- {f}" for f in known_facts) or "- (なし)") + "\n"
+                "【既存の約束】\n" + ("\n".join(f"- {p}" for p in mem.get("promises", [])) or "- (なし)") + "\n"
+                f"【前回までの印象】{mem.get('relationship_note') or '(なし)'}\n\n"
+                f"【会話ログ】\n{convo}"
+            )
+            resp = client.chat.completions.create(
+                model=LLM_MODEL or "local-model",
+                messages=[
+                    {"role": "system", "content": _MEMORY_EXTRACT_PROMPT},
+                    {"role": "user",   "content": user_msg},
+                ],
+                stream=False,
+            )
+            raw  = (resp.choices[0].message.content or "").strip()
+            data = _extract_json(raw)
+            if data is None:
+                print(f"[Memory] JSON parse failed for {key}: {raw[:120]!r}")
+                return
+
+            # 事実 (重複除去・上限)
+            new_facts = _as_str_list(data.get("new_user_facts"))
+            facts = known_facts
+            for f in new_facts:
+                if f not in facts:
+                    facts.append(f)
+            mem["user_facts"] = facts[-MEMORY_MAX_FACTS:]
+
+            # エピソード
+            summary = str(data.get("episode_summary") or "").strip()
+            if summary:
+                today = _datetime.now().strftime("%Y-%m-%d")
+                mem.setdefault("episodes", []).append({"date": today, "summary": summary})
+                mem["episodes"] = mem["episodes"][-MEMORY_MAX_EPISODES:]
+
+            # 約束
+            resolved = set(_as_str_list(data.get("resolved_promises")))
+            promises = [p for p in mem.get("promises", []) if p not in resolved]
+            for p in _as_str_list(data.get("promises")):
+                if p not in promises:
+                    promises.append(p)
+            mem["promises"] = promises[-MEMORY_MAX_PROMISES:]
+
+            # 親密度・印象 (キャラ設定で関係性の変化が有効なときのみ)
+            delta = 0
+            if mem.get("relationship_enabled"):
+                try:
+                    delta = int(data.get("affinity_delta", 0))
+                except (TypeError, ValueError):
+                    delta = 0
+                delta = max(-5, min(5, delta))
+                mem["affinity"] = max(0, min(100, int(mem.get("affinity", 10)) + delta))
+                note = str(data.get("relationship_note") or "").strip()
+                if note:
+                    mem["relationship_note"] = note[:200]
+
+            save_memory(char_name, mem)
+            print(f"[Memory] Updated {key}: +{len(new_facts)} facts, affinity {delta:+d} -> {mem['affinity']}")
+        except Exception as e:
+            print(f"[Memory] Update failed for {key}: {e}")
+        finally:
+            _memory_updating.discard(key)
+
+
+def _schedule_memory_update(char_name: str | None = None) -> bool:
+    """mem_pending を取り出してバックグラウンドで記憶更新を開始する。開始したら True"""
+    name = char_name or (state.selected.get("name") if state.selected else None)
+    transcript = list(state.mem_pending)
+    state.mem_pending    = []
+    state.mem_user_turns = 0
+    if not name or not transcript:
+        return False
+    threading.Thread(target=_run_memory_update, args=(name, transcript), daemon=True).start()
+    return True
+
+
+def _record_memory_turn(user_text: str, assistant_text: str, settings: dict) -> None:
+    """記憶対象の1往復を mem_pending に積み、間隔に達したら抽出を開始する"""
+    if not settings.get("memory_enabled", True) or not state.selected:
+        return
+    if not user_text.strip() or not assistant_text.strip():
+        return
+    state.mem_pending.append({"role": "user",      "content": user_text})
+    state.mem_pending.append({"role": "assistant", "content": assistant_text})
+    state.mem_user_turns += 1
+    _touch_memory_turn(state.selected["name"])
+    try:
+        interval = max(1, min(30, int(settings.get("memory_update_interval", 6))))
+    except (TypeError, ValueError):
+        interval = 6
+    if state.mem_user_turns >= interval:
+        _schedule_memory_update()
+
+
+def _build_llm_messages(settings: dict) -> list[dict]:
+    """LLMへ渡すメッセージ列を組み立てる。
+    system = 保持中のシステムプロンプト + 現在の状況/記憶/関係性ブロック
+    履歴  = history_max_messages で直近に絞る (0=無制限)"""
+    if not state.memory:
+        return []
+    has_sys     = state.memory[0].get("role") == "system"
+    sys_content = state.memory[0]["content"] if has_sys else ""
+    history     = state.memory[1:] if has_sys else list(state.memory)
+
+    ctx = _build_context_block(settings)
+    if ctx:
+        sys_content = (sys_content + "\n\n" + ctx).strip()
+
+    try:
+        max_msgs = int(settings.get("history_max_messages", 30))
+    except (TypeError, ValueError):
+        max_msgs = 30
+    if max_msgs > 0 and len(history) > max_msgs:
+        history = history[-max_msgs:]
+
+    return [{"role": "system", "content": sys_content}] + history
+
+
 # --- キャラクター選択 ---
 class SelectRequest(BaseModel):
     index: int
+    private: bool = False   # True=プライベートモード (記憶ファイルを更新しない)
 
 @app.post("/select")
-def select_character(req: SelectRequest):
+def select_character(req: SelectRequest, request: Request):
     state.chars = get_dynamic_characters()
     if req.index < 0 or req.index >= len(state.chars):
         raise HTTPException(400, "Invalid index")
 
-    state.selected = state.chars[req.index]
+    prev_name = state.selected.get("name") if state.selected else None
+    selected = state.chars[req.index]
 
     base_prompt = ""
     if os.path.exists(BASE_PROMPT_FILE):
         with open(BASE_PROMPT_FILE, "r", encoding="utf-8") as f:
             base_prompt = f.read().strip()
 
-    with open(state.selected["prompt"], "r", encoding="utf-8") as f:
+    with open(selected["prompt"], "r", encoding="utf-8") as f:
         char_setting = f.read().strip()
 
     # システムプロンプトの合成
     settings = load_settings()
     sys_prompt_text = _build_system_prompt(base_prompt, char_setting, settings)
 
+    conversation = _conversation_transition(request)
+    state.selected = selected
+
     state.memory = [{"role": "system", "content": sys_prompt_text}]
+
+    # 前のキャラの未反映の会話を記憶に書き出し、新しいキャラのセッションを開始する
+    if prev_name:
+        _schedule_memory_update(prev_name)
+    else:
+        state.mem_pending    = []
+        state.mem_user_turns = 0
+    _begin_session(state.selected["name"], settings, private=req.private)
 
     # キャラ選択のたびにEmbedding対応を再確認（TTSサーバーが再起動された可能性があるため）
     _refresh_embedding_support()
@@ -781,11 +1330,11 @@ def select_character(req: SelectRequest):
         else:
             embedding_warning = "APIがSpeaker Embedding非対応です。"
 
-    return {"status": "ok", "name": state.selected["name"], "embedding_warning": embedding_warning}
+    return {"status": "ok", "name": state.selected["name"], "embedding_warning": embedding_warning, **conversation}
 
 
 @app.post("/update_system_prompt")
-def update_system_prompt():
+def update_system_prompt(request: Request):
     """システムプロンプトを再構築し、会話履歴をリセットする。
     LLMへ渡す履歴は system メッセージのみになるため文脈の汚染を防ぐ。
     UI側のログ表示はフロントエンドが保持するため見た目は変化しない。"""
@@ -798,6 +1347,8 @@ def update_system_prompt():
     settings = load_settings()
     sys_prompt_text = _build_system_prompt("", char_setting, settings)
 
+    conversation = _conversation_transition(request)
+
     # 会話履歴をリセット。ただし最後のキャラ発言は保持して
     # 自動応答が直後にトリガーされても /user_reply_gen が機能するようにする。
     last_assistant = next(
@@ -807,7 +1358,7 @@ def update_system_prompt():
     if last_assistant:
         state.memory.append(last_assistant)
 
-    return {"status": "ok"}
+    return {"status": "ok", **conversation}
 
 
 @app.get("/status")
@@ -820,6 +1371,7 @@ async def get_status():
 class ChatRequest(BaseModel):
     message: str
     tts_enabled: bool = True
+    memorize: bool = True   # False=自動応答・シナリオ・プライベートモード (記憶に反映しない)
 
 
 # --- 補助関数 ---
@@ -926,7 +1478,7 @@ def clean_for_tts(text: str) -> str:
     return s.strip()
 
 
-def stream_llm_with_tts(messages: list, tts_enabled: bool):
+def stream_llm_with_tts(messages: list, tts_enabled: bool, memorize_user_text: str | None = None):
     req_id = f"req_{int(time.time() * 1000)}_{threading.get_ident() % 10000}"
 
     with finished_audios_lock:
@@ -1045,6 +1597,8 @@ def stream_llm_with_tts(messages: list, tts_enabled: bool):
                             enqueue_tts(s, tts_voice_path, req_id, tts_embedding_path)
 
         state.memory.append({"role": "assistant", "content": full_answer})
+        if memorize_user_text is not None:
+            _record_memory_turn(memorize_user_text, full_answer, settings)
 
         # LLM完了を即通知。残音声があれば req_id をフロントに渡してポーリングさせる
         with finished_audios_lock:
@@ -1085,31 +1639,49 @@ def stream_llm_with_tts(messages: list, tts_enabled: bool):
 
 
 @app.post("/chat")
-def chat(req: ChatRequest):
+def chat(req: ChatRequest, request: Request):
     if not state.selected:
         raise HTTPException(400, "キャラクターが選択されていません")
 
+    token = _reserve_normal_generation(request)
     user_text = req.message if req.message.strip() else " "
     state.memory.append({"role": "user", "content": user_text})
 
-    return StreamingResponse(
-        stream_llm_with_tts(state.memory, req.tts_enabled),
-        media_type="text/event-stream"
-    )
+    try:
+        settings = load_settings()
+        epoch, revision = _conversation_snapshot()
+        stream = stream_llm_with_tts(
+            _build_llm_messages(settings), req.tts_enabled,
+            memorize_user_text=user_text if req.memorize else None,
+        )
+        return StreamingResponse(
+            _tracked_normal_stream(stream, token),
+            media_type="text/event-stream",
+            headers={"X-Conversation-Epoch": epoch, "X-Normal-Revision": str(revision)},
+        )
+    except Exception:
+        _release_normal_generation(token)
+        raise
 
 
 @app.get("/initial_greeting")
-def initial_greeting(tts_enabled: bool = True):
+def initial_greeting(request: Request, tts_enabled: bool = True):
     if not state.selected:
         raise HTTPException(400, "Character not selected")
-        
-    prompt = "会話開始時の最初の一言として、短く自然な挨拶をしてください。"
-    state.memory.append({"role": "user", "content": prompt})
 
-    return StreamingResponse(
-        stream_llm_with_tts(state.memory, tts_enabled),
-        media_type="text/event-stream"
-    )
+    token = _reserve_normal_generation(request)
+    try:
+        settings = load_settings()
+        state.memory.append({"role": "user", "content": _greeting_instruction(settings)})
+        epoch, revision = _conversation_snapshot()
+        return StreamingResponse(
+            _tracked_normal_stream(stream_llm_with_tts(_build_llm_messages(settings), tts_enabled), token),
+            media_type="text/event-stream",
+            headers={"X-Conversation-Epoch": epoch, "X-Normal-Revision": str(revision)},
+        )
+    except Exception:
+        _release_normal_generation(token)
+        raise
 
 
 @app.get("/audio_poll/{req_id}", name="audio_poll_get")
@@ -1142,6 +1714,7 @@ def audio_poll(req_id: str):
 @app.on_event("startup")
 def on_startup():
     threading.Thread(target=open_browser, daemon=True).start()
+    threading.Thread(target=_game_lease_reaper, daemon=True).start()
 
 
 # --- 自動応答: ユーザー役返答生成 ---
@@ -1155,11 +1728,19 @@ _DEFAULT_USER_REPLY_PROMPT = (
 )
 
 @app.post("/user_reply_gen")
-def user_reply_gen():
+def user_reply_gen(request: Request):
     """自動応答用: ユーザー役の返答テキストを生成して返す"""
     if not state.selected:
         raise HTTPException(400, "キャラクターが選択されていません")
 
+    token = _reserve_normal_generation(request, bump_revision=False)
+    try:
+        return _user_reply_gen_reserved()
+    finally:
+        _release_normal_generation(token)
+
+
+def _user_reply_gen_reserved():
     settings = load_settings()
     custom_prompt = (settings.get("auto_reply_user_prompt") or "").strip()
     user_prompt = (
@@ -1196,7 +1777,7 @@ def user_reply_gen():
         text = (resp.choices[0].message.content or "").strip()
         return {"text": text}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, "自動応答の生成に失敗しました") from e
 
 
 # --- 直接TTS (LLMを通さずTTSだけ実行) ---
@@ -1344,7 +1925,15 @@ class DirectTTSRequest(BaseModel):
     text: str
 
 @app.post("/tts_direct")
-def tts_direct(req: DirectTTSRequest):
+def tts_direct(req: DirectTTSRequest, request: Request):
+    token = _reserve_normal_generation(request, bump_revision=False)
+    try:
+        return _tts_direct_reserved(req)
+    finally:
+        _release_normal_generation(token)
+
+
+def _tts_direct_reserved(req: DirectTTSRequest):
     """入力テキストをそのままTTSに渡して音声を返す"""
     if not state.selected:
         raise HTTPException(400, "キャラクターが選択されていません")
@@ -1386,11 +1975,280 @@ def get_settings():
 @app.post("/settings")
 def post_settings(data: dict = Body(...)):
     """設定を保存する（ロック付き read-modify-write でレースコンディションを防ぐ）"""
+    previous_auto_save = True
+    updated_auto_save = True
     with _settings_lock:
         current = load_settings()
+        previous_auto_save = current.get("log_auto_save", True) is not False
         current.update(data)
+        updated_auto_save = current.get("log_auto_save", True) is not False
         save_settings(current)
+    if not previous_auto_save and updated_auto_save:
+        _game_engine.save_current_log()
     return JSONResponse({"status": "ok"})
+
+
+# ══════════════════════════════════════════════════════
+#  ゲームモード API — 通常チャット・通常記憶から独立
+# ══════════════════════════════════════════════════════
+class _StrictGameModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class GameStartRequest(_StrictGameModel):
+    page_id: str
+    conversation_epoch: str
+    normal_revision: int
+    request_id: str
+
+
+class GameInput(_StrictGameModel):
+    kind: str
+    interaction_id: str
+    text: str | None = None
+    choice_id: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_shape(self):
+        if len(self.interaction_id) > 128:
+            raise ValueError("interaction_id is too long")
+        if self.kind == "text":
+            if self.text is None or self.choice_id is not None or len(self.text) > 2000:
+                raise ValueError("invalid text input")
+        elif self.kind == "choice":
+            if not self.choice_id or self.text is not None or len(self.choice_id) > 128:
+                raise ValueError("invalid choice input")
+        else:
+            raise ValueError("invalid input kind")
+        return self
+
+
+class GameTurnRequest(_StrictGameModel):
+    page_id: str
+    conversation_epoch: str
+    revision: int
+    request_id: str
+    input: GameInput
+
+
+class GameSuspendRequest(_StrictGameModel):
+    page_id: str
+    revision: int
+    request_id: str
+
+
+class GameResumeRequest(_StrictGameModel):
+    page_id: str
+    conversation_epoch: str
+    revision: int
+    request_id: str
+
+
+class GameCloseRequest(_StrictGameModel):
+    page_id: str
+    request_id: str
+    reason: str = "user"
+
+
+class GameClosePageRequest(_StrictGameModel):
+    page_id: str
+    request_id: str
+
+
+class GameLeaseRequest(_StrictGameModel):
+    page_id: str
+
+
+class GameAudioRequest(_StrictGameModel):
+    page_id: str
+    event_id: str
+    revision: int
+    request_id: str
+    retry: bool = False
+
+
+class GameLogExportRequest(_StrictGameModel):
+    page_id: str
+
+
+class ConversationViewResetRequest(_StrictGameModel):
+    page_id: str
+    conversation_epoch: str
+    normal_revision: int
+    request_id: str
+
+
+def _capture_game_seed() -> dict:
+    if not state.selected or not state.memory:
+        raise HTTPException(400, detail={"code": "CHARACTER_NOT_SELECTED"})
+    settings = load_settings()
+    # This renders pre-game long-term memory only when memory_enabled is on.
+    system_messages = _build_llm_messages(settings)
+    system_prompt = system_messages[0]["content"] if system_messages else state.memory[0]["content"]
+    greeting = _greeting_instruction(settings)
+    history = [
+        {"role": item.get("role"), "content": item.get("content", "")}
+        for item in state.memory[1:]
+        if item.get("role") in {"user", "assistant"}
+        and item.get("content")
+        and not (item.get("role") == "user" and item.get("content") == greeting)
+    ]
+    history = history[-24:]
+    while len(json.dumps(history, ensure_ascii=False).encode("utf-8")) > 24_000 and len(history) > 2:
+        del history[:2]
+    long_memory = load_memory(state.selected["name"]) if settings.get("memory_enabled", True) else None
+    selected = copy.deepcopy(state.selected)
+    has_embedding = bool(selected.get("has_embedding") and tts_supports_embedding)
+    has_tts = bool(selected.get("has_voice") or has_embedding or settings.get("no_voice_mode") == "default_voice")
+    return {
+        "character_id": os.path.abspath(selected.get("prompt", selected.get("name", ""))),
+        "character_name": selected.get("name", ""),
+        "system_prompt": system_prompt,
+        "normal_history": history,
+        "long_term_memory": long_memory,
+        "memory_enabled": bool(settings.get("memory_enabled", True)),
+        "started_context": {"time": time.strftime("%Y-%m-%d %H:%M:%S")},
+        "voice": {
+            "voice_path": selected.get("voice_path") if selected.get("has_voice") else None,
+            "embedding_path": selected.get("embedding_path") if has_embedding else None,
+            "tts_available": has_tts,
+        },
+    }
+
+
+def _game_lease_reaper():
+    while True:
+        time.sleep(60)
+        _game_engine.cleanup_expired()
+
+
+@app.get("/conversation/status")
+def conversation_status(request: Request):
+    page_id = request.headers.get("X-Bridge-Page-Id")
+    activity = _game_engine.activity()
+    with _conversation_gate:
+        return {
+            "conversation_epoch": _conversation_epoch,
+            "normal_revision": _normal_revision,
+            "busy": bool(_normal_generations) or activity in {"starting", "resolving"},
+            "game_active": activity in {"starting", "active", "resolving"},
+            "game_suspended": activity == "suspended" and bool(_game_engine.current(page_id or "")),
+        }
+
+
+@app.post("/conversation/view-reset")
+def conversation_view_reset(req: ConversationViewResetRequest):
+    now = time.time()
+    for key, (_, _, expiry) in list(_view_reset_records.items()):
+        if expiry <= now:
+            _view_reset_records.pop(key, None)
+    record_key = (req.page_id, req.request_id)
+    payload_hash = json.dumps(req.model_dump(), sort_keys=True, ensure_ascii=False)
+    with _conversation_gate:
+        prior = _view_reset_records.get(record_key)
+        if prior:
+            if prior[0] != payload_hash:
+                raise HTTPException(409, detail={"code": "REQUEST_ID_REUSED"})
+            return prior[1]
+        if req.conversation_epoch != _conversation_epoch or req.normal_revision != _normal_revision:
+            raise HTTPException(409, detail={"code": "STALE_CONVERSATION"})
+        result = _conversation_transition(page_id=req.page_id, epoch=req.conversation_epoch, view_reset=True)
+        _view_reset_records[record_key] = (payload_hash, result, now + 300)
+        return result
+
+
+@app.post("/game/start")
+def game_start(req: GameStartRequest):
+    return _game_engine.start(
+        page_id=req.page_id,
+        conversation_epoch=req.conversation_epoch,
+        normal_revision=req.normal_revision,
+        request_id=req.request_id,
+        seed=_capture_game_seed,
+    )
+
+
+@app.post("/game/{game_id}/turn")
+def game_turn(game_id: str, req: GameTurnRequest):
+    return _game_engine.submit(
+        game_id,
+        page_id=req.page_id,
+        conversation_epoch=req.conversation_epoch,
+        revision=req.revision,
+        request_id=req.request_id,
+        request_input=req.input.model_dump(exclude_none=True),
+    )
+
+
+@app.get("/game/{game_id}")
+def game_view(game_id: str, page_id: str):
+    return _game_engine.view(game_id, page_id)
+
+
+@app.get("/game/{game_id}/requests/{request_id}")
+def game_request_result(game_id: str, request_id: str, page_id: str):
+    return _game_engine.request_result(game_id, page_id, request_id)
+
+
+@app.post("/game/{game_id}/suspend")
+def game_suspend(game_id: str, req: GameSuspendRequest):
+    return _game_engine.suspend(game_id, page_id=req.page_id, revision=req.revision, request_id=req.request_id)
+
+
+@app.post("/game/{game_id}/resume")
+def game_resume(game_id: str, req: GameResumeRequest):
+    return _game_engine.resume(
+        game_id, page_id=req.page_id, conversation_epoch=req.conversation_epoch,
+        revision=req.revision, request_id=req.request_id,
+    )
+
+
+@app.post("/game/{game_id}/close", status_code=204)
+def game_close(game_id: str, req: GameCloseRequest):
+    _game_engine.close(game_id, page_id=req.page_id, request_id=req.request_id)
+    return Response(status_code=204)
+
+
+@app.post("/game/close-page", status_code=204)
+def game_close_page(req: GameClosePageRequest):
+    _game_engine.close_page(req.page_id)
+    return Response(status_code=204)
+
+
+@app.post("/game/{game_id}/lease", status_code=204)
+def game_lease(game_id: str, req: GameLeaseRequest):
+    _game_engine.lease(game_id, req.page_id)
+    return Response(status_code=204)
+
+
+@app.post("/game/{game_id}/audio")
+def game_audio(game_id: str, req: GameAudioRequest):
+    if not load_settings().get("tts_enabled", True):
+        raise HTTPException(400, detail={"code": "TTS_DISABLED"})
+    record = _game_engine.audio_payload(
+        game_id, req.page_id, req.event_id, req.revision, req.request_id, retry=req.retry,
+    )
+    req_id = record["audio_req_id"]
+    if not record.get("already_started"):
+        with finished_audios_lock:
+            finished_audios.setdefault(req_id, {"audios": [], "queued": 0, "completed": 0})
+        try:
+            enqueue_tts(record["text"], record["voice_path"], req_id, record["embedding_path"])
+        except Exception as exc:
+            with finished_audios_lock:
+                finished_audios.pop(req_id, None)
+            raise HTTPException(502, detail={"code": "TTS_FAILED"}) from exc
+    return {"req_id": req_id}
+
+
+@app.post("/game/{game_id}/log/export")
+def game_log_export(game_id: str, req: GameLogExportRequest):
+    content, filename = _game_engine.export_log(game_id, req.page_id)
+    return Response(
+        content=content,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # --- プロンプトファイル一覧 ---
@@ -1932,6 +2790,7 @@ async def create_character(
     image: Optional[UploadFile] = File(None),
     voice: Optional[UploadFile] = File(None),
     embedding: Optional[UploadFile] = File(None),
+    relationship_enabled: str = Form("false"),   # "true"=関係性の変化を有効化
 ):
     """新規キャラクターをサブフォルダ形式で作成する"""
     safe_name = _safe_char_name(name)
@@ -1966,6 +2825,8 @@ async def create_character(
         with open(emb_path, "wb") as f:
             f.write(await embedding.read())
 
+    set_relationship_enabled(safe_name, relationship_enabled.lower() == "true")
+
     return JSONResponse({"status": "ok", "name": safe_name})
 
 
@@ -1979,6 +2840,7 @@ async def duplicate_character(
     embedding: Optional[UploadFile] = File(None),
     copy_voice: str = Form("true"),       # "false" = 複製しない（ファイルを削除）
     copy_embedding: str = Form("true"),   # "false" = 複製しない（ファイルを削除）
+    relationship_enabled: str = Form("false"),   # "true"=関係性の変化を有効化
 ):
     """既存キャラクターを複製する。name/prompt/image/voice が指定された場合はその値を使う。"""
     state.chars = get_dynamic_characters()
@@ -2069,6 +2931,9 @@ async def duplicate_character(
         if os.path.exists(p):
             os.remove(p)
 
+    # 記憶は複製しない (新しいキャラとして白紙から始める)。設定フラグのみ保存
+    set_relationship_enabled(new_name, relationship_enabled.lower() == "true")
+
     return JSONResponse({"status": "ok", "name": new_name})
 
 
@@ -2096,6 +2961,7 @@ def get_character_info(idx: int):
         "folder":         os.path.basename(os.path.dirname(char["prompt"])),
         "has_embedding":  char.get("has_embedding", False),
         "embedding_file": os.path.basename(char["embedding_path"]) if char.get("embedding_path") else None,
+        "relationship_enabled": bool(load_memory(char["name"]).get("relationship_enabled", False)),
     })
 
 
@@ -2144,6 +3010,7 @@ async def edit_character(
     image: Optional[UploadFile] = File(None),
     voice: Optional[UploadFile] = File(None),
     embedding: Optional[UploadFile] = File(None),
+    relationship_enabled: str = Form("false"),   # "true"=関係性の変化を有効化
 ):
     """既存キャラクターの名前・プロンプト・画像・音声・Embeddingを更新する"""
     state.chars = get_dynamic_characters()
@@ -2189,6 +3056,90 @@ async def edit_character(
         with open(emb_path, "wb") as f:
             f.write(await embedding.read())
 
+    set_relationship_enabled(char["name"], relationship_enabled.lower() == "true")
+
+    return JSONResponse({"status": "ok"})
+
+
+# ══════════════════════════════════════════════════════
+#  記憶 API
+# ══════════════════════════════════════════════════════
+
+def _memory_char_name(idx: int) -> str:
+    state.chars = get_dynamic_characters()
+    if idx < 0 or idx >= len(state.chars):
+        raise HTTPException(404, "キャラクターが見つかりません")
+    return state.chars[idx]["name"]
+
+
+def _memory_response(char_name: str) -> dict:
+    mem = load_memory(char_name)
+    stage, hint = relationship_stage(int(mem.get("affinity", 10)))
+    key = _memory_key(char_name)
+    is_selected = bool(state.selected) and _memory_key(state.selected["name"]) == key
+    return {
+        **mem,
+        "stage":         stage,
+        "stage_hint":    hint,
+        "updating":      key in _memory_updating,
+        "pending_turns": state.mem_user_turns if is_selected else 0,
+    }
+
+
+class MemoryUpdateRequest(BaseModel):
+    user_facts:           Optional[list] = None
+    episodes:             Optional[list] = None
+    promises:             Optional[list] = None
+    affinity:             Optional[int]  = None
+    relationship_note:    Optional[str]  = None
+    relationship_enabled: Optional[bool] = None
+
+
+@app.post("/memory/flush")
+def memory_flush():
+    """保留中の会話を今すぐ記憶に反映する (画面を閉じる時・手動更新)"""
+    started = _schedule_memory_update()
+    return JSONResponse({"status": "scheduled" if started else "nothing"})
+
+
+@app.get("/memory/{idx}")
+def get_memory(idx: int):
+    return JSONResponse(_memory_response(_memory_char_name(idx)))
+
+
+@app.post("/memory/{idx}")
+def post_memory(idx: int, req: MemoryUpdateRequest):
+    name = _memory_char_name(idx)
+    mem  = load_memory(name)
+    if req.user_facts is not None:
+        mem["user_facts"] = _as_str_list(req.user_facts)[-MEMORY_MAX_FACTS:]
+    if req.promises is not None:
+        mem["promises"] = _as_str_list(req.promises)[-MEMORY_MAX_PROMISES:]
+    if req.episodes is not None:
+        eps = []
+        for ep in req.episodes:
+            if isinstance(ep, dict) and str(ep.get("summary", "")).strip():
+                eps.append({"date": str(ep.get("date", ""))[:10], "summary": str(ep["summary"]).strip()})
+        mem["episodes"] = eps[-MEMORY_MAX_EPISODES:]
+    if req.affinity is not None:
+        mem["affinity"] = max(0, min(100, int(req.affinity)))
+    if req.relationship_note is not None:
+        mem["relationship_note"] = req.relationship_note.strip()[:200]
+    if req.relationship_enabled is not None:
+        mem["relationship_enabled"] = bool(req.relationship_enabled)
+    save_memory(name, mem)
+    return JSONResponse(_memory_response(name))
+
+
+@app.delete("/memory/{idx}")
+def delete_memory_api(idx: int):
+    """記憶をリセットする (関係性の変化の有効/無効フラグは保持)"""
+    name = _memory_char_name(idx)
+    reset_memory(name)
+    if state.selected and _memory_key(state.selected["name"]) == _memory_key(name):
+        state.mem_pending    = []
+        state.mem_user_turns = 0
+        state.session_ctx    = {}
     return JSONResponse({"status": "ok"})
 
 
@@ -2349,6 +3300,8 @@ def log_load(req: LogLoadRequest):
     path = req.filepath if req.filepath else None
     if not path:
         raise HTTPException(400, "filepath が指定されていません")
+    if os.fspath(path).lower().endswith(".game.json"):
+        raise HTTPException(400, "ゲームの閲覧用記録は会話の復元には使えません")
     if not os.path.exists(path):
         raise HTTPException(404, "ログファイルが見つかりません")
     with open(path, "r", encoding="utf-8") as f:

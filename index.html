@@ -913,6 +913,59 @@ body { background: var(--body-gradient); }
   background: var(--sidebar-bg); flex-shrink: 0;
 }
 
+/* ══════════════════════════════
+   記憶 モーダル
+══════════════════════════════ */
+#memory-backdrop {
+  display: none;
+  position: fixed; inset: 0; z-index: 300;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(4px);
+  align-items: center; justify-content: center;
+}
+#memory-backdrop.open { display: flex; }
+#memory-modal {
+  width: min(520px, 95vw);
+  max-height: 90vh;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.5);
+}
+#memory-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--header-bg);
+  flex-shrink: 0;
+}
+#memory-header .modal-title {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 13px; color: var(--accent); letter-spacing: .1em;
+}
+#memory-close {
+  background: none; border: none; cursor: pointer;
+  color: var(--muted); font-size: 18px; line-height: 1;
+  padding: 2px 6px; border-radius: 4px; transition: color .2s;
+}
+#memory-close:hover { color: var(--text); }
+#memory-body {
+  flex: 1; overflow-y: auto;
+  padding: 18px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+#memory-footer {
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px;
+  background: var(--sidebar-bg); flex-shrink: 0;
+}
+#memory-affinity { accent-color: var(--accent); }
+#memory-affinity:disabled { opacity: .4; }
+#memory-flush:disabled { opacity: .35; cursor: not-allowed; }
+
 /* キャラカードの … ボタン */
 .char-card-menu-btn {
   margin-left: auto;
@@ -1284,6 +1337,31 @@ body.no-bubble-blur .msg-bubble {
   word-break: break-all;
   white-space: pre-wrap;
 }
+/* ══════════════════════════════
+   ゲームモード表示
+══════════════════════════════ */
+#game-mode-badge {
+  display: none; flex: 0 0 auto; align-self: center;
+  color: var(--accent); font-size: 10px; letter-spacing: .06em;
+  border: 1px solid var(--border); border-radius: 999px; padding: 3px 7px;
+}
+#game-mode-badge.active { display: inline-flex; }
+#game-view { display: flex; flex-direction: column; gap: 12px; width: 100%; padding: 14px 16px 24px; box-sizing: border-box; }
+.game-narration { align-self: center; max-width: 720px; color: var(--muted); font-style: italic; text-align: center; line-height: 1.7; white-space: pre-wrap; padding: 8px 14px; }
+.game-player-event { align-self: flex-end; max-width: 78%; border-radius: 14px 14px 4px 14px; padding: 9px 13px; background: var(--accent); color: #fff; white-space: pre-wrap; overflow-wrap: anywhere; }
+.game-character-event { display: flex; align-items: flex-start; gap: 9px; max-width: min(720px, 90%); }
+.game-character-avatar { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; flex: 0 0 34px; }
+.game-character-bubble { border: 1px solid var(--border); border-radius: 4px 14px 14px; background: var(--surface); padding: 9px 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.game-character-name { color: var(--accent); font-size: 11px; margin-bottom: 4px; }
+.game-interaction { align-self: center; display: flex; flex-direction: column; gap: 7px; width: min(680px, 95%); margin: 2px 0 10px; }
+.game-interaction-prompt { color: var(--muted); text-align: center; white-space: pre-wrap; }
+.game-choice { display: flex; gap: 8px; width: 100%; text-align: left; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px; cursor: pointer; font: inherit; }
+.game-choice:hover:not(:disabled) { border-color: var(--accent); }
+.game-choice:disabled { opacity: .55; cursor: default; }
+.game-choice-number { color: var(--accent); font-weight: 700; min-width: 1.4em; }
+.game-notice, .game-working { color: var(--muted); text-align: center; font-size: 12px; }
+.log-popup-item[aria-disabled="true"] { opacity: .45; cursor: not-allowed; }
+@media (max-width: 600px) { #game-view { padding: 8px 8px 16px; } .game-player-event { max-width: 90%; } }
 </style>
 </head>
 <body>
@@ -1441,6 +1519,30 @@ body.no-bubble-blur .msg-bubble {
         </label>
       </div>
 
+      <!-- ── 記憶・関係性設定 ── -->
+      <div class="api-section-divider">記憶・関係性設定</div>
+      <div class="api-settings-group">
+        <label class="api-check-label">
+          <input type="checkbox" id="ac-memory-enabled" checked>
+          <span>キャラクターごとにユーザーを記憶する（memory/ フォルダに保存）</span>
+        </label>
+        <div class="api-field-note" style="margin-top:4px">関係性の変化はキャラクターごとの設定（作成/編集モーダル）で有効化します。</div>
+        <div class="api-field-label" style="margin-top:10px">記憶を更新する間隔</div>
+        <div class="api-field-row" style="align-items:center;gap:8px;margin-top:4px">
+          <span style="font-size:12px;color:var(--muted)">ユーザー発言</span>
+          <input class="api-field-input api-port-input" id="ac-memory-interval"
+                 type="number" min="1" max="30" value="6" style="width:64px">
+          <span style="font-size:12px;color:var(--muted)">回ごと（キャラ切替時・画面終了時にも更新）</span>
+        </div>
+        <div class="api-field-note" style="margin-top:4px">自動応答・シナリオ再生・プライベートモードの会話は記憶に反映されません。</div>
+        <div class="api-field-label" style="margin-top:10px">LLMに渡す会話履歴の上限</div>
+        <div class="api-field-row" style="align-items:center;gap:8px;margin-top:4px">
+          <input class="api-field-input api-port-input" id="ac-history-max"
+                 type="number" min="0" max="500" value="30" style="width:64px">
+          <span style="font-size:12px;color:var(--muted)">メッセージ（0=無制限）</span>
+        </div>
+      </div>
+
       <!-- ── 自動応答設定 ── -->
       <div class="api-section-divider">自動応答設定</div>
       <div class="api-settings-group">
@@ -1533,10 +1635,63 @@ body.no-bubble-blur .msg-bubble {
           <input type="file" id="ce-embedding-input" accept=".safetensors" style="display:none">
         </div>
       </div>
+      <div class="ce-field">
+        <label class="ce-label">記憶・関係性</label>
+        <label class="ce-copy-label">
+          <input type="checkbox" id="ce-relationship">
+          <span>関係性の変化を有効にする（会話の内容に応じて親密度と距離感が変わる）</span>
+        </label>
+      </div>
     </div>
     <div id="char-edit-footer">
       <button class="modal-btn secondary" id="char-edit-cancel">キャンセル</button>
       <button class="modal-btn primary" id="char-edit-ok">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════
+     記憶 モーダル
+══════════════════════════════ -->
+<div id="memory-backdrop">
+  <div id="memory-modal">
+    <div id="memory-header">
+      <span class="modal-title" id="memory-title">🧠 MEMORY</span>
+      <button id="memory-close">✕</button>
+    </div>
+    <div id="memory-body">
+      <div id="memory-stats" class="api-field-note"></div>
+      <div class="ce-field">
+        <label class="ce-label">関係性 — <span id="memory-stage-label"></span></label>
+        <div style="display:flex;align-items:center;gap:10px">
+          <input type="range" id="memory-affinity" min="0" max="100" value="10" style="flex:1">
+          <span id="memory-affinity-val" style="font-family:'Share Tech Mono',monospace;font-size:12px;width:52px;text-align:right">10/100</span>
+        </div>
+        <div id="memory-stage-hint" class="api-field-note"></div>
+      </div>
+      <div class="ce-field">
+        <label class="ce-label">キャラクターから見たユーザーの印象</label>
+        <textarea class="ce-textarea" id="memory-note" style="min-height:56px" placeholder="まだ印象はありません"></textarea>
+      </div>
+      <div class="ce-field">
+        <label class="ce-label">ユーザーについての事実（1行に1件）</label>
+        <textarea class="ce-textarea" id="memory-facts" placeholder="例: 名前はたろう&#10;例: 猫を飼っている"></textarea>
+      </div>
+      <div class="ce-field">
+        <label class="ce-label">最近の会話で起きたこと（1行に1件、「日付: 内容」）</label>
+        <textarea class="ce-textarea" id="memory-episodes" style="min-height:80px" placeholder="例: 2026-09-25: 試験勉強の話をして励ました"></textarea>
+      </div>
+      <div class="ce-field">
+        <label class="ce-label">約束・次に話すこと（1行に1件）</label>
+        <textarea class="ce-textarea" id="memory-promises" style="min-height:56px" placeholder="例: 次は映画の感想を聞く"></textarea>
+      </div>
+    </div>
+    <div id="memory-footer">
+      <button class="modal-btn danger" id="memory-reset">リセット</button>
+      <button class="modal-btn secondary" id="memory-flush" title="保留中の会話を今すぐ記憶に反映">今すぐ更新</button>
+      <span style="flex:1"></span>
+      <button class="modal-btn secondary" id="memory-cancel">キャンセル</button>
+      <button class="modal-btn primary" id="memory-save">保存</button>
     </div>
   </div>
 </div>
@@ -1679,6 +1834,7 @@ body.no-bubble-blur .msg-bubble {
         <span>直接TTS</span>
       </label>
     </div>
+    <span id="game-mode-badge" aria-hidden="true">ゲームモード</span>
     <textarea id="user-input" placeholder="メッセージを入力... (Enter で送信)" rows="1"></textarea>
     <button id="log-menu-btn" title="ログメニュー">&#8230;</button>
     <button id="send-btn" disabled title="送信">&#10148;</button>
@@ -1920,6 +2076,28 @@ let autoReplyTrigger    = 'audio'; // "audio" | "llm"
 let autoReplyUserPrompt = '';      // ユーザー役プロンプト（設定から読み込む）
 let _arLastBusy         = false;   // 前フレームの busy 状態（遷移検出用）
 let _sysAutoReplyPrompt = '';      // sys-modal 開閉時のプロンプトキャッシュ
+// ── 記憶 ──
+let _syntheticSend      = false;   // true=自動応答由来の送信 (記憶に反映しない)
+let privateMode         = false;   // プライベートモード: この会話を記憶に追加しない
+let pageId              = (crypto.randomUUID ? crypto.randomUUID() : `page_${Date.now()}_${Math.random().toString(16).slice(2)}`);
+let conversationEpoch   = '';
+let normalRevision      = 0;
+let gameView            = null;
+let gameUiPhase         = 'off';   // off / starting / active / submitting / suspending / resuming
+let gameRequest         = null;
+let gameStartRequest    = null;
+let gameDisplayGeneration = 0;
+let normalViewFragment  = null;
+let normalDraft          = '';
+let gameDraft            = '';
+let gameViewRoot         = null;
+let gameLeaseTimer       = null;
+const gameAudioRequested = new Set();
+const gameAudioPending = new Set();
+const gameAudioFailed = new Set();
+const gameAudioControllers = new Set();
+const gameAudioPlayers   = new Set();
+const gameAudioCache     = new Map();
 let logLoadMode        = 'load';// ログ読み込みダイアログのモード ('load' | 'scenario')
 let ffmpegAvailable  = false;   // check_ffmpeg で取得した ffmpeg 利用可否
 let logSessionId     = null;    // 現在のログセッションID
@@ -1937,6 +2115,7 @@ const $msgScrollTop   = document.getElementById('msg-scroll-top');
 const $msgScrollBottom= document.getElementById('msg-scroll-bottom');
 const $input     = document.getElementById('user-input');
 const $sendBtn   = document.getElementById('send-btn');
+const $gameModeBadge = document.getElementById('game-mode-badge');
 const $statusDot = document.getElementById('status-dot');
 const $statusTxt = document.getElementById('status-text');
 const $ttsInd    = document.getElementById('tts-indicator');
@@ -2364,8 +2543,12 @@ async function commitSysModal() {
   // キャラクターが選択済みの場合、会話履歴を保ったままシステムプロンプトだけ即反映
   if (selectedIndex !== null) {
     try {
-      const res = await fetch(`${API}/update_system_prompt`, { method: 'POST' });
+      const res = await fetch(`${API}/update_system_prompt`, { method: 'POST', headers: conversationHeaders() });
       if (res.ok) {
+        const data = await res.json();
+        conversationEpoch = data.conversation_epoch || conversationEpoch;
+        normalRevision = data.normal_revision ?? normalRevision;
+        abandonGameDisplayAfterTransition();
         appendSystemMsg('システムプロンプトを更新しました');
       }
     } catch(e) { console.warn('Failed to re-apply system prompt:', e); }
@@ -3150,17 +3333,28 @@ $logMenuBtn.addEventListener('click', e => {
 
   const menuDefs = [
     { label: 'ログを保存',     action: openLogSaveDialog },
-    { label: 'ログを読み込む', action: () => openLogLoadDialog('load') },
+    { label: 'ログを読み込む', disabled: gameVisible(), disabledHint: 'ゲームモードを解除してから使用', action: () => openLogLoadDialog('load') },
     null, // セパレータ
-    { label: 'シナリオを読み込む',
+    { label: 'シナリオを読み込む', disabled: gameVisible(), disabledHint: 'ゲームモードを解除してから使用',
       tooltip: 'ログのユーザー入力のみ使用し新しい会話で再現します',
       action: () => openLogLoadDialog('scenario') },
     null, // セパレータ
     { label: (autoReplyEnabled ? '✓ ' : '　') + '自動応答',
+      disabled: gameVisible(), disabledHint: 'ゲームモードを解除してから使用',
       tooltip: 'LLMがユーザー役の返答を生成して会話を自動継続します',
       action: toggleAutoReply },
+    { label: ((privateMode || gameVisible()) ? '✓ ' : '　') + (gameVisible() ? 'プライベートモード（ゲーム中）' : 'プライベートモード'),
+      role: 'menuitemcheckbox', checked: privateMode || gameVisible(), disabled: gameVisible(),
+      tooltip: gameVisible() ? 'ゲームの出来事は通常の記憶に追加しません' : 'この会話の内容をキャラクターの記憶に追加しません（既存の記憶は使われます）',
+      action: togglePrivateMode },
+    { label: ((gameView?.status === 'active' || gameView?.status === 'suspended' || gameVisible()) ? '✓ ' : '　') + 'ゲームモード',
+      role: 'menuitemcheckbox', checked: gameView?.status === 'active' || gameView?.status === 'suspended' || gameVisible(),
+      disabled: !['off', 'active'].includes(gameUiPhase),
+      tooltip: '会話を引き継いで物語を進めます。解除すると中断し、同じページで再開できます',
+      action: toggleGameMode },
     null, // セパレータ
     { label: 'テキストを読み上げ (実験的)',
+      disabled: gameVisible(), disabledHint: 'ゲームモードを解除してから使用',
       tooltip: 'テキストファイルまたはペーストしたテキストをTTSで読み上げます',
       action: openTtsReadMethodModal },
   ];
@@ -3174,11 +3368,26 @@ $logMenuBtn.addEventListener('click', e => {
     const el = document.createElement('div');
     el.className = 'log-popup-item';
     el.textContent = def.label;
-    if (def.tooltip) el.title = def.tooltip;
+    if (def.role) {
+      el.setAttribute('role', def.role);
+      el.setAttribute('aria-checked', String(!!def.checked));
+      el.tabIndex = 0;
+    }
+    if (def.disabled) {
+      el.setAttribute('aria-disabled', 'true');
+      if (def.disabledHint) el.title = def.disabledHint;
+    } else {
+      el.setAttribute('aria-disabled', 'false');
+      if (def.tooltip) el.title = def.tooltip;
+    }
     el.addEventListener('click', ev => {
       ev.stopPropagation();
+      if (def.disabled) return;
       popup.remove(); logPopupEl = null;
       def.action();
+    });
+    if (def.role) el.addEventListener('keydown', ev => {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); el.click(); }
     });
     popup.appendChild(el);
   });
@@ -3193,7 +3402,7 @@ $logMenuBtn.addEventListener('click', e => {
 
 // ── ログ保存ダイアログ ──
 function openLogSaveDialog() {
-  if (!logSessionId && logMessageBuffer.length === 0) { showErrorToast('ログセッションがありません'); return; }
+  if (!gameVisible() && !logSessionId && logMessageBuffer.length === 0) { showErrorToast('ログセッションがありません'); return; }
   // デフォルトのファイル名は空(自動生成)にして表示
   $logSaveName.value = '';
   $logSaveBackdrop.classList.add('open');
@@ -3205,6 +3414,14 @@ $logSaveClose.addEventListener('click', closeLogSaveDialog);
 $logSaveCancel.addEventListener('click', closeLogSaveDialog);
 $logSaveBackdrop.addEventListener('click', e => { if (e.target === $logSaveBackdrop) closeLogSaveDialog(); });
 $logSaveOk.addEventListener('click', async () => {
+  if (gameVisible()) {
+    try {
+      await exportGameLog();
+      showErrorToast('✓ ゲームの公開記録をダウンロードしました', 'success');
+      closeLogSaveDialog();
+    } catch (e) { showErrorToast('保存エラー: ' + e.message); }
+    return;
+  }
   const dir      = $logSaveDir.value.trim() || 'output';
   const filename = $logSaveName.value.trim() || '';
   try {
@@ -3234,6 +3451,7 @@ $logSaveOk.addEventListener('click', async () => {
 // ── ログ読み込みダイアログ ──
 let logLoadDir = 'output';
 function openLogLoadDialog(mode = 'load') {
+  if (gameVisible()) { showErrorToast('ゲームモードを解除してから使用してください'); return; }
   logLoadMode = mode;
   // シナリオモード時はキャラクター未選択を弾く
   if (mode === 'scenario' && selectedIndex === null) {
@@ -3280,6 +3498,10 @@ async function fetchLogFiles(dir) {
       item.className = 'log-file-item';
       item.innerHTML = `<span class="log-file-name">${f.filename}</span><span class="log-file-date">${f.modified}</span>`;
       item.addEventListener('click', () => {
+        if (f.filename?.endsWith('.game.json')) {
+          showErrorToast('ゲームの閲覧用記録で、会話の復元には使えません');
+          return;
+        }
         if (logLoadMode === 'scenario') {
           closeLogLoadDialog();
           startScenario(f.path);
@@ -3298,11 +3520,19 @@ async function loadLogFile(filepath) {
   try {
     const res = await fetch(`${API}/log/load`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: conversationHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ filepath }),
     });
     if (!res.ok) { const d = await res.json().catch(()=>({})); throw new Error(d.detail || 'HTTP '+res.status); }
     const data = await res.json();
+    const status = await refreshConversationStatus();
+    const reset = await fetch(`${API}/conversation/view-reset`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ page_id: pageId, conversation_epoch: status.conversation_epoch, normal_revision: status.normal_revision, request_id: gameRequestId() }),
+    });
+    if (!reset.ok) { const d = await reset.json().catch(() => ({})); throw new Error(d.detail?.code || `HTTP ${reset.status}`); }
+    const next = await reset.json(); conversationEpoch = next.conversation_epoch; normalRevision = next.normal_revision;
+    abandonGameDisplayAfterTransition();
     closeLogLoadDialog();
     renderLoadedLog(data);
   } catch(e) {
@@ -3340,6 +3570,7 @@ function buildScenarioQueue(messages) {
 }
 
 async function startScenario(filepath) {
+  if (gameVisible()) { showErrorToast('ゲームモードを解除してから使用してください'); return; }
   if (selectedIndex === null) { showErrorToast('キャラクターを選択してください'); return; }
 
   // ログファイルをパース
@@ -3360,6 +3591,24 @@ async function startScenario(filepath) {
   const queue = buildScenarioQueue(data.messages);
   if (queue.length === 0) {
     showErrorToast('ユーザー発言がログに含まれていません');
+    return;
+  }
+
+  // Loading a normal scenario replaces the visible conversation. Retire a
+  // suspended game only after the selected normal log has parsed successfully.
+  try {
+    await refreshConversationStatus();
+    const reset = await fetch(`${API}/conversation/view-reset`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ page_id: pageId, conversation_epoch: conversationEpoch, normal_revision: normalRevision, request_id: gameRequestId() }),
+    });
+    if (!reset.ok) { const error = await reset.json().catch(() => ({})); throw new Error(error.detail?.code || `HTTP ${reset.status}`); }
+    const state = await reset.json();
+    conversationEpoch = state.conversation_epoch;
+    normalRevision = state.normal_revision;
+    abandonGameDisplayAfterTransition();
+  } catch (error) {
+    showErrorToast('シナリオを開始できません: ' + error.message);
     return;
   }
 
@@ -3485,11 +3734,14 @@ async function loadCharacters() {
 async function selectCharacter(idx, name, hasImage, hasVoice) {
   const res = await fetch(`${API}/select`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ index: idx }),
+    headers: conversationHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ index: idx, private: privateMode }),
   });
   if (!res.ok) return;
   const selectData = await res.json();
+  conversationEpoch = selectData.conversation_epoch || conversationEpoch;
+  normalRevision = selectData.normal_revision ?? normalRevision;
+  abandonGameDisplayAfterTransition();
 
   selectedIndex    = idx;
   selectedName     = name;
@@ -3521,6 +3773,7 @@ async function selectCharacter(idx, name, hasImage, hasVoice) {
   $messages.appendChild($msgScrollBottom);
   appendSystemMsg(`${name} がログインしました`);
   if (selectData.embedding_warning) appendSystemMsg(selectData.embedding_warning);
+  if (privateMode) appendSystemMsg('🔒 プライベートモード: この会話は記憶に追加されません');
   setBackgroundImage(selectedImageUrl);
   logSessionId      = null;
   pendingLogChar    = name;
@@ -3643,6 +3896,442 @@ function appendMessage(role, name, imageUrl) {
 
 function scrollBottom() { $messages.scrollTop = $messages.scrollHeight; }
 
+/* ══════════════════════════════
+   ゲームモード — 独立した表示・要求状態
+══════════════════════════════ */
+function gameVisible() { return gameUiPhase !== 'off'; }
+function gameRequestId() {
+  return crypto.randomUUID ? crypto.randomUUID() : `req_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+function conversationHeaders(extra = {}) {
+  const headers = { 'X-Bridge-Page-Id': pageId, ...extra };
+  if (conversationEpoch) headers['X-Conversation-Epoch'] = conversationEpoch;
+  return headers;
+}
+function syncConversationHeaders(response) {
+  const epoch = response.headers.get('X-Conversation-Epoch');
+  const revision = response.headers.get('X-Normal-Revision');
+  if (epoch) conversationEpoch = epoch;
+  if (revision !== null) normalRevision = Number(revision) || 0;
+}
+async function refreshConversationStatus() {
+  const response = await fetch(`${API}/conversation/status`, { headers: { 'X-Bridge-Page-Id': pageId } });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const data = await response.json();
+  conversationEpoch = data.conversation_epoch;
+  normalRevision = data.normal_revision;
+  return data;
+}
+function setGamePhase(phase) {
+  gameUiPhase = phase;
+  const visible = gameVisible();
+  $gameModeBadge.classList.toggle('active', visible);
+  $input.disabled = visible && phase !== 'active';
+  $sendBtn.disabled = visible && phase !== 'active';
+  $input.placeholder = visible
+    ? '話しかける、行動を書く、数字で選ぶ…'
+    : 'メッセージを入力... (Enter で送信)';
+}
+function enterGameView({ resetDraft = false } = {}) {
+  if (normalViewFragment) return;
+  normalDraft = $input.value;
+  if (resetDraft) gameDraft = '';
+  normalViewFragment = document.createDocumentFragment();
+  const fixed = new Set([$msgScrollTop, $msgScrollBottom]);
+  for (const child of Array.from($messages.childNodes)) {
+    if (!fixed.has(child)) normalViewFragment.appendChild(child);
+  }
+  gameViewRoot = document.createElement('div');
+  gameViewRoot.id = 'game-view';
+  $messages.insertBefore(gameViewRoot, $msgScrollBottom);
+  $input.value = gameDraft;
+  scrollBottom();
+}
+function stopGameAudio() {
+  for (const controller of gameAudioControllers) controller.abort();
+  gameAudioControllers.clear();
+  for (const player of gameAudioPlayers) { try { player.pause(); player.currentTime = 0; } catch (_) {} }
+  gameAudioPlayers.clear();
+  gameAudioQueue.length = 0;
+  gameAudioPlaying = false;
+  gameAudioPending.clear();
+}
+function leaveGameView({ keepGame = true } = {}) {
+  gameDisplayGeneration++;
+  stopGameAudio();
+  if (gameViewRoot) gameViewRoot.remove();
+  gameViewRoot = null;
+  if (normalViewFragment) {
+    $messages.insertBefore(normalViewFragment, $msgScrollBottom);
+    normalViewFragment = null;
+  }
+  gameDraft = $input.value;
+  $input.value = normalDraft;
+  setGamePhase('off');
+  if (!keepGame) {
+    gameView = null;
+    gameRequest = null;
+    gameStartRequest = null;
+    gameAudioRequested.clear();
+    gameAudioFailed.clear();
+    gameAudioCache.clear();
+    if (gameLeaseTimer) { clearInterval(gameLeaseTimer); gameLeaseTimer = null; }
+  }
+  scrollBottom();
+}
+function makeGameEventNode(entry, currentInteraction, latestInteractionId) {
+  if (entry.type === 'narration') {
+    const node = document.createElement('div');
+    node.className = 'game-narration'; node.textContent = entry.text || '';
+    return node;
+  }
+  if (entry.type === 'player') {
+    const node = document.createElement('div');
+    node.className = 'game-player-event'; node.textContent = entry.text || '';
+    return node;
+  }
+  if (entry.type === 'character') {
+    const row = document.createElement('div'); row.className = 'game-character-event';
+    if (selectedImageUrl) {
+      const avatar = document.createElement('img'); avatar.className = 'game-character-avatar'; avatar.src = selectedImageUrl; avatar.alt = '';
+      row.appendChild(avatar);
+    }
+    const bubble = document.createElement('div'); bubble.className = 'game-character-bubble';
+    const name = document.createElement('div'); name.className = 'game-character-name'; name.textContent = selectedName || '';
+    const text = document.createElement('div'); text.textContent = entry.text || '';
+    bubble.append(name, text);
+    const replay = document.createElement('button'); replay.type = 'button'; replay.className = 'game-audio-replay'; replay.textContent = '▶';
+    replay.dataset.gameAudio = entry.id;
+    replay.disabled = gameAudioPending.has(entry.id) || typeof ttsEnabled !== 'undefined' && !ttsEnabled;
+    replay.title = (gameAudioCache.get(entry.id) || []).length
+      ? 'この発言を再生'
+      : gameAudioFailed.has(entry.id) ? '読み上げに失敗しました。クリックして再生成' : 'クリックして読み上げを生成';
+    replay.addEventListener('click', () => {
+      if ((gameAudioCache.get(entry.id) || []).length) playCachedGameAudio(entry.id);
+      else requestGameAudio(entry, { retry: true });
+    });
+    bubble.appendChild(replay); row.appendChild(bubble);
+    if (!gameAudioRequested.has(entry.id)) {
+      requestGameAudio(entry);
+      replay.disabled = replay.disabled || gameAudioPending.has(entry.id);
+    }
+    return row;
+  }
+  if (entry.type === 'interaction') {
+    const wrap = document.createElement('div'); wrap.className = 'game-interaction';
+    if (entry.text) { const prompt = document.createElement('div'); prompt.className = 'game-interaction-prompt'; prompt.textContent = entry.text; wrap.appendChild(prompt); }
+    const latest = entry.id === latestInteractionId && currentInteraction && gameView?.status === 'active';
+    for (const choice of entry.choices || []) {
+      const button = document.createElement('button'); button.type = 'button'; button.className = 'game-choice'; button.disabled = !latest;
+      const number = document.createElement('span'); number.className = 'game-choice-number'; number.textContent = `${choice.number}.`;
+      const label = document.createElement('span'); label.textContent = choice.label;
+      button.append(number, label);
+      if (latest) button.addEventListener('click', () => submitGameChoice(currentInteraction.id, choice.id));
+      wrap.appendChild(button);
+    }
+    return wrap;
+  }
+  return document.createDocumentFragment();
+}
+function renderGameView(view, notice = '') {
+  if (!gameViewRoot || !view) return;
+  gameView = view;
+  gameViewRoot.replaceChildren();
+  const transcript = view.transcript || view.events || [];
+  const latestInteractionId = [...transcript].reverse().find(event => event.type === 'interaction')?.id;
+  for (const entry of transcript) gameViewRoot.appendChild(makeGameEventNode(entry, view.interaction, latestInteractionId));
+  if (notice || view.notice || view.log_warning) {
+    const note = document.createElement('div'); note.className = 'game-notice';
+    note.textContent = notice || view.notice || view.log_warning;
+    gameViewRoot.appendChild(note);
+  }
+  scrollBottom();
+}
+function mergeGameTranscript(view) {
+  if (Array.isArray(view.transcript)) return view;
+  const existing = gameView?.transcript || [];
+  const seen = new Set(existing.map(event => event.id));
+  const delta = (view.events || []).filter(event => !seen.has(event.id));
+  view.transcript = [...existing, ...delta];
+  return view;
+}
+function showGameWorking(show) {
+  if (!gameViewRoot) return;
+  const previous = gameViewRoot.querySelector('.game-working');
+  if (previous) previous.remove();
+  if (show) { const node = document.createElement('div'); node.className = 'game-working'; node.textContent = '状況を確認中…'; gameViewRoot.appendChild(node); }
+}
+function ensureGameLease() {
+  if (gameLeaseTimer) clearInterval(gameLeaseTimer);
+  if (!gameView?.game_id) return;
+  gameLeaseTimer = setInterval(async () => {
+    const id = gameView?.game_id;
+    if (!id) return;
+    try {
+      const response = await fetch(`${API}/game/${id}/lease`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ page_id: pageId }),
+      });
+      if (response.status === 410) {
+        leaveGameView({ keepGame: false });
+        showErrorToast('ゲームのセッションが終了しました');
+      }
+    } catch (_) { /* 次のleaseで再確認する */ }
+  }, 60_000);
+}
+async function toggleGameMode() {
+  if (gameVisible()) { await suspendGameMode(); return; }
+  if (gameView?.status === 'suspended') { await resumeGameMode(); return; }
+  if (isGenerating || activePolls.size > 0 || isScenarioPlaying) {
+    showErrorToast('通常の生成や音声が終わってから開始してください'); return;
+  }
+  if (isAudioPlaying && typeof stopAllAudio === 'function') stopAllAudio();
+  if (autoReplyTimer) { clearTimeout(autoReplyTimer); autoReplyTimer = null; }
+  if (autoReplyEnabled) autoReplyEnabled = false;
+  let status;
+  try { status = await refreshConversationStatus(); }
+  catch (error) { showErrorToast('会話状態を確認できません: ' + error.message); return; }
+  if (status.busy) { showErrorToast('通常の生成が終わってから開始してください'); return; }
+  gameDisplayGeneration++;
+  enterGameView({ resetDraft: true });
+  setGamePhase('starting');
+  showGameWorking(true);
+  const capturedGeneration = gameDisplayGeneration;
+  gameStartRequest = { page_id: pageId, conversation_epoch: conversationEpoch, normal_revision: normalRevision, request_id: gameRequestId() };
+  await requestGameStart(gameStartRequest, capturedGeneration);
+}
+async function requestGameStart(body, generation) {
+  for (let attempt = 0; attempt < 250; attempt++) {
+    if (generation !== gameDisplayGeneration || gameUiPhase === 'off') return;
+    let response;
+    try {
+      response = await fetch(`${API}/game/start`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    } catch (_) {
+      await new Promise(resolve => setTimeout(resolve, 750));
+      continue; // 同じ開始IDだけを再送する
+    }
+    if (response.ok) {
+      const result = await response.json();
+      if (generation !== gameDisplayGeneration || gameUiPhase === 'off') return;
+      gameStartRequest = null;
+      gameView = result; setGamePhase('active'); renderGameView(result); ensureGameLease();
+      return;
+    }
+    const error = await response.json().catch(() => ({}));
+    if (response.status === 202 || error.detail?.code === 'REQUEST_RUNNING') {
+      await new Promise(resolve => setTimeout(resolve, 750));
+      continue;
+    }
+    if (generation === gameDisplayGeneration) {
+      const message = error.detail?.code || `HTTP ${response.status}`;
+      leaveGameView({ keepGame: false });
+      showErrorToast('ゲームを開始できませんでした: ' + message);
+    }
+    return;
+  }
+  if (generation === gameDisplayGeneration) {
+    showGameWorking(false);
+    renderGameView({ transcript: [], interaction: null, status: 'starting' }, '開始結果を確認できません。再送は同じ開始要求で続けます。');
+  }
+}
+async function suspendGameMode() {
+  if (!gameView || gameUiPhase !== 'active') return;
+  gameDraft = $input.value;
+  setGamePhase('suspending');
+  const generation = gameDisplayGeneration;
+  try {
+    const response = await fetch(`${API}/game/${gameView.game_id}/suspend`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ page_id: pageId, revision: gameView.revision, request_id: gameRequestId() }),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    gameView = mergeGameTranscript(await response.json());
+    if (generation !== gameDisplayGeneration) return;
+    leaveGameView({ keepGame: true });
+  } catch (error) {
+    if (generation === gameDisplayGeneration) { setGamePhase('active'); showErrorToast('ゲームを中断できませんでした: ' + error.message); }
+  }
+}
+async function resumeGameMode() {
+  if (!gameView || gameView.status !== 'suspended') return;
+  try {
+    await refreshConversationStatus();
+    gameDisplayGeneration++;
+    enterGameView(); setGamePhase('resuming'); showGameWorking(true);
+    const response = await fetch(`${API}/game/${gameView.game_id}/resume`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ page_id: pageId, conversation_epoch: conversationEpoch, revision: gameView.revision, request_id: gameRequestId() }),
+    });
+    if (!response.ok) { const error = await response.json().catch(() => ({})); throw new Error(error.detail?.code || `HTTP ${response.status}`); }
+    gameView = mergeGameTranscript(await response.json()); setGamePhase('active'); renderGameView(gameView); ensureGameLease();
+    $input.value = gameDraft;
+  } catch (error) {
+    const ended = error.message === 'GAME_CLOSED' || error.message === 'HTTP 410';
+    leaveGameView({ keepGame: !ended }); showErrorToast('ゲームを再開できませんでした: ' + error.message);
+  }
+}
+function submitGameChoice(interactionId, choiceId) {
+  return submitGameInput({ kind: 'choice', interaction_id: interactionId, choice_id: choiceId }, null);
+}
+async function sendGameInput() {
+  if (!gameView || gameUiPhase !== 'active') return;
+  if (gameRequest) { await recoverGameRequest(); return; }
+  const text = $input.value;
+  if (!text.trim()) return;
+  const pending = gameView.interaction;
+  const body = {
+    page_id: pageId, conversation_epoch: conversationEpoch, revision: gameView.revision,
+    request_id: gameRequestId(), input: { kind: 'text', text, interaction_id: pending?.id || '' },
+  };
+  await submitGameInput(body.input, text, body);
+}
+async function submitGameInput(input, originalText, existingBody = null) {
+  if (!gameView || gameUiPhase !== 'active' || gameRequest) return;
+  const body = existingBody || {
+    page_id: pageId, conversation_epoch: conversationEpoch, revision: gameView.revision,
+    request_id: gameRequestId(), input,
+  };
+  gameRequest = { body, originalText, generation: gameDisplayGeneration };
+  setGamePhase('submitting'); showGameWorking(true);
+  try {
+    const response = await fetch(`${API}/game/${gameView.game_id}/turn`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      if (response.status === 409) {
+        const latest = await fetch(`${API}/game/${gameView.game_id}?page_id=${encodeURIComponent(pageId)}`);
+        if (latest.ok) { gameView = await latest.json(); renderGameView(gameView, '候補が更新されました。現在の状況を確認して選び直してください。'); }
+        throw new Error(error.detail?.code || 'STALE_REVISION');
+      }
+      throw new Error(error.detail?.code || `HTTP ${response.status}`);
+    }
+    const result = await response.json();
+    if (gameRequest.generation !== gameDisplayGeneration || gameUiPhase === 'off') return;
+    gameView = mergeGameTranscript(result);
+    if (originalText !== null && $input.value === originalText) $input.value = '';
+    gameRequest = null; setGamePhase('active'); renderGameView(result);
+  } catch (error) {
+    if (!gameRequest || gameRequest.generation !== gameDisplayGeneration || gameUiPhase === 'off') return;
+    if (error.message === 'STALE_REVISION' || error.message === 'INVALID_CHOICE') {
+      gameRequest = null; setGamePhase('active'); showGameWorking(false); showErrorToast('候補が更新されています。入力を確認してください。'); return;
+    }
+    await recoverGameRequest(error.message);
+  }
+}
+async function recoverGameRequest(message = '') {
+  if (!gameRequest || !gameView) return;
+  const captured = gameRequest;
+  const generation = captured.generation;
+  for (let attempt = 0; attempt < 240; attempt++) {
+    if (generation !== gameDisplayGeneration || gameUiPhase === 'off') return;
+    try {
+      const response = await fetch(`${API}/game/${gameView.game_id}/requests/${captured.body.request_id}?page_id=${encodeURIComponent(pageId)}`);
+      if (response.ok) {
+        const state = await response.json();
+        if (state.status === 'committed') {
+          gameView = mergeGameTranscript(state.result);
+          if (captured.originalText !== null && $input.value === captured.originalText) $input.value = '';
+          gameRequest = null; setGamePhase('active'); renderGameView(gameView); return;
+        }
+        if (state.status === 'failed') {
+          gameRequest = null; setGamePhase('active'); showGameWorking(false);
+          showErrorToast('処理に失敗しました: ' + state.error + '。入力を確認して再試行してください。'); return;
+        }
+      }
+    } catch (_) { /* 接続が戻るまで同じrequest_idの結果を確認する */ }
+    await new Promise(resolve => setTimeout(resolve, 750));
+  }
+  setGamePhase('active'); showGameWorking(false);
+  showErrorToast('結果をまだ確認できません。入力は保持しました。再送せず、送信ボタンで同じ要求の状態を確認できます.');
+}
+function ensureGameAudioQueue() {
+  if (!gameAudioQueue.length || gameAudioPlaying || gameUiPhase === 'off') return;
+  const item = gameAudioQueue.shift(); gameAudioPlaying = true;
+  const player = new Audio(item.url); gameAudioPlayers.add(player);
+  const finish = () => { gameAudioPlayers.delete(player); gameAudioPlaying = false; ensureGameAudioQueue(); };
+  player.addEventListener('ended', finish, { once: true }); player.addEventListener('error', finish, { once: true });
+  player.play().catch(finish);
+}
+const gameAudioQueue = [];
+let gameAudioPlaying = false;
+function playCachedGameAudio(eventId) {
+  const items = gameAudioCache.get(eventId) || [];
+  for (const item of items) gameAudioQueue.push({ url: item });
+  ensureGameAudioQueue();
+}
+async function requestGameAudio(event, { retry = false } = {}) {
+  if (gameAudioPending.has(event.id) || (!retry && gameAudioRequested.has(event.id)) || typeof ttsEnabled !== 'undefined' && !ttsEnabled) return;
+  gameAudioRequested.add(event.id);
+  gameAudioPending.add(event.id);
+  const generation = gameDisplayGeneration;
+  const controller = new AbortController(); gameAudioControllers.add(controller);
+  let reqId = null;
+  try {
+    const response = await fetch(`${API}/game/${gameView.game_id}/audio`, {
+      method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ page_id: pageId, event_id: event.id, revision: event.revision, request_id: gameRequestId(), retry }),
+    });
+    if (!response.ok) { gameAudioFailed.add(event.id); return; }
+    reqId = (await response.json()).req_id;
+    let producedAudio = false;
+    for (let attempt = 0; attempt < 240; attempt++) {
+      if (controller.signal.aborted || generation !== gameDisplayGeneration || gameUiPhase === 'off') return;
+      const poll = await fetch(`${API}/audio_poll/${encodeURIComponent(reqId)}`, { signal: controller.signal });
+      if (!poll.ok) { gameAudioFailed.add(event.id); return; }
+      const data = await poll.json();
+      if (controller.signal.aborted || generation !== gameDisplayGeneration || gameUiPhase === 'off') return;
+      const urls = (data.audios || []).map(audio => `data:audio/wav;base64,${audio}`);
+      if (urls.length) {
+        producedAudio = true;
+        gameAudioFailed.delete(event.id);
+        gameAudioCache.set(event.id, [...(gameAudioCache.get(event.id) || []), ...urls]);
+        for (const url of urls) gameAudioQueue.push({ url });
+        ensureGameAudioQueue();
+      }
+      if (data.finished) {
+        if (!producedAudio) gameAudioFailed.add(event.id);
+        return;
+      }
+      await new Promise(resolve => setTimeout(resolve, 350));
+    }
+  } catch (_) { /* TTS failure does not change the confirmed turn */ }
+  finally {
+    gameAudioControllers.delete(controller);
+    gameAudioPending.delete(event.id);
+    if (reqId) fetch(`${API}/audio_poll/${encodeURIComponent(reqId)}`, { method: 'DELETE' }).catch(() => {});
+    if (generation === gameDisplayGeneration && gameViewRoot) {
+      const replay = [...gameViewRoot.querySelectorAll('.game-audio-replay')].find(button => button.dataset.gameAudio === event.id);
+      if (replay) replay.disabled = typeof ttsEnabled !== 'undefined' && !ttsEnabled;
+    }
+  }
+}
+async function exportGameLog() {
+  if (!gameView) throw new Error('ゲームログがありません');
+  const response = await fetch(`${API}/game/${gameView.game_id}/log/export`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ page_id: pageId }),
+  });
+  if (!response.ok) throw new Error('HTTP ' + response.status);
+  const blob = await response.blob();
+  const disposition = response.headers.get('Content-Disposition') || '';
+  const filename = disposition.match(/filename="([^"]+)/)?.[1] || 'game-transcript.game.json';
+  const url = URL.createObjectURL(blob); const link = document.createElement('a');
+  link.href = url; link.download = filename; link.click(); URL.revokeObjectURL(url);
+}
+function abandonGameDisplayAfterTransition() {
+  if (gameView || gameUiPhase !== 'off') leaveGameView({ keepGame: false });
+}
+window.addEventListener('pagehide', () => {
+  const body = JSON.stringify({ page_id: pageId, request_id: gameRequestId() });
+  try { navigator.sendBeacon(`${API}/game/close-page`, new Blob([body], { type: 'application/json' })); } catch (_) {}
+});
+window.addEventListener('pageshow', event => {
+  if (!event.persisted) return;
+  pageId = crypto.randomUUID ? crypto.randomUUID() : `page_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  leaveGameView({ keepGame: false });
+  refreshConversationStatus().catch(() => {});
+});
+
 /* ── スクロールヒント表示制御 ── */
 function updateScrollHints() {
   const { scrollTop, scrollHeight, clientHeight } = $messages;
@@ -3741,6 +4430,7 @@ async function consumeStream(response, bubbleRefs, cursorEl) {
    送信
 ══════════════════════════════ */
 async function sendMessage() {
+  if (gameVisible()) { await sendGameInput(); return; }
   if (isGenerating || selectedIndex === null) return;
   // 自動応答タイマーをキャンセル（手動送信時に重複防止）
   if (autoReplyTimer) { clearTimeout(autoReplyTimer); autoReplyTimer = null; }
@@ -3753,6 +4443,10 @@ async function sendMessage() {
 
   const text = $input.value;
   $input.value = '';
+
+  // 自動応答・シナリオ再生・プライベートモードの発言は記憶に反映しない
+  const memorize = !_syntheticSend && !isScenarioPlaying && !privateMode;
+  _syntheticSend = false;
 
   const ttsEnabled = $ttsToggle ? $ttsToggle.checked : false;
   const hasVoice   = selectedHasVoice;  // 生成開始時点でキャプチャ
@@ -3773,7 +4467,7 @@ async function sendMessage() {
       try {
         const res = await fetch(`${API}/tts_direct`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: conversationHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ text: text.trim() }),
         });
         if (res.ok) {
@@ -3823,9 +4517,10 @@ async function sendMessage() {
   try {
     const res = await fetch(`${API}/chat`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text, tts_enabled: ttsEnabled }),
+      headers: conversationHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ message: text, tts_enabled: ttsEnabled, memorize }),
     });
+    syncConversationHeaders(res);
 
     const { reqId, collectedAudio, footer, spinner, errorDetail } =
       await consumeStream(res, charRefs, cursor);
@@ -3874,7 +4569,8 @@ async function runInitialGreeting(ttsEnabled) {
   charRefs.textEl.appendChild(cursor);
 
   try {
-    const res = await fetch(`${API}/initial_greeting?tts_enabled=${ttsEnabled}`);
+    const res = await fetch(`${API}/initial_greeting?tts_enabled=${ttsEnabled}`, { headers: conversationHeaders() });
+    syncConversationHeaders(res);
     const { reqId, collectedAudio, footer, spinner, errorDetail } =
       await consumeStream(res, charRefs, cursor);
     isGenerating = false;
@@ -3981,12 +4677,13 @@ async function triggerAutoReply() {
   // Step 1: ユーザー役の返答テキストを生成
   let userText = '';
   try {
-    const res = await fetch(`${API}/user_reply_gen`, { method: 'POST' });
+    const res = await fetch(`${API}/user_reply_gen`, { method: 'POST', headers: conversationHeaders() });
     if (!res.ok) {
       showErrorToast('自動応答エラー: HTTP ' + res.status, 'error');
       throw new Error('HTTP ' + res.status);
     }
     const data = await res.json();
+    await refreshConversationStatus();
     userText = (data.text || '').trim();
   } catch(e) {
     console.warn('[AutoReply] user_reply_gen failed:', e);
@@ -4002,9 +4699,25 @@ async function triggerAutoReply() {
   // 生成中にユーザーが入力した場合・条件変化した場合はキャンセル
   if (!autoReplyEnabled || isGenerating || $input.value.trim()) return;
 
-  // Step 2: ユーザー発言として入力欄にセットしてから送信
+  // Step 2: ユーザー発言として入力欄にセットしてから送信 (記憶には反映しない)
+  _syntheticSend = true;
   $input.value = userText;
   await sendMessage();
+}
+
+/* ══════════════════════════════
+   プライベートモード トグル
+   ON の間はこの会話を記憶に追加しない (既存の記憶は読み込んで使う)
+══════════════════════════════ */
+function togglePrivateMode() {
+  privateMode = !privateMode;
+  if (selectedIndex !== null) {
+    appendSystemMsg(privateMode
+      ? '🔒 プライベートモード ON: これ以降の会話は記憶に追加されません'
+      : '🔓 プライベートモード OFF: これ以降の会話は記憶に追加されます');
+  }
+  showErrorToast(privateMode ? '🔒 プライベートモード ON' : 'プライベートモード OFF',
+                 privateMode ? 'success' : 'error');
 }
 
 /* ══════════════════════════════
@@ -4891,7 +5604,7 @@ async function runTtsFileReading(groups) {
           try {
             const res = await fetch(`${API}/tts_direct`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: { 'Content-Type': 'application/json', ...conversationHeaders() },
               body: JSON.stringify({ text: displayText }),
             });
             if (res.ok && !ttsReadAbort) {
@@ -5053,6 +5766,7 @@ const $ceCopyVoiceRow    = document.getElementById('ce-copy-voice-row');
 const $ceCopyVoice       = document.getElementById('ce-copy-voice');
 const $ceCopyEmbRow      = document.getElementById('ce-copy-embedding-row');
 const $ceCopyEmbedding   = document.getElementById('ce-copy-embedding');
+const $ceRelationship    = document.getElementById('ce-relationship');
 const $ceMp3Lbl   = document.getElementById('ce-mp3-label');
 const $ceMp3Btn   = document.getElementById('ce-mp3-btn');
 
@@ -5129,6 +5843,7 @@ function openCharEditModal(mode, idx = null) {
   $ceCopyEmbRow.style.display    = 'none';
   $ceCopyVoice.checked     = false;
   $ceCopyEmbedding.checked = false;
+  $ceRelationship.checked  = false;   // 既定: 関係性の変化は無効
   // MP3変換行をリセット（create / duplicate では非表示）
   $ceMp3Row.style.display = 'none';
   $ceMp3Btn.disabled = true;
@@ -5146,6 +5861,7 @@ function openCharEditModal(mode, idx = null) {
         if (d.has_image)     $ceImageLbl.textContent     = '（既存ファイル）';
         if (d.has_voice)     $ceVoiceLbl.textContent     = d.voice_file ? `（既存: ${d.voice_file}）` : '（既存ファイル）';
         if (d.has_embedding) $ceEmbeddingLbl.textContent = d.embedding_file ? `（既存: ${d.embedding_file}）` : '（既存ファイル）';
+        $ceRelationship.checked = !!d.relationship_enabled;
         _updateMp3Btn(d, idx);
       })
       .catch(() => {});
@@ -5171,6 +5887,7 @@ function openCharEditModal(mode, idx = null) {
         $ceCopyEmbRow.querySelector('label').style.opacity = d.has_embedding ? '' : '0.4';
         if (d.has_embedding)
           $ceEmbeddingLbl.textContent = d.embedding_file ? `（既存: ${d.embedding_file}）` : '（既存ファイルをコピー）';
+        $ceRelationship.checked = !!d.relationship_enabled;
       })
       .catch(() => {});
   }
@@ -5217,6 +5934,7 @@ document.getElementById('char-edit-ok').addEventListener('click', async () => {
   if ($ceImageInp.files[0])     fd.append('image',     $ceImageInp.files[0]);
   if ($ceVoiceInp.files[0])     fd.append('voice',     $ceVoiceInp.files[0]);
   if ($ceEmbeddingInp.files[0]) fd.append('embedding', $ceEmbeddingInp.files[0]);
+  fd.append('relationship_enabled', $ceRelationship.checked ? 'true' : 'false');
   if (charEditMode === 'duplicate') {
     fd.append('copy_voice',     $ceCopyVoice.checked     ? 'true' : 'false');
     fd.append('copy_embedding', $ceCopyEmbedding.checked ? 'true' : 'false');
@@ -5266,6 +5984,7 @@ function openCharCardMenu(e, idx) {
   const items = [
     { icon: '✏', label: '編集',   action: () => openCharEditModal('edit', idx) },
     { icon: '⧉', label: '複製',   action: () => openCharEditModal('duplicate', idx) },
+    { icon: '🧠', label: '記憶',   action: () => openMemoryModal(idx) },
   ];
 
   items.forEach(item => {
@@ -5316,6 +6035,142 @@ async function _generateExport(textEl) {
 
 
 /* ══════════════════════════════
+   記憶 モーダル
+══════════════════════════════ */
+const $memoryBackdrop    = document.getElementById('memory-backdrop');
+const $memoryTitle       = document.getElementById('memory-title');
+const $memoryStats       = document.getElementById('memory-stats');
+const $memoryStageLabel  = document.getElementById('memory-stage-label');
+const $memoryStageHint   = document.getElementById('memory-stage-hint');
+const $memoryAffinity    = document.getElementById('memory-affinity');
+const $memoryAffinityVal = document.getElementById('memory-affinity-val');
+const $memoryNote        = document.getElementById('memory-note');
+const $memoryFacts       = document.getElementById('memory-facts');
+const $memoryEpisodes    = document.getElementById('memory-episodes');
+const $memoryPromises    = document.getElementById('memory-promises');
+const $memoryFlushBtn    = document.getElementById('memory-flush');
+let   memoryTargetIdx    = null;
+
+// サーバ側 RELATIONSHIP_STAGES と同じ閾値 (スライダー操作時の即時表示用)
+const MEMORY_STAGES = [
+  [0, 'まだ手探り'], [20, '打ち解けてきた'], [45, '気心の知れた仲'], [70, '特別な相手'],
+];
+function memoryStageName(aff) {
+  let name = MEMORY_STAGES[0][1];
+  for (const [min, n] of MEMORY_STAGES) if (aff >= min) name = n;
+  return name;
+}
+function _updateAffinityLabel() {
+  const v = parseInt($memoryAffinity.value, 10) || 0;
+  $memoryAffinityVal.textContent = `${v}/100`;
+  $memoryStageLabel.textContent  = memoryStageName(v);
+}
+$memoryAffinity.addEventListener('input', _updateAffinityLabel);
+
+function _fillMemoryModal(m) {
+  const relOn = !!m.relationship_enabled;
+  $memoryAffinity.value    = m.affinity ?? 10;
+  $memoryAffinity.disabled = !relOn;
+  $memoryNote.disabled     = !relOn;
+  _updateAffinityLabel();
+  $memoryStageHint.textContent = relOn
+    ? (m.stage_hint || '')
+    : '関係性の変化は無効です（キャラクターの編集モーダルで有効化できます）';
+  $memoryNote.value     = m.relationship_note || '';
+  $memoryFacts.value    = (m.user_facts || []).join('\n');
+  $memoryEpisodes.value = (m.episodes || []).map(e => `${e.date || ''}: ${e.summary || ''}`).join('\n');
+  $memoryPromises.value = (m.promises || []).join('\n');
+  const last = m.last_seen ? m.last_seen.replace('T', ' ') : '—';
+  const pend = m.pending_turns ? ` / 未反映 ${m.pending_turns} 往復` : '';
+  const upd  = m.updating ? ' / 更新中…' : '';
+  $memoryStats.textContent = `会話 ${m.sessions || 0} 回 / 発言 ${m.turns || 0} 回 / 最終: ${last}${pend}${upd}`;
+}
+
+async function openMemoryModal(idx) {
+  memoryTargetIdx = idx;
+  try {
+    const res = await fetch(`${API}/memory/${idx}`);
+    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.detail || 'HTTP ' + res.status); }
+    const m = await res.json();
+    $memoryTitle.textContent = `🧠 MEMORY — ${m.char_name || ''}`;
+    _fillMemoryModal(m);
+    // 「今すぐ更新」は現在会話中のキャラの保留分にだけ作用する
+    $memoryFlushBtn.disabled = (idx !== selectedIndex);
+    $memoryBackdrop.classList.add('open');
+  } catch(e) {
+    showErrorToast('記憶の読み込みエラー: ' + e.message);
+  }
+}
+function closeMemoryModal() { $memoryBackdrop.classList.remove('open'); memoryTargetIdx = null; }
+
+document.getElementById('memory-close').addEventListener('click', closeMemoryModal);
+document.getElementById('memory-cancel').addEventListener('click', closeMemoryModal);
+$memoryBackdrop.addEventListener('click', e => { if (e.target === $memoryBackdrop) closeMemoryModal(); });
+
+function _linesOf(textarea) {
+  return textarea.value.split('\n').map(s => s.trim()).filter(Boolean);
+}
+
+document.getElementById('memory-save').addEventListener('click', async () => {
+  if (memoryTargetIdx === null) return;
+  const episodes = _linesOf($memoryEpisodes).map(line => {
+    const m = line.match(/^(\d{4}-\d{2}-\d{2})\s*[:：]\s*(.*)$/);
+    return m ? { date: m[1], summary: m[2] } : { date: '', summary: line };
+  });
+  try {
+    const res = await fetch(`${API}/memory/${memoryTargetIdx}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_facts:        _linesOf($memoryFacts),
+        episodes,
+        promises:          _linesOf($memoryPromises),
+        affinity:          parseInt($memoryAffinity.value, 10) || 0,
+        relationship_note: $memoryNote.value.trim(),
+      }),
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    showErrorToast('✓ 記憶を保存しました', 'success');
+    closeMemoryModal();
+  } catch(e) {
+    showErrorToast('記憶の保存エラー: ' + e.message);
+  }
+});
+
+document.getElementById('memory-reset').addEventListener('click', async () => {
+  if (memoryTargetIdx === null) return;
+  if (!confirm('このキャラクターの記憶と親密度をすべて消去します。よろしいですか？')) return;
+  try {
+    const res = await fetch(`${API}/memory/${memoryTargetIdx}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    showErrorToast('記憶をリセットしました', 'success');
+    closeMemoryModal();
+  } catch(e) {
+    showErrorToast('リセットエラー: ' + e.message);
+  }
+});
+
+$memoryFlushBtn.addEventListener('click', async () => {
+  try {
+    const res = await fetch(`${API}/memory/flush`, { method: 'POST' });
+    const d   = await res.json().catch(() => ({}));
+    showErrorToast(
+      d.status === 'scheduled' ? '記憶を更新中… 数秒後に再度開いてください' : '反映待ちの会話はありません',
+      'success'
+    );
+  } catch(e) {
+    showErrorToast('更新エラー: ' + e.message);
+  }
+});
+
+// 画面を閉じる/リロードする時、保留中の会話を記憶に反映する
+window.addEventListener('pagehide', () => {
+  if (selectedIndex === null) return;
+  try { navigator.sendBeacon(`${API}/memory/flush`); } catch(e) { /* ignore */ }
+});
+
+
+/* ══════════════════════════════
    接続設定モーダル
 ══════════════════════════════ */
 const $apiConfigBackdrop     = document.getElementById('api-config-backdrop');
@@ -5340,6 +6195,9 @@ const $acLogAutoSave         = document.getElementById('ac-log-auto-save');
 const $acAutoReplyDelay      = document.getElementById('ac-auto-reply-delay');
 const $acArTriggerAudio      = document.getElementById('ac-ar-trigger-audio');
 const $acArTriggerLlm        = document.getElementById('ac-ar-trigger-llm');
+const $acMemoryEnabled       = document.getElementById('ac-memory-enabled');
+const $acMemoryInterval      = document.getElementById('ac-memory-interval');
+const $acHistoryMax          = document.getElementById('ac-history-max');
 // LLM接続設定
 const $acLlmPreset   = document.getElementById('ac-llm-preset');
 const $acLlmFields   = document.getElementById('ac-llm-fields');
@@ -5618,6 +6476,10 @@ async function openApiConfigModal() {
       const arTrigger = s.auto_reply_trigger || 'audio';
       $acArTriggerAudio.checked = (arTrigger !== 'llm');
       $acArTriggerLlm.checked   = (arTrigger === 'llm');
+      // 記憶・履歴設定
+      $acMemoryEnabled.checked = s.memory_enabled !== false;
+      $acMemoryInterval.value  = s.memory_update_interval ?? 6;
+      $acHistoryMax.value      = s.history_max_messages ?? 30;
     }
   } catch(e) { /* ignore */ }
 
@@ -5703,6 +6565,9 @@ $acApplyBtn.addEventListener('click', async () => {
         tts_api_version:          $acTtsVersion.value,
         auto_reply_delay:         parseInt($acAutoReplyDelay.value, 10) || 3,
         auto_reply_trigger:       $acArTriggerLlm.checked ? 'llm' : 'audio',
+        memory_enabled:           $acMemoryEnabled.checked,
+        memory_update_interval:   Math.max(1, Math.min(30, parseInt($acMemoryInterval.value, 10) || 6)),
+        history_max_messages:     Math.max(0, parseInt($acHistoryMax.value, 10) || 0),
       }),
     });
     noVoiceMode = $acNoVoiceDefault.checked ? 'default_voice' : 'off';
