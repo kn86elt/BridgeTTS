@@ -20,6 +20,7 @@ from game_mode import GameEngine, GameError
 from game_mode.llm import OpenAIGameLLM
 from game_mode.transcript import GameTranscriptWriter
 import io
+import math
 import webbrowser
 import base64
 import urllib.request as _urllib_req
@@ -67,7 +68,7 @@ DEFAULT_SETTINGS = {
     "tts_port":     7860,          # TTSサーバのポート
     # 参照音声なしキャラのTTS動作
     "no_voice_mode": "off",        # "off"=音声オフで使用 / "default_voice"=デフォルト音声で使用
-    "tts_api_version": "auto",     # "auto"=自動検出 / "v2" / "v3"
+    "tts_api_version": "auto",     # "auto"=自動検出 / "v2" / "v3" / "v4"
     # テキスト読み上げ（ファイル/ペースト）設定
     "tts_file_batch_size": 2,      # 読み上げ1吹き出しあたりの文章数 (1〜5)
     "tts_read_strip_enabled": True,    # 読み上げ時に除去文字を適用するか
@@ -214,24 +215,35 @@ _DEFAULT_TTS_V3 = {
     "sway_coeff":             0.0,
 }
 
-DEFAULT_TTS_CONFIG = {"v2": _DEFAULT_TTS_V2, "v3": _DEFAULT_TTS_V3}
+_DEFAULT_TTS_V4 = {
+    # Empty checkpoint preserves the server default. Blank steps can opt into model defaults.
+    "checkpoint_v4": "",
+    "num_steps": 20,
+    "num_candidates": 1,
+    "seed_raw": "",
+    "seconds_raw": "",
+    "duration_scale": 1.0,
+}
+
+DEFAULT_TTS_CONFIG = {"v2": _DEFAULT_TTS_V2, "v3": _DEFAULT_TTS_V3, "v4": _DEFAULT_TTS_V4}
 
 def load_tts_config() -> dict:
     """tts_config.json を読み込む。なければデフォルトを書き出して返す。
-    旧形式（平坦な辞書）は自動マイグレーションして v2/v3 構造に変換する。"""
+    旧形式（平坦な辞書）は自動マイグレーションしてバージョン別構造に変換する。"""
     if os.path.exists(TTS_CONFIG_FILE):
         try:
             with open(TTS_CONFIG_FILE, "r", encoding="utf-8") as f:
                 saved = json.load(f)
             # 旧形式マイグレーション: トップレベルに "v2"/"v3" キーがなければ旧形式
-            if "v2" not in saved and "v3" not in saved:
-                print("[TTS Config] 旧形式を検出: v2/v3 構造にマイグレーションします")
+            if not any(version in saved for version in DEFAULT_TTS_CONFIG):
+                print("[TTS Config] 旧形式を検出: バージョン別構造にマイグレーションします")
                 old_flat = saved
                 migrated = {
                     "v2": {**_DEFAULT_TTS_V2,
                            **{k: v for k, v in old_flat.items() if k in _DEFAULT_TTS_V2}},
                     "v3": {**_DEFAULT_TTS_V3,
                            **{k: v for k, v in old_flat.items() if k in _DEFAULT_TTS_V3}},
+                    "v4": dict(_DEFAULT_TTS_V4),
                 }
                 if "checkpoint_v2" in old_flat:
                     migrated["v2"]["checkpoint_v2"] = old_flat["checkpoint_v2"]
@@ -240,14 +252,12 @@ def load_tts_config() -> dict:
                 save_tts_config(migrated)
                 return migrated
             # 新形式: 各バージョンをデフォルトで補完
-            return {
-                "v2": {**_DEFAULT_TTS_V2, **saved.get("v2", {})},
-                "v3": {**_DEFAULT_TTS_V3, **saved.get("v3", {})},
-            }
+            return {version: {**defaults, **saved.get(version, {})}
+                    for version, defaults in DEFAULT_TTS_CONFIG.items()}
         except Exception as e:
             print(f"[TTS Config] Failed to load {TTS_CONFIG_FILE}: {e}")
     save_tts_config(DEFAULT_TTS_CONFIG)
-    return {"v2": dict(_DEFAULT_TTS_V2), "v3": dict(_DEFAULT_TTS_V3)}
+    return {version: dict(defaults) for version, defaults in DEFAULT_TTS_CONFIG.items()}
 
 def save_tts_config(data: dict):
     with open(TTS_CONFIG_FILE, "w", encoding="utf-8") as f:
@@ -275,6 +285,9 @@ _TTS_V3_SEND_KEYS = frozenset({
     "context_kv_cache",
     "speaker_kv_scale_raw", "speaker_kv_min_t_raw", "speaker_kv_max_layers_raw",
 })
+_TTS_V4_SEND_KEYS = _TTS_V2_SEND_KEYS | _TTS_V3_SEND_KEYS | {
+    "seconds_raw", "duration_scale", "lora_adapter_raw",
+}
 
 
 # --- OpenAI クライアント ---
@@ -300,14 +313,13 @@ tts_supports_embedding: bool = False  # /_run_generation に uploaded_speaker_em
 
 
 def detect_tts_version(client) -> str:
-    """接続中の Gradio TTS サーバーが v2 か v3 かを検出する。
-    /_run_generation エンドポイントに t_schedule_mode パラメータがあれば v3。"""
+    """Gradio APIの互換プロファイルを検出する。ロード中のモデル世代とは別。"""
     try:
         named = client._info.get("named_endpoints", {})
         run_gen = named.get("/_run_generation", {})
         params_list = run_gen.get("parameters", []) if isinstance(run_gen, dict) else []
         param_names = [p.get("parameter_name") or p.get("label", "") for p in params_list]
-        version = "v3" if "t_schedule_mode" in param_names else "v2"
+        version = "v4" if _tts_reference_is_multiple(client) else "v3" if "t_schedule_mode" in param_names else "v2"
         print(f"[TTS] API version detected: {version}")
         return version
     except Exception as e:
@@ -359,7 +371,7 @@ def get_tts_client():
             print(f"Connecting to TTS Server at {TTS_API_URL}...")
             tts_client = Client(TTS_API_URL)
             configured = load_settings().get("tts_api_version", "auto")
-            if configured in ("v2", "v3"):
+            if configured in DEFAULT_TTS_CONFIG:
                 tts_api_version = configured
                 print(f"[TTS] API version (manual): {tts_api_version}")
             else:
@@ -1443,12 +1455,20 @@ def generate_and_encode_tts(text, voice_path, embedding_path=None):
             )
 
             print(f"[TTS] generate start: use_embedding={use_embedding} voice_path={voice_path!r} text={text[:20]!r}")
-            send_keys = _TTS_V3_SEND_KEYS if tts_api_version == "v3" else _TTS_V2_SEND_KEYS
-            ver_key   = "v3" if tts_api_version == "v3" else "v2"
+            ver_key = tts_api_version if tts_api_version in DEFAULT_TTS_CONFIG else "v2"
+            send_keys = {"v2": _TTS_V2_SEND_KEYS, "v3": _TTS_V3_SEND_KEYS, "v4": _TTS_V4_SEND_KEYS}[ver_key]
             ver_cfg   = TTS_CONFIG.get(ver_key, {})
             filtered_config = {k: v for k, v in ver_cfg.items() if k in send_keys}
-            ck_key = "checkpoint_v3" if tts_api_version == "v3" else "checkpoint_v2"
-            filtered_config["checkpoint"] = ver_cfg.get(ck_key, "")
+            checkpoint = ver_cfg.get(f"checkpoint_{ver_key}", "")
+            if ver_key != "v4" or checkpoint:
+                filtered_config["checkpoint"] = checkpoint
+            if ver_key == "v4":
+                # Textbox steps accept blank for model-specific defaults, including MF.
+                steps = filtered_config.get("num_steps", "")
+                filtered_config["num_steps"] = "" if steps is None else str(steps)
+                endpoint = tts._info.get("named_endpoints", {}).get("/_run_generation", {})
+                supported = {p.get("parameter_name") for p in endpoint.get("parameters", [])}
+                filtered_config = {k: v for k, v in filtered_config.items() if k in supported}
 
             uploaded_audio = None
             uploaded_embedding = None
@@ -2319,11 +2339,35 @@ def get_prompt(filename: str):
 
 @app.get("/tts_config")
 def get_tts_config_api(version: str = ""):
-    """TTS詳細設定を返す。version="v2"|"v3" で特定バージョンのみ返す（省略時は全体）"""
+    """TTS詳細設定を返す。version="v2"|"v3"|"v4" で指定（省略時は全体）"""
     cfg = load_tts_config()
-    if version in ("v2", "v3"):
+    if version in DEFAULT_TTS_CONFIG:
         return JSONResponse(cfg.get(version, {}))
-    return JSONResponse(cfg)
+    return JSONResponse(cfg, headers={"X-TTS-API-Version": tts_api_version if tts_client is not None else ""})
+
+
+def _validate_tts_config_patch(version: str, patch: dict) -> dict:
+    if not isinstance(patch, dict):
+        raise HTTPException(422, "TTS settings must be an object")
+    patch = dict(patch)
+    checkpoint_key = f"checkpoint_{version}"
+    if checkpoint_key in patch and not isinstance(patch[checkpoint_key], str):
+        raise HTTPException(422, "Checkpoint must be a string")
+    if "num_steps" in patch:
+        steps = patch["num_steps"]
+        if steps == "" and version == "v4":
+            pass
+        elif isinstance(steps, bool) or not re.fullmatch(r"[1-9]\d*", str(steps)):
+            raise HTTPException(422, "Steps must be a positive integer (or blank for v4)")
+        else:
+            patch["num_steps"] = int(steps)
+    if "t_schedule_mode" in patch and patch["t_schedule_mode"] not in ("linear", "sway"):
+        raise HTTPException(422, "Unknown sampling schedule")
+    if "sway_coeff" in patch:
+        coefficient = patch["sway_coeff"]
+        if isinstance(coefficient, bool) or not isinstance(coefficient, (int, float)) or not math.isfinite(coefficient) or not -1 <= coefficient <= 1.5:
+            raise HTTPException(422, "Sway coefficient must be between -1 and 1.5")
+    return patch
 
 @app.post("/tts_config")
 def post_tts_config_api(data: dict = Body(...)):
@@ -2334,18 +2378,19 @@ def post_tts_config_api(data: dict = Body(...)):
 
     if "version" in data:
         # バージョン指定形式: {"version": "v2", "num_steps": 10, ...}
-        ver = data.pop("version")
-        if ver in ("v2", "v3"):
-            current[ver].update(data)
-    elif "v2" in data or "v3" in data:
+        ver = data["version"]
+        if ver not in DEFAULT_TTS_CONFIG:
+            raise HTTPException(422, "Unknown TTS API profile")
+        current[ver].update(_validate_tts_config_patch(ver, {k: v for k, v in data.items() if k != "version"}))
+    elif any(version in data for version in DEFAULT_TTS_CONFIG):
         # 全体形式: {"v2": {...}, "v3": {...}}
-        for ver in ("v2", "v3"):
+        for ver in DEFAULT_TTS_CONFIG:
             if ver in data:
-                current[ver].update(data[ver])
+                current[ver].update(_validate_tts_config_patch(ver, data[ver]))
     else:
         # バージョン指定なし: 現在の tts_api_version に適用
-        ver = "v3" if tts_api_version == "v3" else "v2"
-        current[ver].update(data)
+        ver = tts_api_version if tts_api_version in DEFAULT_TTS_CONFIG else "v2"
+        current[ver].update(_validate_tts_config_patch(ver, data))
 
     save_tts_config(current)
     TTS_CONFIG = current

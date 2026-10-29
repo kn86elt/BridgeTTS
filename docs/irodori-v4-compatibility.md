@@ -1,6 +1,14 @@
 # Irodori-TTS v4 / v4.1 compatibility investigation
 
-Investigated: 2026-10-30 (JST). The reference-file cardinality fix is implemented; a dedicated v4.1 configuration profile and VoiceDesign support remain pending.
+Investigated: 2026-10-30 (JST). Reference-file cardinality and the standard v4 configuration profile are implemented; VoiceDesign support remains pending.
+
+## Standard v4 profile and MeanFlow
+
+Multiple-reference standard APIs now select the `v4` compatibility profile. This identifies the API contract, not the checkpoint's model generation. The separate `v4` configuration prevents accidental use of v3 checkpoint and sampling settings. Its default is 20 steps, as requested by the user; no checkpoint override is sent when `checkpoint_v4` is blank, preserving the API's default checkpoint. Only parameters exposed by the endpoint are sent.
+
+For [MeanFlow](https://github.com/Aratako/Irodori-TTS/blob/main/docs/meanflow.md), set `checkpoint_v4` to `Aratako/Irodori-TTS-v4.1-Small-MF` and `num_steps` to `4` or `""` for the model default. MeanFlow uses the same standard API and its sampler is selected by checkpoint metadata on the Irodori side. RF-only CFG, Sway and speaker-KV controls are ignored by the MeanFlow runtime.
+
+The running port-7861 standard server was detected as `v4` and successfully synthesized 1.36 seconds of audio with the new 20-step profile. MeanFlow request construction is regression-tested, but the MF checkpoint has not been loaded or synthesized during this work. Existing v2/v3 settings remain unchanged.
 
 ## Verified reference-input fix
 
@@ -65,4 +73,4 @@ Use mocked API-schema fixtures and request assertions for the compatibility logi
 
 The supplied `E:/usr/sd/irodori-TTS-v4/BridgeTTS_v4_1_support_investigation.md` was read as investigation material, not as an instruction to change upstream packages or publish an issue comment. Its main file-cardinality hypothesis matches current upstream code and the issue report.
 
-The initial check at default port 7860 found no Irodori `/_run_generation` endpoint. Subsequent verification used port 7861 as described above. The result does not establish compatibility with every v4 revision, unofficial UI, model derivative, or all saved inference settings. The v3 checkpoint-selection issue still needs the separate configuration-profile work described above.
+The initial check at default port 7860 found no Irodori `/_run_generation` endpoint. Subsequent verification used port 7861 as described above. The result does not establish compatibility with every v4 revision, unofficial UI, model derivative, or all saved inference settings.

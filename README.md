@@ -306,24 +306,44 @@ BridgeTTS/
 
 ### TTS 詳細設定
 
-`tts_config.json` を直接編集してパラメータを調整できます。主な項目：
+環境設定の **「TTSモデル・生成設定」** から、API形式ごとにモデル、生成ステップ数、Linear/Sway、Sway係数を変更できます。「編集する設定」は接続先で使用するAPI形式に合わせてください。複数形式の編集は「適用」でまとめて保存され、キャンセルでは保存しません。
+
+v4/v4.1ではサーバー既定、Small、Small MeanFlow、カスタムモデルを選べます。通常版プリセットは20、MeanFlowプリセットは4ステップを入力します。ステップ数は自由に調整でき、v4は空欄でモデル既定値を使用します。MeanFlowモデルではSwayが適用されないため、判別できるモデル名では操作を無効にして案内を表示します。
+
+その他のパラメータは `tts_config.json` を直接編集して調整できます。主な項目：
 
 | キー | 説明 |
 |---|---|
 | `checkpoint_v3` | v3 接続時に使用するチェックポイント。HF リポジトリ ID またはローカルパス（後述） |
 | `checkpoint_v2` | v2 接続時に使用するチェックポイント。同上 |
+| `checkpoint_v4` | v4/v4.1 標準Gradio接続時のチェックポイント。空欄なら接続先APIの既定値を使用 |
 | `num_steps` | 生成ステップ数。下げると速くなるが品質が落ちる（推奨: 10〜20） |
 | `model_precision` / `codec_precision` | `fp32` または `bf16`。RTX 3000 以降なら `bf16` で高速化可能 |
 | `cfg_scale_text` | テキスト追従の強さ |
 | `cfg_scale_speaker` | 話者音声への追従の強さ |
 
-**ローカルモデルの使用：** `checkpoint_v2` / `checkpoint_v3` には HuggingFace リポジトリ ID（例: `Aratako/Irodori-TTS-500M-v3`）のほか、Irodori-TTS サーバ側に保存済みのモデルファイルへのローカルパスを指定できます。`.pt` または `.safetensors` で終わるパスがローカルファイルとして扱われます。
+**ローカルモデルの使用：** `checkpoint_v2` / `checkpoint_v3` / `checkpoint_v4` には HuggingFace リポジトリ ID（例: `Aratako/Irodori-TTS-500M-v3`）のほか、Irodori-TTS サーバ側に保存済みのモデルファイルへのローカルパスを指定できます。`.pt` または `.safetensors` で終わるパスがローカルファイルとして扱われます。
 
 ```json
 "checkpoint_v3": "C:\\models\\Irodori-TTS-500M-v3\\model.safetensors"
 ```
 
 ローカルパスを指定した場合、起動時の HuggingFace ダウンロードが発生しないため、オフライン環境や初回ロードを高速化したい場合に有効です。パスは BridgeTTS ではなく **Irodori-TTS サーバ側のファイルシステム上のパス** を指定してください（通常は同一 PC のため同じパスで問題ありません）。
+
+**v4.1 MeanFlow：** `tts_config.json` の `v4` セクションでモデルとステップ数を指定します。通常版は引き続き20ステップを既定とし、MeanFlowは4ステップを指定するか、`num_steps` を `""` にしてモデル既定値に任せられます。
+
+```json
+"v4": {
+  "checkpoint_v4": "Aratako/Irodori-TTS-v4.1-Small-MF",
+  "num_steps": 4,
+  "num_candidates": 1,
+  "seed_raw": "",
+  "seconds_raw": "",
+  "duration_scale": 1.0
+}
+```
+
+編集後はBridgeTTSを再起動してください。MeanFlowは通常版と同じ標準Gradio APIを使用し、推論方式はIrodori側で判別されます。CFG・Sway等のRF専用設定はMeanFlowでは無視されます。詳細は[公式MeanFlowガイド](https://github.com/Aratako/Irodori-TTS/blob/main/docs/meanflow.md)を参照してください。VoiceDesign用Gradioのcaption入力は別対応です。
 
 ### LLM サーバ設定
 
@@ -354,7 +374,7 @@ set LLM_API_URL=http://localhost:1234/v1
 set TTS_API_URL=http://localhost:7860/
 ```
 
-**Irodori-TTS バージョン**：環境設定の「Irodori-TTS バージョン」から **自動検出 / v3 / v2** を選択できます。「自動検出」（デフォルト）では接続時に Gradio API のパラメータ一覧を確認して v2/v3 を自動判定します。v2 / v3 サーバを使い分ける場合は手動で固定することもできます。
+**Irodori-TTS API形式**：環境設定から **自動検出 / v4 / v3 / v2** を選択できます。「自動検出」（デフォルト）では参照音声の複数入力とAPI引数を確認して互換プロファイルを判定します。この表示はロード中のモデル世代そのものを保証しません。v4/v4.1は独立した `v4` 設定を使用し、v3用チェックポイントやステップ数を流用しません。手動固定も可能です。
 
 **キャラクター読み出し設定**：環境設定の「キャラクター読み出し設定」で Speaker Embedding の挙動を変更できます。
 

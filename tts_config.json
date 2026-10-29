@@ -41,5 +41,13 @@
     "speaker_kv_max_layers_raw": "",
     "t_schedule_mode": "sway",
     "sway_coeff": 0.0
+  },
+  "v4": {
+    "checkpoint_v4": "",
+    "num_steps": 20,
+    "num_candidates": 1,
+    "seed_raw": "",
+    "seconds_raw": "",
+    "duration_scale": 1.0
   }
 }

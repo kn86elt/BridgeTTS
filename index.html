@@ -1442,13 +1442,37 @@ body.no-bubble-blur .msg-bubble {
           <span id="ac-tts-env-text">環境変数 TTS_API_URL を使用</span>
         </label>
         <div style="margin-top:10px">
-          <div class="api-field-label">Irodori-TTS バージョン</div>
+          <div class="api-field-label">Irodori-TTS API形式</div>
           <select class="api-field-select" id="ac-tts-version" style="margin-top:4px">
             <option value="auto">自動検出</option>
+            <option value="v4">v4 / v4.1（MeanFlow含む）</option>
             <option value="v3">v3</option>
             <option value="v2">v2</option>
           </select>
+          <div style="font-size:12px; color:var(--muted); margin-top:4px">接続先のAPI形式を指定します。モデル・生成設定は下で変更できます。</div>
         </div>
+        <details style="margin-top:12px">
+          <summary style="cursor:pointer">TTSモデル・生成設定</summary>
+          <fieldset id="ac-tts-generation" disabled style="border:0; padding:10px 0 0; margin:0; min-width:0">
+            <label class="api-field-label" for="ac-tts-profile">編集する設定</label>
+            <select class="api-field-select" id="ac-tts-profile">
+              <option value="v4">v4 / v4.1</option><option value="v3">v3</option><option value="v2">v2</option>
+            </select>
+            <div style="font-size:12px; color:var(--muted); margin-top:4px">設定はAPI形式ごとに保存され、接続時に選ばれた形式のものを使用します。</div>
+            <label class="api-field-label" for="ac-tts-model-preset" style="margin-top:10px">モデル</label>
+            <select class="api-field-select" id="ac-tts-model-preset"></select>
+            <input class="api-field-input" id="ac-tts-checkpoint" type="text" aria-label="モデルのリポジトリIDまたはパス" placeholder="モデルのリポジトリID / サーバー上のファイルパス" style="width:100%; margin-top:6px">
+            <label class="api-field-label" for="ac-tts-steps" style="margin-top:10px">生成ステップ数</label>
+            <input class="api-field-input" id="ac-tts-steps" type="number" min="1" step="1" placeholder="空欄：モデル既定値" style="width:100%">
+            <div style="font-size:12px; color:var(--muted); margin-top:4px">通常版は20、MeanFlowは4ステップから調整できます。v4は空欄でモデル既定値を使用します。</div>
+            <label class="api-field-label" for="ac-tts-schedule" style="margin-top:10px">サンプリング方式</label>
+            <select class="api-field-select" id="ac-tts-schedule"><option value="linear">Linear</option><option value="sway">Sway</option></select>
+            <label class="api-field-label" for="ac-tts-sway" style="margin-top:10px">Sway係数</label>
+            <input class="api-field-input" id="ac-tts-sway" type="number" min="-1" max="1.5" step="0.1" style="width:100%">
+            <div id="ac-tts-sampling-hint" style="font-size:12px; color:var(--muted); margin-top:4px" role="status"></div>
+          </fieldset>
+          <div id="ac-tts-generation-error" style="font-size:12px; color:var(--muted); margin-top:4px" role="status"></div>
+        </details>
         <div class="api-field-label" style="margin-top:8px">参照音声のないキャラクター</div>
         <div style="display:flex; gap:16px; align-items:center; margin-top:4px">
           <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:13px">
@@ -6254,6 +6278,118 @@ const $acTtsPort          = document.getElementById('ac-tts-port');
 const $acTtsUseEnv        = document.getElementById('ac-tts-use-env');
 const $acTtsEnvText       = document.getElementById('ac-tts-env-text');
 const $acTtsVersion       = document.getElementById('ac-tts-version');
+const $acTtsGeneration = document.getElementById('ac-tts-generation');
+const $acTtsProfile = document.getElementById('ac-tts-profile');
+const $acTtsModelPreset = document.getElementById('ac-tts-model-preset');
+const $acTtsCheckpoint = document.getElementById('ac-tts-checkpoint');
+const $acTtsSteps = document.getElementById('ac-tts-steps');
+const $acTtsSchedule = document.getElementById('ac-tts-schedule');
+const $acTtsSway = document.getElementById('ac-tts-sway');
+const $acTtsSamplingHint = document.getElementById('ac-tts-sampling-hint');
+const $acTtsGenerationError = document.getElementById('ac-tts-generation-error');
+let ttsConfigDrafts = null;
+let ttsEditingProfile = 'v4';
+let ttsConfigDirty = new Set();
+
+function ttsModelPresets(version) {
+  return version === 'v4' ? [
+    ['', 'サーバー既定モデル'],
+    ['Aratako/Irodori-TTS-v4.1-Small', 'v4.1 Small'],
+    ['Aratako/Irodori-TTS-v4.1-Small-MF', 'v4.1 Small MeanFlow'],
+  ] : [[`Aratako/Irodori-TTS-500M-${version}`, `Irodori-TTS 500M ${version}`]];
+}
+function updateTtsSamplingControls() {
+  const meanflow = /meanflow|[-_]mf(?:[./_-]|$)/i.test($acTtsCheckpoint.value);
+  const unsupported = ttsEditingProfile === 'v2' || meanflow;
+  $acTtsSchedule.disabled = unsupported;
+  $acTtsSway.disabled = unsupported || $acTtsSchedule.value !== 'sway';
+  $acTtsSamplingHint.textContent = meanflow
+    ? 'MeanFlowではSway・CFGなどのRF専用設定は適用されません。'
+    : ttsEditingProfile === 'v2' ? 'このv2 API形式ではサンプリング方式を指定しません。'
+    : 'Swayを選ぶと係数を調整できます。MeanFlowモデルではこの設定は適用されません。';
+}
+function readTtsGenerationForm() {
+  const raw = $acTtsSteps.value.trim();
+  const steps = raw === '' ? '' : Number(raw);
+  if (steps !== '' && (!Number.isSafeInteger(steps) || steps < 1)) throw new Error('ステップ数は1以上の整数にしてください。');
+  if (steps === '' && ttsEditingProfile !== 'v4') throw new Error('v2/v3のステップ数を入力してください。');
+  const patch = { [`checkpoint_${ttsEditingProfile}`]: $acTtsCheckpoint.value.trim(), num_steps: steps };
+  if (ttsEditingProfile !== 'v2') {
+    const coefficient = Number($acTtsSway.value);
+    if (!$acTtsSway.value.trim() || !Number.isFinite(coefficient) || coefficient < -1 || coefficient > 1.5) throw new Error('Sway係数は-1〜1.5で入力してください。');
+    patch.t_schedule_mode = $acTtsSchedule.value;
+    patch.sway_coeff = coefficient;
+  }
+  return patch;
+}
+function stashTtsGenerationForm() {
+  if (!ttsConfigDrafts) return;
+  const patch = readTtsGenerationForm();
+  const current = ttsConfigDrafts[ttsEditingProfile] || {};
+  if (Object.entries(patch).some(([key, value]) => current[key] !== value)) {
+    ttsConfigDrafts[ttsEditingProfile] = { ...current, ...patch };
+    ttsConfigDirty.add(ttsEditingProfile);
+  }
+}
+function renderTtsGenerationForm(version) {
+  ttsEditingProfile = version;
+  $acTtsProfile.value = version;
+  const config = ttsConfigDrafts[version] || {};
+  $acTtsCheckpoint.value = config[`checkpoint_${version}`] || '';
+  $acTtsSteps.value = config.num_steps ?? 20;
+  $acTtsSchedule.value = config.t_schedule_mode || 'linear';
+  $acTtsSway.value = config.sway_coeff ?? -1;
+  $acTtsModelPreset.replaceChildren();
+  for (const [value, label] of [...ttsModelPresets(version), ['custom', 'カスタムモデル']]) {
+    const option = document.createElement('option'); option.value = value; option.textContent = label; $acTtsModelPreset.appendChild(option);
+  }
+  $acTtsModelPreset.value = ttsModelPresets(version).some(([value]) => value === $acTtsCheckpoint.value) ? $acTtsCheckpoint.value : 'custom';
+  updateTtsSamplingControls();
+}
+async function loadTtsGenerationSettings() {
+  ttsConfigDrafts = null; ttsConfigDirty = new Set();
+  $acTtsGeneration.disabled = true; $acTtsGenerationError.textContent = '';
+  try {
+    const response = await fetch(`${API}/tts_config`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    ttsConfigDrafts = await response.json();
+    const active = response.headers.get('X-TTS-API-Version');
+    const profile = ['v2', 'v3', 'v4'].includes($acTtsVersion.value) ? $acTtsVersion.value : ['v2', 'v3', 'v4'].includes(active) ? active : 'v4';
+    renderTtsGenerationForm(profile);
+    $acTtsGeneration.disabled = false;
+  } catch (error) { ttsConfigDrafts = null; $acTtsGenerationError.textContent = 'TTS生成設定を読み込めませんでした。開き直して再試行してください。'; }
+}
+async function saveTtsGenerationSettings() {
+  if (!ttsConfigDrafts) return;
+  stashTtsGenerationForm();
+  if (!ttsConfigDirty.size) return;
+  const updates = {};
+  for (const version of ttsConfigDirty) {
+    const config = ttsConfigDrafts[version];
+    updates[version] = { [`checkpoint_${version}`]: config[`checkpoint_${version}`], num_steps: config.num_steps };
+    if (version !== 'v2') Object.assign(updates[version], { t_schedule_mode: config.t_schedule_mode, sway_coeff: config.sway_coeff });
+  }
+  const response = await fetch(`${API}/tts_config`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updates) });
+  if (!response.ok) throw new Error('TTS生成設定を保存できませんでした。入力を確認してください。');
+  ttsConfigDirty.clear();
+}
+$acTtsProfile.addEventListener('change', () => {
+  const next = $acTtsProfile.value;
+  try { stashTtsGenerationForm(); renderTtsGenerationForm(next); }
+  catch (error) { $acTtsProfile.value = ttsEditingProfile; showErrorToast(error.message); }
+});
+$acTtsModelPreset.addEventListener('change', () => {
+  const value = $acTtsModelPreset.value;
+  if (value === 'custom') { $acTtsCheckpoint.focus(); return; }
+  $acTtsCheckpoint.value = value;
+  if (value) $acTtsSteps.value = value.endsWith('-MF') ? 4 : 20;
+  updateTtsSamplingControls();
+});
+$acTtsCheckpoint.addEventListener('input', () => {
+  $acTtsModelPreset.value = ttsModelPresets(ttsEditingProfile).some(([value]) => value === $acTtsCheckpoint.value) ? $acTtsCheckpoint.value : 'custom';
+  updateTtsSamplingControls();
+});
+$acTtsSchedule.addEventListener('change', updateTtsSamplingControls);
 const $acNoVoiceOff          = document.getElementById('ac-no-voice-off');
 const $acNoVoiceDefault      = document.getElementById('ac-no-voice-default');
 
@@ -6514,6 +6650,7 @@ async function openApiConfigModal() {
     }
   } catch(e) { /* ignore */ }
 
+  await loadTtsGenerationSettings();
   _refreshFfmpegStatus();
   _updateUnloadBtn();
   $apiConfigBackdrop.classList.add('open');
@@ -6552,6 +6689,8 @@ $acResetBtn.addEventListener('click', () => {
 
 // 適用
 $acApplyBtn.addEventListener('click', async () => {
+  try { await saveTtsGenerationSettings(); }
+  catch (error) { showErrorToast(error.message); return; }
   // ── LLM / TTS 接続設定の保存 ──
   try {
     const payload = {
