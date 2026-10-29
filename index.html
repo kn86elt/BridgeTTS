@@ -1358,6 +1358,8 @@ body.no-bubble-blur .msg-bubble {
 .game-choice { display: flex; gap: 8px; width: 100%; text-align: left; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px; cursor: pointer; font: inherit; }
 .game-choice:hover:not(:disabled) { border-color: var(--accent); }
 .game-choice:disabled { opacity: .55; cursor: default; }
+.game-choice.is-selected { opacity: 1; border-color: var(--accent); box-shadow: inset 3px 0 var(--accent); }
+.game-pending-selection { opacity: .85; }
 .game-choice-number { color: var(--accent); font-weight: 700; min-width: 1.4em; }
 .game-notice, .game-working { color: var(--muted); text-align: center; font-size: 12px; }
 .log-popup-item[aria-disabled="true"] { opacity: .45; cursor: not-allowed; }
@@ -3347,7 +3349,7 @@ $logMenuBtn.addEventListener('click', e => {
       role: 'menuitemcheckbox', checked: privateMode || gameVisible(), disabled: gameVisible(),
       tooltip: gameVisible() ? 'ゲームの出来事は通常の記憶に追加しません' : 'この会話の内容をキャラクターの記憶に追加しません（既存の記憶は使われます）',
       action: togglePrivateMode },
-    { label: ((gameView?.status === 'active' || gameView?.status === 'suspended' || gameVisible()) ? '✓ ' : '　') + 'ゲームモード',
+    { label: ((gameView?.status === 'active' || gameView?.status === 'suspended' || gameVisible()) ? '✓ ' : '　') + 'ゲームモード（実験的）',
       role: 'menuitemcheckbox', checked: gameView?.status === 'active' || gameView?.status === 'suspended' || gameVisible(),
       disabled: !['off', 'active'].includes(gameUiPhase),
       tooltip: '会話を引き継いで物語を進めます。解除すると中断し、同じページで再開できます',
@@ -3928,6 +3930,9 @@ function setGamePhase(phase) {
   $gameModeBadge.classList.toggle('active', visible);
   $input.disabled = visible && phase !== 'active';
   $sendBtn.disabled = visible && phase !== 'active';
+  for (const button of gameViewRoot?.querySelectorAll('.game-choice') || []) {
+    button.disabled = phase !== 'active' || !!gameRequest || button.dataset.interactionId !== gameView?.interaction?.id || gameView?.status !== 'active';
+  }
   $input.placeholder = visible
     ? '話しかける、行動を書く、数字で選ぶ…'
     : 'メッセージを入力... (Enter で送信)';
@@ -4023,6 +4028,8 @@ function makeGameEventNode(entry, currentInteraction, latestInteractionId) {
     const latest = entry.id === latestInteractionId && currentInteraction && gameView?.status === 'active';
     for (const choice of entry.choices || []) {
       const button = document.createElement('button'); button.type = 'button'; button.className = 'game-choice'; button.disabled = !latest;
+      button.dataset.interactionId = latest ? currentInteraction.id : '';
+      button.dataset.choiceId = choice.id;
       const number = document.createElement('span'); number.className = 'game-choice-number'; number.textContent = `${choice.number}.`;
       const label = document.createElement('span'); label.textContent = choice.label;
       button.append(number, label);
@@ -4059,7 +4066,25 @@ function showGameWorking(show) {
   if (!gameViewRoot) return;
   const previous = gameViewRoot.querySelector('.game-working');
   if (previous) previous.remove();
-  if (show) { const node = document.createElement('div'); node.className = 'game-working'; node.textContent = '状況を確認中…'; gameViewRoot.appendChild(node); }
+  const pending = gameViewRoot.querySelector('.game-pending-selection');
+  if (pending) pending.remove();
+  for (const button of gameViewRoot.querySelectorAll('.game-choice')) {
+    const selected = !!gameRequest && button.dataset.interactionId === gameRequest.body.input.interaction_id && button.dataset.choiceId === gameRequest.selectedChoiceId;
+    button.classList.toggle('is-selected', selected);
+    button.setAttribute('aria-pressed', String(selected));
+  }
+  if (gameRequest?.displayText) {
+    const node = document.createElement('div');
+    node.className = 'game-player-event game-pending-selection';
+    node.textContent = '送信済み：' + gameRequest.displayText;
+    gameViewRoot.appendChild(node);
+  }
+  if (show) {
+    const node = document.createElement('div'); node.className = 'game-working'; node.setAttribute('role', 'status');
+    node.textContent = gameRequest ? '選択を受け付けました。続きを生成中…' : '状況を確認中…';
+    gameViewRoot.appendChild(node);
+    scrollBottom();
+  }
 }
 function ensureGameLease() {
   if (gameLeaseTimer) clearInterval(gameLeaseTimer);
@@ -4191,7 +4216,13 @@ async function submitGameInput(input, originalText, existingBody = null) {
     page_id: pageId, conversation_epoch: conversationEpoch, revision: gameView.revision,
     request_id: gameRequestId(), input,
   };
-  gameRequest = { body, originalText, generation: gameDisplayGeneration };
+  const choices = gameView.interaction?.choices || [];
+  const numericText = input.kind === 'text' ? input.text.trim().replace(/[０-９]/g, char => String.fromCharCode(char.charCodeAt(0) - 0xFEE0)) : '';
+  const selected = input.kind === 'choice'
+    ? choices.find(choice => choice.id === input.choice_id)
+    : /^\d+$/.test(numericText) ? choices.find(choice => choice.number === Number(numericText)) : null;
+  gameRequest = { body, originalText, generation: gameDisplayGeneration,
+    displayText: selected?.label || originalText, selectedChoiceId: selected?.id };
   setGamePhase('submitting'); showGameWorking(true);
   try {
     const response = await fetch(`${API}/game/${gameView.game_id}/turn`, {

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+MAX_CHOICE_TEXT_CHARS = 40
 
 def _object(value: Any, allowed: set[str], required: set[str], name: str) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) - allowed or not required <= set(value):
@@ -139,13 +140,13 @@ def validate_choices(obj: dict[str, Any]) -> None:
     for choice in choices:
         _object(choice, {"steps"}, {"steps"}, "choice")
         steps = choice.get("steps")
-        if not isinstance(steps, list) or not 1 <= len(steps) <= 2:
+        if not isinstance(steps, list) or len(steps) != 1:
             raise ValueError("invalid choice steps")
         for step in steps:
             if step.get("kind") not in {"speech", "action"}:
                 raise ValueError("invalid step")
             _object(step, {"kind", "text", "target_key"}, {"kind", "text"}, "step")
-            _text(step.get("text"), "step text", 1000)
+            _text(step.get("text"), "step text", MAX_CHOICE_TEXT_CHARS)
             target_key = step.get("target_key")
             if target_key is not None:
                 _text(target_key, "step target", 32)

@@ -18,6 +18,7 @@ from typing import Any, Callable
 
 from .memory import add_turn, compact_if_needed, new_memory, view_context
 from .models import Choice, GameError, GameSession, Interaction
+from .validation import MAX_CHOICE_TEXT_CHARS
 
 LEASE_SECONDS = 30 * 60
 MAX_INPUT_CHARS = 2_000
@@ -255,12 +256,12 @@ class GameEngine:
                         raise GameError("INVALID_MODEL_OUTPUT", 502)
                     target_id = entity["id"]
                 text = raw_step["text"].strip()
-                if not text or len(text) > 160:
+                if not text or len(text) > MAX_CHOICE_TEXT_CHARS:
                     raise GameError("INVALID_MODEL_OUTPUT", 502)
                 steps.append({"kind": kind, "text": text, "target_id": target_id})
                 labels.append(f"「{text}」" if kind == "speech" else text)
             label = "、".join(labels)
-            if len(label) > 160 or not 1 <= len(steps) <= 2:
+            if len(label) > MAX_CHOICE_TEXT_CHARS + 2 or len(steps) != 1:
                 raise GameError("INVALID_MODEL_OUTPUT", 502)
             if expected_kind == "content" and any(step["kind"] != "speech" for step in steps):
                 raise GameError("INVALID_MODEL_OUTPUT", 502)
