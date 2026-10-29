@@ -5,6 +5,8 @@
 確認が必要ならkind=clarifyとして質問と、既存の可視対象キーだけを返し、同時に世界を変更しません。内部IDではなくscene内のkeyを使います。
 出来事を追加できるのはmay_introduce_hook=trueの場合のみ。直前の質問や盛り上がった会話を遮らず、小さな出来事を最大1つにします。
 character_eventはキャラクターが見聞きしたことだけ。player_onlyの内容を含めません。
+selectionとinputはプレイヤーの操作です。プレイヤーが移動を選んだ場合、キャラクター本人が移動したことに置き換えません。
+entity_additionsは任意です。対象登録が不要なら省略してください。追加する場合はdescription_by_viewに、perceived_byの各視点について空欄でない説明を入れます。共通のdescriptionは使いません。確かな説明を出せなければ登録しません。
 重要事実は本文とknown_byを持つオブジェクトにし、本人が知覚した視点だけをknown_byに含めます。形式:
 {"kind":"resolve","intent":"speech|action|mixed|observation","speech_text":"発話部分または空文字","action_text":"選択/入力で明示された行動または空文字","target_key":null,"narration":"プレイヤーに見せる結果","action_succeeded":true,"character_should_reply":true,"character_event":"キャラが知覚した出来事または空文字","hook":null,"important_facts":[{"text":"確定した事実","known_by":["player"]}]}
 確認の場合:

@@ -41,8 +41,15 @@ def validate_opening(obj: dict[str, Any]) -> None:
                 {"key", "name", "kind", "perceived_by", "description_by_view"}, "entity")
         key = _text(entity.get("key"), "entity key", 32)
         name = _text(entity.get("name"), "entity name", 80)
-        if key in keys or name not in obj["narration"]:
-            raise ValueError("entity must be uniquely introduced in narration")
+        if key in keys:
+            raise ValueError(f"duplicate entity key {key!r}; every entities[].key must be unique")
+        if name not in obj["narration"]:
+            raise ValueError(
+                f"entities[{key!r}].name {name!r} is not an exact substring of narration; "
+                "omit this entity if it is not introduced, or use its exact name already present in narration. "
+                "Do not invent an object or event to satisfy this check. "
+                "The selected character is registered by the engine and can be omitted from entities."
+            )
         keys.add(key)
         if entity.get("kind") not in {"object", "person", "place"}:
             raise ValueError("invalid entity kind")

@@ -19,6 +19,7 @@ from typing import Any, Callable
 from .memory import add_turn, compact_if_needed, new_memory, view_context
 from .models import Choice, GameError, GameSession, Interaction
 from .validation import MAX_CHOICE_TEXT_CHARS
+from .output import normalize_opening, normalize_resolution, prepare_choices
 
 LEASE_SECONDS = 30 * 60
 MAX_INPUT_CHARS = 2_000
@@ -280,6 +281,10 @@ class GameEngine:
 
     def _character_reply(self, session: GameSession, llm: Any) -> str:
         context = view_context(session.memory, "character")
+        context["current_turn"] = next(
+            (copy.deepcopy(turn) for turn in context["recent_turns"] if turn["world_turn"] == session.world_turn),
+            {"world_turn": session.world_turn, "events": []},
+        )
         normal_history = [
             {"role": item.get("role"), "content": item.get("content", "")}
             for item in session.seed.get("normal_history", [])
@@ -289,7 +294,9 @@ class GameEngine:
         messages = [{"role": "system", "content": persona + "\n\n" + self._character_instruction()}]
         messages.extend(normal_history[-24:])
         messages.append({"role": "user", "content": json.dumps(context, ensure_ascii=False)})
-        return llm.character_reply({"messages": messages})
+        previous_reply = next((entry["text"] for entry in reversed(session.public_entries)
+                               if entry["type"] == "character"), "")
+        return llm.character_reply({"messages": messages, "previous_reply": previous_reply})
 
     @staticmethod
     def _character_instruction() -> str:
@@ -297,12 +304,18 @@ class GameEngine:
         return (Path(__file__).parent / "prompts" / "character_context.txt").read_text(encoding="utf-8")
 
     def _choices(self, session: GameSession, llm: Any, character_text: str, kind: str | None = None) -> list[Choice]:
-        output = llm.choices({
-            "kind": kind or ("reply" if character_text else "action"),
-            "player_context": self._player_context(session),
-            "last_character_text": character_text,
-            "character_name": session.character_name,
-        })
+        try:
+            output = llm.choices({
+                "kind": kind or ("reply" if character_text else "action"),
+                "player_context": self._player_context(session),
+                "last_character_text": character_text,
+                "character_name": session.character_name,
+            })
+        except Exception:
+            # A completed world turn must not be rolled back for optional suggestions.
+            output = {}
+        output, supplemented = prepare_choices(output, session.scene, content_only=kind == "content")
+        session.choice_notice = "候補を一部補いました。自由入力でも行動や発話を指定できます。" if supplemented else None
         from .validation import validate_choices
         validate_choices(output)
         return self._new_choices(output, session.scene, expected_kind="content" if kind == "content" else None)
@@ -327,6 +340,7 @@ class GameEngine:
             "events": copy.deepcopy(events if events is not None else session.public_entries),
             "interaction": session.pending.public() if session.pending else None,
             "log_warning": session.log_warning,
+            "notice": session.choice_notice,
         }
         if include_transcript:
             view["transcript"] = copy.deepcopy(session.public_entries)
@@ -445,7 +459,7 @@ class GameEngine:
         try:
             llm = self._snapshot_llm()
             from .validation import validate_opening
-            opening = llm.opening(copy.deepcopy(session.seed))
+            opening = normalize_opening(llm.opening(copy.deepcopy(session.seed)), session.character_name)
             validate_opening(opening)
             self._validate_limits(session)
             scene = {
@@ -496,8 +510,8 @@ class GameEngine:
                 character_text = self._character_reply(temp, llm)
                 character_event = self._world_event(temp, "speech", {"player": character_text, "character": character_text}, source="character", actor_id="character", world_turn=1)
                 events.append(character_event)
-                temp.memory["recent_turns"][-1]["by_view"]["player"].append({"event_id": character_event["id"], "type": "speech", "text": character_text})
-                temp.memory["recent_turns"][-1]["by_view"]["character"].append({"event_id": character_event["id"], "type": "speech", "text": character_text})
+                temp.memory["recent_turns"][-1]["by_view"]["player"].append({"event_id": character_event["id"], "type": "speech", "text": character_text, "speaker": "character"})
+                temp.memory["recent_turns"][-1]["by_view"]["character"].append({"event_id": character_event["id"], "type": "speech", "text": character_text, "speaker": "character"})
                 self._add_public(temp, "character", character_text)
             choices = self._choices(temp, llm, character_text)
             self._install_choices(temp, choices, character_text)
@@ -740,7 +754,7 @@ class GameEngine:
                 "may_introduce_hook": may_hook,
                 "known_target_keys": [e["key"] for e in temp.scene.get("entities", []) if "player" in e.get("perceived_by", [])],
             }
-            output = llm.resolve(payload_for_llm)
+            output = normalize_resolution(llm.resolve(payload_for_llm), temp.scene)
             from .validation import validate_resolution
             validate_resolution(output)
             if output["kind"] == "clarify":
@@ -880,7 +894,7 @@ class GameEngine:
                 world_events.append(char_event)
                 if temp.memory["recent_turns"] and temp.memory["recent_turns"][-1]["world_turn"] == next_turn:
                     for view in ("player", "character"):
-                        temp.memory["recent_turns"][-1]["by_view"][view].append({"event_id": char_event["id"], "type": "speech", "text": character_text})
+                        temp.memory["recent_turns"][-1]["by_view"][view].append({"event_id": char_event["id"], "type": "speech", "text": character_text, "speaker": "character"})
                 else:
                     add_turn(temp.memory, next_turn, [char_event])
                 self._add_public(temp, "character", character_text)

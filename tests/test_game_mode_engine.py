@@ -149,6 +149,17 @@ class GameEngineTests(unittest.TestCase):
         self.assertIn("直接の発話。", str(self.llm.character_contexts[-1]))
         self.assertEqual(result["world_turn"], self.started["world_turn"] + 1)
 
+    def test_character_can_distinguish_its_previous_reply_from_selected_speech(self):
+        initial = self.engine.view(self.game_id, self.page_id)
+        self.submit_choice(initial["interaction"]["choices"][0], view=initial)
+        context = self.llm.character_contexts[-1]
+        events = [event for turn in context["recent_turns"] for event in turn["events"]]
+        self.assertTrue(any(event.get("speaker") == "character" and event["text"] == "窓から風が来るね。" for event in events))
+        self.assertTrue(any(event.get("speaker") == "player" and event["text"] == "そうなんだね。" for event in events))
+        self.assertEqual(context["current_turn"]["world_turn"], initial["world_turn"] + 1)
+        self.assertTrue(any(event.get("speaker") == "player" and event["text"] == "そうなんだね。"
+                            for event in context["current_turn"]["events"]))
+
     def test_gm_adds_only_announced_entities_to_viewpoint_scene(self):
         before = self.engine.view(self.game_id, self.page_id)
         result = self.submit_text("EVENT_ADD", request_id="add-entity", view=before)
@@ -195,7 +206,10 @@ class GameEngineTests(unittest.TestCase):
 
     def test_generation_failure_keeps_original_state_and_failed_id_is_not_replayed(self):
         before = self.engine.view(self.game_id, self.page_id)
-        self.llm.fail_next_choices = True
+        def fail_resolution(payload):
+            self.llm.resolve_calls.append(payload)
+            raise RuntimeError("resolution failed")
+        self.llm.resolve = fail_resolution
         request = {
             "kind": "text", "text": "自由な行動", "interaction_id": before["interaction"]["id"],
         }
@@ -211,6 +225,40 @@ class GameEngineTests(unittest.TestCase):
         self.assertEqual(replay.exception.code, "INVALID_MODEL_OUTPUT")
         self.assertEqual(len(self.llm.resolve_calls), resolve_calls)
         self.assertEqual(len(self.llm.choice_calls), choice_calls)
+
+    def test_choice_failure_commits_turn_and_exact_replay_does_not_generate_again(self):
+        before = self.engine.view(self.game_id, self.page_id)
+        self.llm.fail_next_choices = True
+        result = self.submit_text("直接の発話。", view=before, request_id="choice-fallback")
+        self.assertEqual(result["world_turn"], before["world_turn"] + 1)
+        self.assertTrue(any(event["type"] == "player" and event["text"] == "直接の発話。" for event in result["events"]))
+        self.assertEqual(len(result["interaction"]["choices"]), 3)
+        self.assertTrue(result["notice"])
+        calls = len(self.llm.resolve_calls)
+        replay = self.submit_text("直接の発話。", view=before, request_id="choice-fallback")
+        self.assertEqual(replay, result)
+        self.assertEqual(len(self.llm.resolve_calls), calls)
+        choice = result["interaction"]["choices"][0]
+        next_result = self.submit_choice(choice, view=result, request_id="use-fallback")
+        self.assertEqual(next_result["world_turn"], result["world_turn"] + 1)
+        self.assertIsNone(next_result["notice"])
+
+    def test_start_tolerates_unintroduced_object_and_registers_character_only_once(self):
+        original = self.llm.opening
+        def noisy_opening(seed):
+            result = original(seed)
+            result["entities"].append({"key": "duplicate", "name": "ミオ", "kind": "person"})
+            result["entities"].append({"key": "unknown", "name": "本文にない物"})
+            result["extra"] = "optional metadata"
+            return result
+        self.llm.opening = noisy_opening
+        self.engine.close_page(self.page_id)
+        started = self.engine.start(page_id="new-page", conversation_epoch=self.epoch, normal_revision=0,
+                                    request_id="tolerant-start", seed={"character_name": "ミオ"})
+        session = self.engine.current("new-page")
+        self.assertEqual(started["status"], "active")
+        self.assertEqual(sum(entity["name"] == "ミオ" for entity in session.scene["entities"]), 1)
+        self.assertNotIn("本文にない物", str(session.scene))
 
     def test_start_failure_replay_does_not_call_fake_model_twice(self):
         failing = FakeGameLLM()

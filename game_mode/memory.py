@@ -33,7 +33,10 @@ def add_turn(memory: dict[str, Any], world_turn: int, events: list[dict[str, Any
         for view in by_view:
             text = text_by_view.get(view)
             if text:
-                by_view[view].append({"event_id": event["id"], "type": event["kind"], "text": text})
+                projected = {"event_id": event["id"], "type": event["kind"], "text": text}
+                if event["kind"] == "speech" and event.get("actor_id") in {"player", "character"}:
+                    projected["speaker"] = event["actor_id"]
+                by_view[view].append(projected)
                 if event.get("important"):
                     memory["important_facts"][view].append({
                         "text": text[:500],
@@ -71,7 +74,11 @@ def view_context(memory: dict[str, Any], view: str, *, include_entity_keys: bool
         if events:
             recent.append({
                 "world_turn": turn["world_turn"],
-                "events": [{"type": event.get("type", ""), "text": event.get("text", "")} for event in events],
+                "events": [
+                    {"type": event.get("type", ""), "text": event.get("text", ""),
+                     **({"speaker": event["speaker"]} if event.get("speaker") in {"player", "character"} else {})}
+                    for event in events
+                ],
             })
     return {
         "scene": scene,

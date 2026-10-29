@@ -68,3 +68,4 @@ class GameSession:
     lease_expires_at: float = 0.0
     audio_records: dict[str, dict[str, Any]] = field(default_factory=dict)
     log_warning: str | None = None
+    choice_notice: str | None = None

@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import re
 import time
+import unicodedata
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable
 
@@ -32,6 +34,22 @@ def _decode_json(text: str) -> Any:
     return value
 
 
+def _repeats_reply(text: str, previous: str) -> bool:
+    if not previous:
+        return False
+    # Ignore punctuation, emoji and spacing before comparing the actual wording.
+    current = re.sub(r"[\W_]+", "", unicodedata.normalize("NFKC", text)).casefold()
+    earlier = re.sub(r"[\W_]+", "", unicodedata.normalize("NFKC", previous)).casefold()
+    if not current or not earlier:
+        return text.strip() == previous.strip()
+    if current == earlier:
+        return True
+    # Only apply fuzzy matching to long replies; short answers may differ by a negation.
+    return min(len(current), len(earlier)) >= 40 and SequenceMatcher(
+        None, current, earlier, autojunk=False,
+    ).ratio() >= 0.95
+
+
 class OpenAIGameLLM:
     """One request-scoped client/model pair. No normal conversation state is touched."""
 
@@ -46,7 +64,8 @@ class OpenAIGameLLM:
             raise GameError("LLM_TIMEOUT", 504)
         return min(REQUEST_TIMEOUT_SECONDS, remaining)
 
-    def _json(self, role: str, payload: dict[str, Any], validate: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
+    def _json(self, role: str, payload: dict[str, Any], validate: Callable[[dict[str, Any]], None],
+              normalize: Callable[[dict[str, Any]], dict[str, Any]] | None = None) -> dict[str, Any]:
         system = _read_prompt(role)
         user_payload: dict[str, Any] = payload
         last_error = "invalid JSON or contract"
@@ -77,26 +96,33 @@ class OpenAIGameLLM:
             raw = (response.choices[0].message.content or "").strip()
             try:
                 value = _decode_json(raw)
+                if normalize is not None:
+                    value = normalize(value)
                 validate(value)
                 return value
             except Exception as exc:
-                last_error = type(exc).__name__
+                last_error = f"{type(exc).__name__}: {exc}"
         raise GameError("INVALID_MODEL_OUTPUT", 502)
 
     def opening(self, seed: dict[str, Any]) -> dict[str, Any]:
         from .validation import validate_opening
-        return self._json("opening", {"seed": seed}, validate_opening)
+        from .output import normalize_opening
+        return self._json("opening", {"seed": seed}, validate_opening,
+                          lambda value: normalize_opening(value, seed.get("character_name", "")))
 
     def resolve(self, payload: dict[str, Any]) -> dict[str, Any]:
         from .validation import validate_resolution
-        return self._json("resolve", payload, validate_resolution)
+        from .output import normalize_resolution
+        return self._json("resolve", payload, validate_resolution,
+                          lambda value: normalize_resolution(value, payload.get("scene", {})))
 
     def choices(self, payload: dict[str, Any]) -> dict[str, Any]:
-        from .validation import validate_choices
-        return self._json("choices", payload, validate_choices)
+        # The engine validates candidates individually and supplies missing ones.
+        return self._json("choices", payload, lambda _value: None)
 
     def character_reply(self, payload: dict[str, Any]) -> str:
         messages = payload["messages"]
+        previous_reply = payload.get("previous_reply", "")
         for attempt in range(MAX_REPAIR_ATTEMPTS + 1):
             try:
                 response = self.client.chat.completions.create(
@@ -117,11 +143,19 @@ class OpenAIGameLLM:
                 or text.lstrip().startswith(("{", "1.", "1)"))
                 or text.casefold().startswith(("gm:", "進行役:", "選択肢:", "候補:"))
             )
-            if not invalid:
+            repeated = _repeats_reply(text, previous_reply)
+            if not invalid and (not repeated or attempt == MAX_REPAIR_ATTEMPTS):
                 return text
+            instruction = "セリフ本文だけを1〜3文で出力してください。番号、候補、説明、JSON形式は出しません。"
+            if repeated:
+                instruction += (
+                    "\n直前のあなた自身の返答と同じ文になっています。current_turnの相手の発話や見聞きした出来事に応じて、"
+                    "新しい返答をしてください。単なる言い換えではなく、問いに答える、判断するなど会話を進めます。"
+                    "知らない事実や相手の同意を作りません。\n直前の返答: " + previous_reply
+                )
             messages = [
                 *payload["messages"],
-                {"role": "system", "content": "セリフ本文だけを1〜3文で出力してください。番号、候補、説明、JSON形式は出しません。"},
+                {"role": "system", "content": instruction},
             ]
         raise GameError("INVALID_MODEL_OUTPUT", 502)
 
