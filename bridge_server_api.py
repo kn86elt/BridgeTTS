@@ -1395,6 +1395,34 @@ def _handle_file_with_retry(file_path: str, label: str):
     return None
 
 
+def _tts_reference_is_multiple(client) -> bool:
+    """Inspect only the reference input's schema, independently of model generation."""
+    info = getattr(client, "_info", {})
+    if not isinstance(info, dict):
+        return False
+    endpoint = info.get("named_endpoints", {}).get("/_run_generation", {})
+    parameters = endpoint.get("parameters", []) if isinstance(endpoint, dict) else []
+    parameter = next((item for item in parameters if item.get("parameter_name") == "uploaded_audio"), {})
+    root = parameter.get("type", {})
+
+    def is_array(schema, depth=0):
+        if not isinstance(schema, dict) or depth > 8:
+            return False
+        kind = schema.get("type")
+        if kind == "array" or isinstance(kind, list) and "array" in kind:
+            return True
+        reference = schema.get("$ref", "")
+        if isinstance(reference, str) and reference.startswith("#/"):
+            target = root
+            for part in reference[2:].split("/"):
+                target = target.get(part.replace("~1", "/").replace("~0", "~"), {}) if isinstance(target, dict) else {}
+            if is_array(target, depth + 1):
+                return True
+        return any(is_array(item, depth + 1) for key in ("anyOf", "oneOf") for item in schema.get(key, []))
+
+    return is_array(root)
+
+
 def generate_and_encode_tts(text, voice_path, embedding_path=None):
     """TTSを生成してBase64文字列で返す。
     embedding_path が指定されAPIが対応している場合はSpeaker Embeddingを使用する。
@@ -1443,6 +1471,8 @@ def generate_and_encode_tts(text, voice_path, embedding_path=None):
                     if uploaded_audio is None:
                         print(f"[TTS] WARNING: リファレンス音声の読み込みに失敗。音声なしで生成します: {voice_path}")
 
+            if _tts_reference_is_multiple(tts):
+                uploaded_audio = [uploaded_audio] if uploaded_audio is not None else []
             predict_kwargs = {**filtered_config, "text": text, "api_name": "/_run_generation",
                               "uploaded_audio": uploaded_audio}
             if tts_supports_embedding:
