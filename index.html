@@ -1462,6 +1462,7 @@ body.no-bubble-blur .msg-bubble {
             <label class="api-field-label" for="ac-tts-model-preset" style="margin-top:10px">モデル</label>
             <select class="api-field-select" id="ac-tts-model-preset"></select>
             <input class="api-field-input" id="ac-tts-checkpoint" type="text" aria-label="モデルのリポジトリIDまたはパス" placeholder="モデルのリポジトリID / サーバー上のファイルパス" style="width:100%; margin-top:6px">
+            <div style="font-size:12px; color:var(--muted); margin-top:4px">v4のAPIでも旧v2/v3モデルを選べます。声を比較するときは参照音声・ステップ数・サンプリング方式を揃えてください。モデルの選択ではAPI形式やSway設定は変更しません。</div>
             <input class="api-field-input" id="ac-tts-model-name" type="text" maxlength="80" aria-label="追加モデルの表示名" placeholder="一覧に追加するモデルの表示名" style="width:100%; margin-top:6px">
             <div style="display:flex; gap:8px; margin-top:6px">
               <button type="button" class="api-field-select" id="ac-tts-model-add">このモデルを一覧に追加</button>
@@ -6306,6 +6307,8 @@ function ttsModelPresets(version) {
     ['Aratako/Irodori-TTS-v4.1-Small', 'v4.1 Small'],
     ['phasefield-audio/Irodori-TTS-v4.1-Anime', 'v4.1 Anime（phasefield-audio）'],
     ['Aratako/Irodori-TTS-v4.1-Small-MF', 'v4.1 Small MeanFlow'],
+    ['Aratako/Irodori-TTS-500M-v3', '旧モデル：500M v3（v4 APIで使用）'],
+    ['Aratako/Irodori-TTS-500M-v2', '旧モデル：500M v2（v4 APIで使用）'],
   ] : [[`Aratako/Irodori-TTS-500M-${version}`, `Irodori-TTS 500M ${version}`]];
   const saved = ttsConfigDrafts?.[version]?.model_presets;
   const used = new Set(builtin.map(([value]) => value));
