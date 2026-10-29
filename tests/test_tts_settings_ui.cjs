@@ -24,10 +24,10 @@ function setup() {
       return { ok: true, headers: { get: () => 'v4' }, json: async () => JSON.parse(JSON.stringify(stored)) };
     },
   });
-  for (const name of ['Generation', 'Profile', 'ModelPreset', 'Checkpoint', 'Steps', 'Schedule', 'Sway', 'SamplingHint', 'GenerationError', 'Version']) c['$acTts' + name] = field();
+  for (const name of ['Generation', 'Profile', 'ModelPreset', 'ModelName', 'ModelAdd', 'ModelRemove', 'Checkpoint', 'Steps', 'Schedule', 'Sway', 'SamplingHint', 'GenerationError', 'Version']) c['$acTts' + name] = field();
   c.$acTtsVersion.value = 'auto';
   const functions = ['ttsModelPresets', 'updateTtsSamplingControls', 'readTtsGenerationForm', 'stashTtsGenerationForm',
-    'renderTtsGenerationForm', 'loadTtsGenerationSettings'];
+    'renderTtsGenerationForm', 'addTtsModelPreset', 'removeTtsModelPreset', 'loadTtsGenerationSettings'];
   for (const name of functions) vm.runInContext(source(name), c);
   // The following event handlers are outside the last function; extract through its closing brace.
   const save = html.slice(html.indexOf('async function saveTtsGenerationSettings()'), html.indexOf("$acTtsProfile.addEventListener('change'"));
@@ -76,5 +76,36 @@ test('invalid steps never trigger a settings write', async () => {
   await c.loadTtsGenerationSettings();
   c.$acTtsSteps.value = '1.5';
   await assert.rejects(c.saveTtsGenerationSettings(), /整数/);
+  assert.equal(writes.length, 0);
+});
+
+test('user models stay local until apply; deleting a preset keeps the selected checkpoint', async () => {
+  const { c, writes } = setup();
+  await c.loadTtsGenerationSettings();
+  c.$acTtsModelName.value = '好きなモデル';
+  c.$acTtsCheckpoint.value = 'example/model';
+  c.addTtsModelPreset();
+  assert.equal(writes.length, 0);
+  assert.ok(c.ttsModelPresets('v4').some(([value, name]) => value === 'example/model' && name === '好きなモデル'));
+  assert.equal(c.$acTtsModelRemove.disabled, false);
+  c.stashTtsGenerationForm(); c.renderTtsGenerationForm('v3');
+  assert.ok(!c.ttsModelPresets('v3').some(([value]) => value === 'example/model'));
+  c.stashTtsGenerationForm(); c.renderTtsGenerationForm('v4');
+  await c.saveTtsGenerationSettings();
+  assert.deepEqual(writes[0].v4.model_presets, [{ name: '好きなモデル', checkpoint: 'example/model' }]);
+  c.removeTtsModelPreset();
+  assert.equal(c.$acTtsCheckpoint.value, 'example/model');
+  assert.equal(c.$acTtsModelPreset.value, 'custom');
+  assert.equal(c.$acTtsModelRemove.disabled, true);
+  await c.saveTtsGenerationSettings();
+  assert.deepEqual(writes[1].v4.model_presets, []);
+});
+
+test('canceling a newly added model discards the preset', async () => {
+  const { c, writes } = setup();
+  await c.loadTtsGenerationSettings();
+  c.$acTtsModelName.value = '未保存'; c.$acTtsCheckpoint.value = 'example/model'; c.addTtsModelPreset();
+  await c.loadTtsGenerationSettings();
+  assert.ok(!c.ttsModelPresets('v4').some(([value]) => value === 'example/model'));
   assert.equal(writes.length, 0);
 });

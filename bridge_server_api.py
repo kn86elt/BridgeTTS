@@ -2367,6 +2367,22 @@ def _validate_tts_config_patch(version: str, patch: dict) -> dict:
         coefficient = patch["sway_coeff"]
         if isinstance(coefficient, bool) or not isinstance(coefficient, (int, float)) or not math.isfinite(coefficient) or not -1 <= coefficient <= 1.5:
             raise HTTPException(422, "Sway coefficient must be between -1 and 1.5")
+    if "model_presets" in patch:
+        presets = patch["model_presets"]
+        if not isinstance(presets, list):
+            raise HTTPException(422, "Model presets must be a list")
+        cleaned = []
+        names, checkpoints = set(), set()
+        for entry in presets:
+            if not isinstance(entry, dict) or not isinstance(entry.get("name"), str) or not isinstance(entry.get("checkpoint"), str):
+                raise HTTPException(422, "Model presets require a name and checkpoint")
+            name, checkpoint = entry["name"].strip(), entry["checkpoint"].strip()
+            if not 1 <= len(name) <= 80 or not 1 <= len(checkpoint) <= 2048 or name in names or checkpoint in checkpoints:
+                raise HTTPException(422, "Model presets must have unique, nonempty names and checkpoints")
+            names.add(name)
+            checkpoints.add(checkpoint)
+            cleaned.append({"name": name, "checkpoint": checkpoint})
+        patch["model_presets"] = cleaned
     return patch
 
 @app.post("/tts_config")

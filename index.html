@@ -1462,6 +1462,12 @@ body.no-bubble-blur .msg-bubble {
             <label class="api-field-label" for="ac-tts-model-preset" style="margin-top:10px">モデル</label>
             <select class="api-field-select" id="ac-tts-model-preset"></select>
             <input class="api-field-input" id="ac-tts-checkpoint" type="text" aria-label="モデルのリポジトリIDまたはパス" placeholder="モデルのリポジトリID / サーバー上のファイルパス" style="width:100%; margin-top:6px">
+            <input class="api-field-input" id="ac-tts-model-name" type="text" maxlength="80" aria-label="追加モデルの表示名" placeholder="一覧に追加するモデルの表示名" style="width:100%; margin-top:6px">
+            <div style="display:flex; gap:8px; margin-top:6px">
+              <button type="button" class="api-field-select" id="ac-tts-model-add">このモデルを一覧に追加</button>
+              <button type="button" class="api-field-select" id="ac-tts-model-remove" disabled>一覧から削除</button>
+            </div>
+            <div style="font-size:12px; color:var(--muted); margin-top:4px">「適用」で一覧を保存します。追加時にはモデルを取得しません。信頼できる配布元のモデルを使用してください。</div>
             <label class="api-field-label" for="ac-tts-steps" style="margin-top:10px">生成ステップ数</label>
             <input class="api-field-input" id="ac-tts-steps" type="number" min="1" step="1" placeholder="空欄：モデル既定値" style="width:100%">
             <div style="font-size:12px; color:var(--muted); margin-top:4px">通常版は20、MeanFlowは4ステップから調整できます。v4は空欄でモデル既定値を使用します。</div>
@@ -6282,6 +6288,9 @@ const $acTtsGeneration = document.getElementById('ac-tts-generation');
 const $acTtsProfile = document.getElementById('ac-tts-profile');
 const $acTtsModelPreset = document.getElementById('ac-tts-model-preset');
 const $acTtsCheckpoint = document.getElementById('ac-tts-checkpoint');
+const $acTtsModelName = document.getElementById('ac-tts-model-name');
+const $acTtsModelAdd = document.getElementById('ac-tts-model-add');
+const $acTtsModelRemove = document.getElementById('ac-tts-model-remove');
 const $acTtsSteps = document.getElementById('ac-tts-steps');
 const $acTtsSchedule = document.getElementById('ac-tts-schedule');
 const $acTtsSway = document.getElementById('ac-tts-sway');
@@ -6292,13 +6301,24 @@ let ttsEditingProfile = 'v4';
 let ttsConfigDirty = new Set();
 
 function ttsModelPresets(version) {
-  return version === 'v4' ? [
+  const builtin = version === 'v4' ? [
     ['', 'サーバー既定モデル'],
     ['Aratako/Irodori-TTS-v4.1-Small', 'v4.1 Small'],
+    ['phasefield-audio/Irodori-TTS-v4.1-Anime', 'v4.1 Anime（phasefield-audio）'],
     ['Aratako/Irodori-TTS-v4.1-Small-MF', 'v4.1 Small MeanFlow'],
   ] : [[`Aratako/Irodori-TTS-500M-${version}`, `Irodori-TTS 500M ${version}`]];
+  const saved = ttsConfigDrafts?.[version]?.model_presets;
+  const used = new Set(builtin.map(([value]) => value));
+  const custom = [];
+  for (const entry of Array.isArray(saved) ? saved : []) {
+    if (typeof entry?.name !== 'string' || typeof entry?.checkpoint !== 'string' || !entry.checkpoint || used.has(entry.checkpoint)) continue;
+    used.add(entry.checkpoint); custom.push([entry.checkpoint, entry.name]);
+  }
+  return [...builtin, ...custom];
 }
 function updateTtsSamplingControls() {
+  const saved = ttsConfigDrafts?.[ttsEditingProfile]?.model_presets;
+  $acTtsModelRemove.disabled = !(Array.isArray(saved) && saved.some(entry => entry.checkpoint === $acTtsCheckpoint.value));
   const meanflow = /meanflow|[-_]mf(?:[./_-]|$)/i.test($acTtsCheckpoint.value);
   const unsupported = ttsEditingProfile === 'v2' || meanflow;
   $acTtsSchedule.disabled = unsupported;
@@ -6346,9 +6366,32 @@ function renderTtsGenerationForm(version) {
   $acTtsModelPreset.value = ttsModelPresets(version).some(([value]) => value === $acTtsCheckpoint.value) ? $acTtsCheckpoint.value : 'custom';
   updateTtsSamplingControls();
 }
+function addTtsModelPreset() {
+  if (!ttsConfigDrafts) return;
+  const name = $acTtsModelName.value.trim();
+  const checkpoint = $acTtsCheckpoint.value.trim();
+  if (!name || name.length > 80) throw new Error('モデルの表示名を1〜80文字で入力してください。');
+  if (!checkpoint || checkpoint.length > 2048) throw new Error('モデルのリポジトリIDまたはパスを入力してください。');
+  if (ttsModelPresets(ttsEditingProfile).some(([value, label]) => value === checkpoint || label === name)) throw new Error('同じモデルまたは表示名がすでに一覧にあります。');
+  stashTtsGenerationForm();
+  const config = ttsConfigDrafts[ttsEditingProfile];
+  config.model_presets = [...(config.model_presets || []), { name, checkpoint }];
+  ttsConfigDirty.add(ttsEditingProfile);
+  $acTtsModelName.value = '';
+  renderTtsGenerationForm(ttsEditingProfile);
+}
+function removeTtsModelPreset() {
+  if (!ttsConfigDrafts) return;
+  stashTtsGenerationForm();
+  const config = ttsConfigDrafts[ttsEditingProfile];
+  config.model_presets = (config.model_presets || []).filter(entry => entry.checkpoint !== $acTtsCheckpoint.value);
+  ttsConfigDirty.add(ttsEditingProfile);
+  // Removing a bookmark must not change the checkpoint used for synthesis.
+  renderTtsGenerationForm(ttsEditingProfile);
+}
 async function loadTtsGenerationSettings() {
   ttsConfigDrafts = null; ttsConfigDirty = new Set();
-  $acTtsGeneration.disabled = true; $acTtsGenerationError.textContent = '';
+  $acTtsGeneration.disabled = true; $acTtsGenerationError.textContent = ''; $acTtsModelName.value = '';
   try {
     const response = await fetch(`${API}/tts_config`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -6367,6 +6410,7 @@ async function saveTtsGenerationSettings() {
   for (const version of ttsConfigDirty) {
     const config = ttsConfigDrafts[version];
     updates[version] = { [`checkpoint_${version}`]: config[`checkpoint_${version}`], num_steps: config.num_steps };
+    if (Array.isArray(config.model_presets)) updates[version].model_presets = config.model_presets;
     if (version !== 'v2') Object.assign(updates[version], { t_schedule_mode: config.t_schedule_mode, sway_coeff: config.sway_coeff });
   }
   const response = await fetch(`${API}/tts_config`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updates) });
@@ -6390,6 +6434,8 @@ $acTtsCheckpoint.addEventListener('input', () => {
   updateTtsSamplingControls();
 });
 $acTtsSchedule.addEventListener('change', updateTtsSamplingControls);
+$acTtsModelAdd.addEventListener('click', () => { try { addTtsModelPreset(); } catch (error) { showErrorToast(error.message); } });
+$acTtsModelRemove.addEventListener('click', () => { try { removeTtsModelPreset(); } catch (error) { showErrorToast(error.message); } });
 const $acNoVoiceOff          = document.getElementById('ac-no-voice-off');
 const $acNoVoiceDefault      = document.getElementById('ac-no-voice-default');
 

@@ -52,3 +52,12 @@ class TtsSettingsTests(unittest.TestCase):
         self.assertEqual(self.client.get("/tts_config?version=v4").json()["num_steps"], "")
         with patch.object(api, "tts_client", object()), patch.object(api, "tts_api_version", "v4"):
             self.assertEqual(self.client.get("/tts_config").headers["X-TTS-API-Version"], "v4")
+
+    def test_user_model_list_is_persisted_and_validated(self):
+        presets = [{"name": "好みのモデル", "checkpoint": "example/model"}]
+        self.assertEqual(self.client.post("/tts_config", json={"v4": {"model_presets": presets}}).status_code, 200)
+        self.assertEqual(self.client.get("/tts_config?version=v4").json()["model_presets"], presets)
+        for invalid in ({"name": ""}, [presets[0], presets[0]], [{"name": "空", "checkpoint": " "}]):
+            with self.subTest(invalid=invalid):
+                self.assertEqual(self.client.post("/tts_config", json={"v4": {"model_presets": invalid}}).status_code, 422)
+                self.assertEqual(self.client.get("/tts_config?version=v4").json()["model_presets"], presets)
