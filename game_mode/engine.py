@@ -28,6 +28,10 @@ MAX_OPERATIONS = 2_000
 MAX_SESSION_BYTES = 5 * 1024 * 1024
 HOOK_INTERVAL_TURNS = 3
 TOMBSTONE_SECONDS = 5 * 60
+# Prompt-size limits for role calls. Smaller prompts keep local models responsive.
+CHARACTER_HISTORY_MESSAGES = 12
+CHOICE_CONTEXT_TURNS = 3
+RESOLVE_CHARACTER_TURNS = 2
 
 
 def _id(prefix: str) -> str:
@@ -295,7 +299,7 @@ class GameEngine:
         ]
         persona = session.seed.get("system_prompt", "")
         messages = [{"role": "system", "content": persona + "\n\n" + self._character_instruction()}]
-        messages.extend(normal_history[-24:])
+        messages.extend(normal_history[-CHARACTER_HISTORY_MESSAGES:])
         messages.append({"role": "user", "content": json.dumps(context, ensure_ascii=False)})
         previous_reply = next((entry["text"] for entry in reversed(session.public_entries)
                                if entry["type"] == "character"), "")
@@ -307,10 +311,12 @@ class GameEngine:
         return (Path(__file__).parent / "prompts" / "character_context.txt").read_text(encoding="utf-8")
 
     def _choices(self, session: GameSession, llm: Any, character_text: str, kind: str | None = None) -> list[Choice]:
+        player_context = self._player_context(session)
+        player_context["recent_turns"] = player_context["recent_turns"][-CHOICE_CONTEXT_TURNS:]
         try:
             output = llm.choices({
                 "kind": kind or ("reply" if character_text else "action"),
-                "player_context": self._player_context(session),
+                "player_context": player_context,
                 "last_character_text": character_text,
                 "character_name": session.character_name,
             })
@@ -752,30 +758,38 @@ class GameEngine:
                 and not any(h.get("status") == "open" for h in temp.scene.get("hooks", []))
                 and not (temp.pending and temp.pending.kind in {"target", "content"})
             )
-            payload_for_llm = {
-                "scene": copy.deepcopy(temp.scene),
-                "gm_context": view_context(temp.memory, "player", include_entity_keys=True),
-                "character_context": view_context(temp.memory, "character"),
-                "input": text,
-                "selection": selection,
-                "may_introduce_hook": may_hook,
-                "known_target_keys": [e["key"] for e in temp.scene.get("entities", []) if "player" in e.get("perceived_by", [])],
-            }
-            output = normalize_resolution(llm.resolve(payload_for_llm), temp.scene)
-            from .validation import validate_resolution
-            validate_resolution(output)
+            if self._speech_only_selection(selection):
+                output = self._direct_speech_resolution()
+            else:
+                character_context = view_context(temp.memory, "character")
+                payload_for_llm = {
+                    "scene": copy.deepcopy(temp.scene),
+                    "gm_context": view_context(temp.memory, "player", include_entity_keys=True),
+                    "character_context": {
+                        "scene": character_context["scene"],
+                        "recent_turns": character_context["recent_turns"][-RESOLVE_CHARACTER_TURNS:],
+                    },
+                    "input": text,
+                    "selection": selection,
+                    "may_introduce_hook": may_hook,
+                    "known_target_keys": [e["key"] for e in temp.scene.get("entities", []) if "player" in e.get("perceived_by", [])],
+                }
+                output = normalize_resolution(llm.resolve(payload_for_llm), temp.scene)
+                from .validation import validate_resolution
+                validate_resolution(output)
+            if output.get("hook") and not may_hook:
+                # A hook outside the allowed cadence is dropped instead of failing the turn.
+                output["hook"] = None
             if output["kind"] == "clarify":
                 allowed = {
                     entity["key"]: entity["id"]
                     for entity in temp.scene.get("entities", [])
                     if "player" in entity.get("perceived_by", [])
                 }
-                target_ids = output.get("target_keys", [])
-                if any(target_key not in allowed for target_key in target_ids):
-                    raise GameError("INVALID_MODEL_OUTPUT", 502)
+                target_ids = [key for key in output.get("target_keys", []) if key in allowed]
                 command = output["command"]
                 resolved_target_ids = [allowed[target_key] for target_key in target_ids]
-                temp.pending = self._target_interaction(temp, command, output["question"], resolved_target_ids)
+                temp.pending = self._target_interaction(temp, command, output["question"], resolved_target_ids or None)
                 temp.revision += 1
                 self._add_public(temp, "interaction", text=temp.pending.prompt, choices=temp.pending.choices)
                 self._check_size(temp)
@@ -810,25 +824,27 @@ class GameEngine:
             output_intent = output["intent"]
             steps = selection.get("steps", []) if selection else []
             if not selection:
+                target_id = self._entity_id_for_key(temp, output.get("target_key"))
                 if output_intent == "speech":
                     # A direct line reaches the character verbatim; classification cannot rewrite it.
-                    steps = [{"kind": "speech", "text": text, "target_id": output.get("target_key") or "character"}]
+                    steps = [{"kind": "speech", "text": text, "target_id": target_id or "character"}]
                 elif output_intent == "mixed":
                     speech = output.get("speech_text", "")
                     action = output.get("action_text", "")
-                    if not speech or speech not in text or not action or action not in text:
-                        raise GameError("INVALID_MODEL_OUTPUT", 502)
-                    steps = [
-                        {"kind": "action", "text": action, "target_id": output.get("target_key")},
-                        {"kind": "speech", "text": speech, "target_id": "character"},
-                    ]
-                elif output_intent == "observation":
-                    steps = [{"kind": "action", "text": text, "target_id": output.get("target_key")}]
+                    if speech and action and speech in text and action in text:
+                        steps = [
+                            {"kind": "action", "text": action, "target_id": target_id},
+                            {"kind": "speech", "text": speech, "target_id": "character"},
+                        ]
+                    else:
+                        # The split could not be verified against the input, so the
+                        # whole line is delivered verbatim and recorded as written.
+                        steps = [
+                            {"kind": "action", "text": text, "target_id": target_id},
+                            {"kind": "speech", "text": text, "target_id": "character"},
+                        ]
                 else:
-                    action = output.get("action_text") or text
-                    if action not in text and action != text:
-                        raise GameError("INVALID_MODEL_OUTPUT", 502)
-                    steps = [{"kind": "action", "text": text, "target_id": output.get("target_key")}]
+                    steps = [{"kind": "action", "text": text, "target_id": target_id}]
             if not steps:
                 raise GameError("INVALID_MODEL_OUTPUT", 502)
             for step in steps:
@@ -837,9 +853,6 @@ class GameEngine:
                 target_id = step.get("target_id")
                 if target_id and not self._visible_entity(temp, target_id, "player"):
                     raise GameError("INVALID_MODEL_OUTPUT", 502)
-            if output.get("hook") and not may_hook:
-                raise GameError("INVALID_MODEL_OUTPUT", 502)
-
             self._validate_limits(temp)
             next_turn = temp.world_turn + 1
             world_events: list[dict[str, Any]] = []
@@ -952,6 +965,29 @@ class GameEngine:
     @staticmethod
     def _visible_entity(session: GameSession, entity_id: str, view: str) -> dict[str, Any] | None:
         return next((e for e in session.scene.get("entities", []) if e["id"] == entity_id and view in e.get("perceived_by", [])), None)
+
+    @staticmethod
+    def _speech_only_selection(selection: dict[str, Any] | None) -> bool:
+        if not selection or selection.get("kind") != "perform":
+            return False
+        steps = selection.get("steps", [])
+        return bool(steps) and all(step.get("kind") == "speech" for step in steps)
+
+    @staticmethod
+    def _direct_speech_resolution() -> dict[str, Any]:
+        """A prepared line reaches the character verbatim; no GM interpretation is needed."""
+        return {
+            "kind": "resolve", "intent": "speech", "speech_text": "", "action_text": "", "target_key": None,
+            "narration": "", "action_succeeded": True, "character_should_reply": True,
+            "character_event": "", "hook": None, "important_facts": [], "entity_additions": [],
+        }
+
+    @staticmethod
+    def _entity_id_for_key(session: GameSession, key: Any) -> str | None:
+        if not isinstance(key, str) or not key:
+            return None
+        return next((entity["id"] for entity in session.scene.get("entities", [])
+                     if entity["key"] == key and "player" in entity.get("perceived_by", [])), None)
 
     def suspend(self, game_id: str, *, page_id: str, revision: int, request_id: str) -> dict[str, Any]:
         with self._lock:

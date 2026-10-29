@@ -421,6 +421,67 @@ class GameEngineTests(unittest.TestCase):
                           revision=suspended["revision"], request_id="late-resume")
         self.assertEqual(resume.exception.code, "GAME_CLOSED")
 
+    def test_speech_only_choice_skips_resolve_but_action_choice_uses_it(self):
+        initial = self.engine.view(self.game_id, self.page_id)
+        speech = next(c for c in initial["interaction"]["choices"] if c["label"].startswith("「"))
+        calls = len(self.llm.resolve_calls)
+        result = self.submit_choice(speech, view=initial, request_id="speech-choice")
+        self.assertEqual(len(self.llm.resolve_calls), calls)
+        self.assertEqual(result["world_turn"], initial["world_turn"] + 1)
+        self.assertTrue(any(e["type"] == "character" for e in result["events"]))
+        self.assertFalse(any(e["type"] == "narration" for e in result["events"]))
+        action = next(c for c in result["interaction"]["choices"] if not c["label"].startswith("「"))
+        self.submit_choice(action, view=result, request_id="action-choice")
+        self.assertEqual(len(self.llm.resolve_calls), calls + 1)
+
+    def test_resolve_payload_is_slim_and_character_history_is_capped(self):
+        self.submit_text("自由な行動", request_id="slim")
+        payload = self.llm.resolve_calls[-1]
+        self.assertEqual(set(payload["character_context"]), {"scene", "recent_turns"})
+        self.assertLessEqual(len(payload["character_context"]["recent_turns"]), 2)
+        self.assertLessEqual(len(self.llm.choice_calls[-1]["player_context"]["recent_turns"]), 3)
+
+    def test_disallowed_hook_is_dropped_without_failing_the_turn(self):
+        original = self.llm.resolve
+        def with_hook(payload):
+            out = original(payload); out["hook"] = "突然の物音"; return out
+        self.llm.resolve = with_hook
+        self.engine._session.scene["last_hook_world_turn"] = self.engine._session.world_turn
+        before = self.engine.view(self.game_id, self.page_id)
+        result = self.submit_text("自由な行動", view=before, request_id="hook-dropped")
+        self.assertEqual(result["world_turn"], before["world_turn"] + 1)
+        self.assertFalse(any("突然の物音" in e.get("text", "") for e in result["events"]))
+
+    def test_target_key_from_resolve_is_mapped_to_entity_id(self):
+        original = self.llm.resolve
+        def targeted(payload):
+            out = original(payload); out["intent"] = "observation"; out["target_key"] = "window"; return out
+        self.llm.resolve = targeted
+        result = self.submit_text("窓を眺める", request_id="target-map")
+        self.assertEqual(result["world_turn"], self.started["world_turn"] + 1)
+        session = self.engine.current(self.page_id)
+        window = next(e for e in session.scene["entities"] if e["key"] == "window")
+        self.assertTrue(any(window["id"] in event.get("target_ids", []) and event["source"] == "player"
+                            for event in session.memory["event_ledger"]))
+
+    def test_clarify_with_unknown_keys_falls_back_to_visible_targets(self):
+        self.llm.resolve = lambda payload: {"kind": "clarify", "question": "どれ？", "command": "look", "target_keys": ["ghost"]}
+        before = self.engine.view(self.game_id, self.page_id)
+        result = self.submit_text("あれを見る", view=before, request_id="clarify-unknown")
+        self.assertEqual(result["world_turn"], before["world_turn"])
+        self.assertEqual(result["interaction"]["kind"], "target")
+        self.assertTrue(result["interaction"]["choices"])
+
+    def test_unverifiable_mixed_split_delivers_whole_line(self):
+        self.llm.resolve = lambda payload: {
+            "kind": "resolve", "intent": "mixed", "speech_text": "入力にない文", "action_text": "これもない",
+            "target_key": None, "narration": "", "action_succeeded": True, "character_should_reply": True,
+            "character_event": "", "hook": None, "important_facts": [],
+        }
+        result = self.submit_text("窓を開けながら「寒いね」と言う", request_id="mixed-fallback")
+        self.assertEqual(result["world_turn"], self.started["world_turn"] + 1)
+        self.assertIn("寒いね", str(self.llm.character_contexts[-1]))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,8 +1,53 @@
 import unittest
 
 from game_mode.engine import GameEngine
-from game_mode.validation import validate_choices
-from game_mode.output import normalize_opening, normalize_resolution, prepare_choices
+from game_mode.validation import validate_choices, validate_resolution
+from game_mode.output import coerce_model_output, normalize_opening, normalize_resolution, prepare_choices
+
+
+class CoercionTests(unittest.TestCase):
+    def resolution(self):
+        return {"kind": "resolve", "intent": "action", "narration": "キッチンに煮物と秘密の箱が見える。",
+                "character_event": "煮物の匂いがする。", "action_succeeded": True, "character_should_reply": True}
+
+    def test_resolution_variants_are_mapped_onto_the_contract(self):
+        out = coerce_model_output("resolve", {
+            "kind": "Resolve", "intent": "Action", "reasoning": "ignored", "narration": None,
+            "action_succeeded": "true", "character_should_reply": "no", "target_key": "null", "hook": "",
+            "important_facts": [{"text": "x", "known_by": "player"}, {"text": "bad"}],
+        })
+        self.assertEqual(out["kind"], "resolve")
+        self.assertEqual(out["intent"], "action")
+        self.assertNotIn("reasoning", out)
+        self.assertEqual(out["narration"], "")
+        self.assertTrue(out["action_succeeded"])
+        self.assertFalse(out["character_should_reply"])
+        self.assertIsNone(out["target_key"])
+        self.assertIsNone(out["hook"])
+        self.assertEqual(out["important_facts"], [{"text": "x", "known_by": ["player"]}])
+        validate_resolution(out)
+
+    def test_clarify_is_inferred_and_singular_target_key_is_accepted(self):
+        out = coerce_model_output("resolve", {"question": "どれ？", "command": "LOOK", "target_key": "window"})
+        self.assertEqual(out, {"kind": "clarify", "question": "どれ？", "command": "look", "target_keys": ["window"]})
+
+    def test_choice_aliases_and_bare_lists_are_accepted(self):
+        out = coerce_model_output("choices", [
+            {"type": "say", "label": "「ねえ」"}, "「行こう」", "扉を開ける",
+        ])
+        self.assertEqual(out["choices"][0], {"kind": "speech", "text": "ねえ"})
+        self.assertEqual(out["choices"][1], {"kind": "speech", "text": "行こう"})
+        self.assertEqual(out["choices"][2], {"kind": "action", "text": "扉を開ける"})
+
+    def test_opening_defaults_reply_flag_from_character_event(self):
+        out = coerce_model_output("opening", {"location": "部屋", "narration": "静かだ。", "character_event": "物音", "extra": 1})
+        self.assertTrue(out["character_should_reply"])
+        self.assertNotIn("extra", out)
+
+    def test_direct_normalize_still_rejects_invalid_flags(self):
+        # Coercion belongs to llm.py; normalize_resolution stays strict.
+        with self.assertRaises(ValueError):
+            normalize_resolution({**self.resolution(), "action_succeeded": "yes"}, {})
 
 
 class ChoiceContractTests(unittest.TestCase):

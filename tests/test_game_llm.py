@@ -4,7 +4,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from game_mode.llm import OpenAIGameLLM
+from game_mode.llm import OpenAIGameLLM, _decode_json, strip_reasoning
+import game_mode.llm as game_llm
 from game_mode.models import GameError
 from game_mode.validation import validate_opening
 
@@ -53,7 +54,7 @@ class OpeningRepairTests(unittest.TestCase):
     def test_essential_failure_still_sends_specific_repair_reason(self):
         client = Mock()
         invalid = self.opening("ソファ")
-        invalid["narration"] = 123
+        invalid["narration"] = "x" * 301
         client.chat.completions.create.side_effect = [completion(json.dumps(invalid)), completion(json.dumps(self.opening("ソファ")))]
         OpenAIGameLLM(client, "test").opening({"character_name": "五十嵐響子"})
         repair = json.loads(client.chat.completions.create.call_args.kwargs["messages"][-1]["content"])
@@ -143,3 +144,95 @@ class CharacterReplyTests(unittest.TestCase):
         reset = next(i for i, event in enumerate(events) if event.get("retry"))
         self.assertEqual(events[reset]["phase"], "character")
         self.assertEqual(events[-1], {"type": "character_preview", "text": "窓を見てみよう。"})
+
+    def test_reasoning_block_is_removed_from_character_reply_and_preview(self):
+        class Stream:
+            def __init__(self, pieces): self.pieces = pieces
+            def __iter__(self):
+                for piece in self.pieces:
+                    yield SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=piece))])
+            def close(self): pass
+        client = Mock()
+        client.chat.completions.create.return_value = Stream(["<think>", "内心", "</think>", "廊下へ", "行こう。"])
+        llm = OpenAIGameLLM(client, "test")
+        events = []; llm.set_event_sink(events.append)
+        self.assertEqual(llm.character_reply(self.payload()), "廊下へ行こう。")
+        self.assertFalse(any("内心" in str(event) for event in events))
+        self.assertEqual(client.chat.completions.create.call_args.kwargs["max_tokens"], game_llm.MAX_TOKENS["character"])
+
+
+class DecodeTests(unittest.TestCase):
+    def test_reasoning_block_and_prose_around_json_are_ignored(self):
+        text = "<think>長い思考</think>はい、以下です。\n```json\n{\"kind\":\"clarify\",\"question\":\"どれ？\",\"command\":\"look\"}\n```\n以上です。"
+        self.assertEqual(_decode_json(text)["kind"], "clarify")
+
+    def test_unterminated_reasoning_block_yields_nothing(self):
+        self.assertEqual(strip_reasoning("<think>まだ考え中"), "")
+
+    def test_first_balanced_object_in_prose_is_used(self):
+        self.assertEqual(_decode_json('結果: {"a": {"b": 1}} 補足 {"c": 2}'), {"a": {"b": 1}})
+
+    def test_bare_array_is_returned_for_choices_coercion(self):
+        self.assertIsInstance(_decode_json('[{"kind":"speech","text":"ねえ"}]'), list)
+
+    def test_prose_prefixed_bare_array_is_returned_for_choices_coercion(self):
+        self.assertEqual(
+            _decode_json('候補: [{"kind":"speech","text":"ねえ"}]'),
+            [{"kind": "speech", "text": "ねえ"}],
+        )
+
+    def test_prose_without_json_raises(self):
+        with self.assertRaises(ValueError):
+            _decode_json("JSONは出せません。")
+
+
+class ResponseFormatTests(unittest.TestCase):
+    VALID = '{"text":"要約","source_event_ids":[]}'
+
+    def rejection(self, status=400):
+        exc = Exception("response_format not supported")
+        exc.status_code = status
+        return exc
+
+    def test_json_schema_is_tried_first_then_downgraded_and_remembered(self):
+        client = Mock()
+        client.chat.completions.create.side_effect = [self.rejection(), completion(self.VALID), completion(self.VALID)]
+        llm = OpenAIGameLLM(client, "test")
+        llm.summarize({"view": "player"})
+        calls = client.chat.completions.create.call_args_list
+        self.assertEqual(calls[0].kwargs["response_format"]["type"], "json_schema")
+        self.assertEqual(calls[1].kwargs["response_format"]["type"], "json_object")
+        # Same client/model: the remembered mode is used directly.
+        OpenAIGameLLM(client, "test").summarize({"view": "player"})
+        self.assertEqual(calls[2].kwargs["response_format"]["type"], "json_object")
+
+    def test_plain_text_fallback_omits_response_format(self):
+        client = Mock()
+        client.chat.completions.create.side_effect = [self.rejection(), self.rejection(), completion(self.VALID)]
+        OpenAIGameLLM(client, "test").summarize({"view": "player"})
+        self.assertNotIn("response_format", client.chat.completions.create.call_args.kwargs)
+
+    def test_timeout_is_not_treated_as_format_rejection(self):
+        client = Mock()
+        client.chat.completions.create.side_effect = TimeoutError()
+        with self.assertRaises(GameError) as error:
+            OpenAIGameLLM(client, "test").summarize({"view": "player"})
+        self.assertEqual(error.exception.code, "LLM_TIMEOUT")
+        self.assertEqual(client.chat.completions.create.call_count, 1)
+
+    def test_json_roles_send_caps_and_low_temperature(self):
+        client = Mock()
+        client.chat.completions.create.return_value = completion(self.VALID)
+        OpenAIGameLLM(client, "test").summarize({"view": "player"})
+        kwargs = client.chat.completions.create.call_args.kwargs
+        self.assertEqual(kwargs["temperature"], game_llm.JSON_TEMPERATURE)
+        self.assertEqual(kwargs["max_tokens"], game_llm.MAX_TOKENS["summary"])
+
+    def test_repair_appends_to_the_same_conversation(self):
+        client = Mock()
+        client.chat.completions.create.side_effect = [completion("壊れた出力"), completion(self.VALID)]
+        OpenAIGameLLM(client, "test").summarize({"view": "player"})
+        messages = client.chat.completions.create.call_args.kwargs["messages"]
+        self.assertEqual([m["role"] for m in messages], ["system", "user", "assistant", "user"])
+        self.assertEqual(messages[2]["content"], "壊れた出力")
+        self.assertIn("validation_error", json.loads(messages[3]["content"]))
