@@ -780,15 +780,21 @@ def get_character_image(idx: int):
     if not img_path or not os.path.exists(img_path):
         raise HTTPException(404)
 
-    img = Image.open(img_path).convert("RGB")
+    with Image.open(img_path) as source:
+        # Palette PNGs can carry transparency without an alpha band.
+        has_alpha = "A" in source.getbands() or "transparency" in source.info
+        img = source.convert("RGBA" if has_alpha else "RGB")
     img = crop_center(img)
     img = img.resize((640, 640), Image.LANCZOS)
 
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=95)
+    if has_alpha:
+        img.save(buf, format="PNG")
+    else:
+        img.save(buf, format="JPEG", quality=95)
     buf.seek(0)
 
-    return StreamingResponse(buf, media_type="image/jpeg")
+    return StreamingResponse(buf, media_type="image/png" if has_alpha else "image/jpeg")
 
 def crop_center(img):
     w, h = img.size
