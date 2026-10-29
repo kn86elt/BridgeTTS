@@ -456,3 +456,4 @@ GameEngineにはLLM adapter、時計、公開ログwriter、音声adapterを渡�
 - 発話のみの選択肢（返信三択・talk内容）は `gm_resolve` を省略し、原文をそのままキャラクターに届ける。地の文・hook・重要事実はこのターンでは生成しない。
 - 安全側への丸め: 許可されない hook は破棄、`mixed` の分割が入力と照合できなければ全文を発話と行動の両方として扱う、clarifyの未知対象キーは除外（全て未知なら可視対象全体を提示）、`target_key` は scene の key から可視entityのidへ対応付け（未知なら対象なし）。これらは従来 `INVALID_MODEL_OUTPUT` でターン失敗していた。
 - プロンプト縮小: resolveへ渡すキャラクター文脈は場面と直近2ターンのみ、choicesへは直近3ターン、キャラクター返答への通常履歴は直近12メッセージ。
+- 推論モデル対策: 全ゲーム呼び出しに `reasoning_effort: "none"` と `chat_template_kwargs.enable_thinking=false` を同時に付け（`llm.REASONING_OFF_BODY`）、思考トークンで `max_tokens` を使い切る失敗を防ぐ（LM Studio + Gemma 4 で7秒・本文空 → 1.9秒・成功を確認。後者はQwen3系テンプレート向け）。接続先が未知引数として拒否した場合は外して記憶する。`finish_reason=length` かつ本文空のときは `max_tokens` に+1500ずつ追加し、追加余裕を6000まで段階的に増やして即時再送し、以後その接続先に適用する。

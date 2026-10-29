@@ -25,9 +25,23 @@ MAX_TOKENS = {"opening": 800, "resolve": 1200, "choices": 400, "summary": 2500, 
 # Try schema enforcement first, then json_object, then plain text. The first
 # mode the backend accepts is remembered per client/model for the process.
 FORMAT_MODES: tuple[str | None, ...] = ("json_schema", "json_object", None)
+# Thinking models spend the token budget on hidden reasoning. Ask the backend
+# to skip it; where that is rejected or ignored, grow the budget instead.
+# Both keys are sent together: `reasoning_effort` is honoured by LM Studio with
+# Gemma 4 (verified), `chat_template_kwargs.enable_thinking` by Qwen3-style
+# templates on llama.cpp / vLLM / LM Studio. Backends ignore the key they do
+# not understand; backends that reject unknown arguments get a retry without.
+REASONING_OFF_BODY: dict[str, Any] = {
+    "reasoning_effort": "none",
+    "chat_template_kwargs": {"enable_thinking": False},
+}
+REASONING_ALLOWANCE_STEP = 1500
+REASONING_ALLOWANCE_MAX = 6000
 
+_backend_lock = threading.Lock()
 _format_support: dict[str, str | None] = {}
-_format_lock = threading.Lock()
+_reasoning_effort_support: dict[str, bool] = {}
+_reasoning_allowance: dict[str, int] = {}
 
 _REASONING_OPEN = re.compile(r"<(?:think|thinking|reasoning|reflection)>", re.IGNORECASE)
 _REASONING_CLOSE = re.compile(r"</(?:think|thinking|reasoning|reflection)>", re.IGNORECASE)
@@ -106,13 +120,24 @@ def _is_timeout(exc: BaseException) -> bool:
     return isinstance(exc, TimeoutError) or "timeout" in type(exc).__name__.lower()
 
 
+_FORMAT_WORDS = ("response_format", "json_schema", "schema", "grammar")
+# Error text that points at the reasoning-off arguments rather than the format.
+_REASONING_ARGUMENTS = ("reasoning_effort", "chat_template_kwargs", "enable_thinking", "extra_body")
+
+
+def _client_error(exc: BaseException) -> bool:
+    status = getattr(exc, "status_code", None)
+    return isinstance(status, int) and 400 <= status < 500
+
+
+def _mentions(exc: BaseException, *words: str) -> bool:
+    message = str(exc).lower()
+    return any(word in message for word in words)
+
+
 def _rejects_response_format(exc: BaseException) -> bool:
     """True when the backend most likely refused the response_format argument."""
-    status = getattr(exc, "status_code", None)
-    if isinstance(status, int):
-        return 400 <= status < 500
-    message = str(exc).lower()
-    return any(word in message for word in ("response_format", "json_schema", "schema", "grammar"))
+    return _client_error(exc) or _mentions(exc, *_FORMAT_WORDS)
 
 
 class OpenAIGameLLM:
@@ -140,23 +165,64 @@ class OpenAIGameLLM:
     def _format_key(self) -> str:
         return f"{getattr(self.client, 'base_url', '')}|{self.model}"
 
+    def _create(self, role: str, messages: list[dict[str, Any]], *, stream: bool,
+                temperature: float | None = None, fmt: dict[str, Any] | None = None) -> Any:
+        """One chat.completions call with backend capability fallbacks.
+
+        Returns the response. Raises the original exception for callers that
+        own format fallback; reasoning_effort rejection is handled here.
+        """
+        key = self._format_key()
+        while True:
+            with _backend_lock:
+                effort_ok = _reasoning_effort_support.get(key, True)
+                allowance = _reasoning_allowance.get(key, 0)
+            kwargs: dict[str, Any] = {
+                "model": self.model, "messages": messages, "stream": stream,
+                "max_tokens": MAX_TOKENS[role] + allowance, "timeout": self._remaining_timeout(),
+            }
+            if temperature is not None:
+                kwargs["temperature"] = temperature
+            if fmt is not None:
+                kwargs["response_format"] = fmt
+            if effort_ok:
+                kwargs["extra_body"] = dict(REASONING_OFF_BODY)
+            try:
+                return self.client.chat.completions.create(**kwargs)
+            except Exception as exc:
+                if _is_timeout(exc) or not effort_ok:
+                    raise
+                # A format rejection is the caller's concern; only drop the
+                # reasoning-off arguments when the error points at them, or when
+                # there is no format argument left to blame.
+                if _mentions(exc, *_REASONING_ARGUMENTS):
+                    with _backend_lock:
+                        _reasoning_effort_support[key] = False
+                    continue
+                raise
+
+    def _grow_reasoning_allowance(self) -> bool:
+        key = self._format_key()
+        with _backend_lock:
+            current = _reasoning_allowance.get(key, 0)
+            if current >= REASONING_ALLOWANCE_MAX:
+                return False
+            _reasoning_allowance[key] = min(current + REASONING_ALLOWANCE_STEP, REASONING_ALLOWANCE_MAX)
+        return True
+
+    @staticmethod
+    def _truncated_without_answer(response: Any, text: str) -> bool:
+        choice = response.choices[0] if getattr(response, "choices", None) else None
+        return getattr(choice, "finish_reason", None) == "length" and not strip_reasoning(text)
+
     def _complete_json(self, role: str, messages: list[dict[str, Any]]) -> str:
         key = self._format_key()
-        with _format_lock:
+        with _backend_lock:
             mode = _format_support.get(key, FORMAT_MODES[0])
         while True:
             fmt = response_format(role, mode)
-            extra: dict[str, Any] = {"response_format": fmt} if fmt is not None else {}
             try:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    stream=False,
-                    temperature=JSON_TEMPERATURE,
-                    max_tokens=MAX_TOKENS[role],
-                    timeout=self._remaining_timeout(),
-                    **extra,
-                )
+                response = self._create(role, messages, stream=False, temperature=JSON_TEMPERATURE, fmt=fmt)
             except GameError:
                 raise
             except Exception as exc:
@@ -164,13 +230,18 @@ class OpenAIGameLLM:
                     raise GameError("LLM_TIMEOUT", 504) from exc
                 if fmt is not None and _rejects_response_format(exc):
                     mode = FORMAT_MODES[FORMAT_MODES.index(mode) + 1]
-                    with _format_lock:
+                    with _backend_lock:
                         _format_support[key] = mode
                     continue
                 raise GameError("LLM_FAILED", 502) from exc
-            with _format_lock:
+            with _backend_lock:
                 _format_support.setdefault(key, mode)
-            return (response.choices[0].message.content or "").strip()
+            text = (response.choices[0].message.content or "").strip()
+            if self._truncated_without_answer(response, text) and self._grow_reasoning_allowance():
+                # Hidden reasoning consumed the whole budget. Retry with more room
+                # instead of spending the repair attempt on an empty answer.
+                continue
+            return text
 
     def _json(self, role: str, payload: dict[str, Any], validate: Callable[[dict[str, Any]], None],
               normalize: Callable[[dict[str, Any]], dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -227,13 +298,7 @@ class OpenAIGameLLM:
         for attempt in range(MAX_REPAIR_ATTEMPTS + 1):
             self._emit({"type": "phase", "phase": "character", "retry": bool(attempt)})
             try:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    stream=self.on_event is not None,
-                    max_tokens=MAX_TOKENS["character"],
-                    timeout=self._remaining_timeout(),
-                )
+                response = self._create("character", messages, stream=self.on_event is not None)
                 if self.on_event is not None:
                     text = ""
                     try:

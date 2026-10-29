@@ -189,6 +189,12 @@ class DecodeTests(unittest.TestCase):
 class ResponseFormatTests(unittest.TestCase):
     VALID = '{"text":"要約","source_event_ids":[]}'
 
+    def setUp(self):
+        with game_llm._backend_lock:
+            game_llm._format_support.clear()
+            game_llm._reasoning_effort_support.clear()
+            game_llm._reasoning_allowance.clear()
+
     def rejection(self, status=400):
         exc = Exception("response_format not supported")
         exc.status_code = status
@@ -236,3 +242,96 @@ class ResponseFormatTests(unittest.TestCase):
         self.assertEqual([m["role"] for m in messages], ["system", "user", "assistant", "user"])
         self.assertEqual(messages[2]["content"], "壊れた出力")
         self.assertIn("validation_error", json.loads(messages[3]["content"]))
+
+    def test_reasoning_effort_none_is_sent_with_every_call(self):
+        client = Mock()
+        client.chat.completions.create.return_value = completion(self.VALID)
+        OpenAIGameLLM(client, "test").summarize({"view": "player"})
+        self.assertEqual(client.chat.completions.create.call_args.kwargs["extra_body"], game_llm.REASONING_OFF_BODY)
+
+    def test_reasoning_off_body_covers_both_template_families(self):
+        self.assertEqual(game_llm.REASONING_OFF_BODY["reasoning_effort"], "none")
+        self.assertIs(game_llm.REASONING_OFF_BODY["chat_template_kwargs"]["enable_thinking"], False)
+
+    def test_rejected_reasoning_effort_is_dropped_and_remembered(self):
+        client = Mock()
+        rejected = Exception("Unsupported parameter: 'reasoning_effort'")
+        rejected.status_code = 400
+        client.chat.completions.create.side_effect = [rejected, completion(self.VALID), completion(self.VALID)]
+        OpenAIGameLLM(client, "test").summarize({"view": "player"})
+        calls = client.chat.completions.create.call_args_list
+        self.assertIn("extra_body", calls[0].kwargs)
+        self.assertNotIn("extra_body", calls[1].kwargs)
+        self.assertEqual(calls[1].kwargs["response_format"]["type"], "json_schema")
+        OpenAIGameLLM(client, "test").summarize({"view": "player"})
+        self.assertNotIn("extra_body", calls[2].kwargs)
+
+    def test_format_rejection_does_not_disable_reasoning_body(self):
+        client = Mock()
+        rejected = Exception("Unsupported parameter: 'response_format'")
+        rejected.status_code = 400
+        client.chat.completions.create.side_effect = [rejected, completion(self.VALID), completion(self.VALID)]
+        OpenAIGameLLM(client, "test").summarize({"view": "player"})
+        calls = client.chat.completions.create.call_args_list
+        self.assertIn("extra_body", calls[0].kwargs)
+        self.assertIn("extra_body", calls[1].kwargs)
+        OpenAIGameLLM(client, "test").summarize({"view": "player"})
+        self.assertIn("extra_body", calls[2].kwargs)
+
+    def test_unrelated_client_error_does_not_disable_reasoning_body(self):
+        client = Mock()
+        unauthorized = Exception("Invalid API key")
+        unauthorized.status_code = 401
+        client.chat.completions.create.side_effect = [self.rejection(), self.rejection(), unauthorized, completion(self.VALID)]
+        llm = OpenAIGameLLM(client, "test")
+        with self.assertRaises(GameError):
+            llm.summarize({"view": "player"})
+        calls = client.chat.completions.create.call_args_list
+        self.assertIn("extra_body", calls[2].kwargs)
+        self.assertNotIn(llm._format_key(), game_llm._reasoning_effort_support)
+        OpenAIGameLLM(client, "test").summarize({"view": "player"})
+        self.assertIn("extra_body", calls[3].kwargs)
+
+    def test_length_cutoff_with_empty_answer_retries_with_larger_budget(self):
+        truncated = SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content=""), finish_reason="length",
+        )])
+        client = Mock()
+        client.chat.completions.create.side_effect = [truncated, completion(self.VALID)]
+        OpenAIGameLLM(client, "test").summarize({"view": "player"})
+        calls = client.chat.completions.create.call_args_list
+        self.assertEqual(len(calls), 2)
+        self.assertGreater(calls[1].kwargs["max_tokens"], calls[0].kwargs["max_tokens"])
+        self.assertEqual([m["role"] for m in calls[1].kwargs["messages"]], ["system", "user"])
+
+    def test_reasoning_allowance_is_capped_at_6000(self):
+        client = Mock()
+        client.chat.completions.create.return_value = completion(self.VALID)
+        llm = OpenAIGameLLM(client, "test")
+        for _ in range(8):
+            llm._grow_reasoning_allowance()
+        llm.summarize({"view": "player"})
+        self.assertEqual(game_llm._reasoning_allowance[llm._format_key()], game_llm.REASONING_ALLOWANCE_MAX)
+        self.assertEqual(
+            client.chat.completions.create.call_args.kwargs["max_tokens"],
+            game_llm.MAX_TOKENS["summary"] + game_llm.REASONING_ALLOWANCE_MAX,
+        )
+
+    def test_character_reply_also_disables_reasoning(self):
+        client = Mock()
+        client.chat.completions.create.return_value = completion("廊下へ行ってみよう。")
+        OpenAIGameLLM(client, "test").character_reply({
+            "messages": [{"role": "system", "content": "人物設定"}, {"role": "user", "content": "行こう"}],
+            "previous_reply": "",
+        })
+        self.assertEqual(client.chat.completions.create.call_args.kwargs["extra_body"], game_llm.REASONING_OFF_BODY)
+
+    def test_unknown_parameter_rejection_drops_reasoning_body_before_format(self):
+        client = Mock()
+        rejected = Exception("Unrecognized request argument supplied: chat_template_kwargs")
+        rejected.status_code = 400
+        client.chat.completions.create.side_effect = [rejected, completion(self.VALID)]
+        OpenAIGameLLM(client, "test").summarize({"view": "player"})
+        calls = client.chat.completions.create.call_args_list
+        self.assertNotIn("extra_body", calls[1].kwargs)
+        self.assertEqual(calls[1].kwargs["response_format"]["type"], "json_schema")
