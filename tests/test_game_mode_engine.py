@@ -32,7 +32,7 @@ class GameEngineTests(unittest.TestCase):
         )
         self.game_id = self.started["game_id"]
 
-    def submit_text(self, text, *, view=None, request_id=None, revision=None, interaction_id=None):
+    def submit_text(self, text, *, view=None, request_id=None, revision=None, interaction_id=None, on_event=None):
         current = view or self.engine.view(self.game_id, self.page_id)
         return self.engine.submit(
             self.game_id,
@@ -41,7 +41,24 @@ class GameEngineTests(unittest.TestCase):
             revision=current["revision"] if revision is None else revision,
             request_id=request_id or f"req-{text}-{len(self.llm.resolve_calls)}-{current['revision']}",
             request_input={"kind": "text", "text": text, "interaction_id": interaction_id or current["interaction"]["id"]},
+            on_event=on_event,
         )
+
+    def test_narration_preview_precedes_character_without_committing_turn(self):
+        events = []
+        original = self.llm.character_reply
+
+        def reply(payload):
+            self.assertEqual(events[0]["type"], "narration_preview")
+            self.assertIn("窓辺", events[0]["text"])
+            self.assertNotIn("important_facts", str(events))
+            self.assertEqual(self.engine.view(self.game_id, self.page_id)["revision"], 1)
+            return original(payload)
+
+        self.llm.character_reply = reply
+        result = self.submit_text("窓を見る", on_event=events.append)
+        self.assertEqual(result["revision"], 2)
+        self.assertEqual(events[0]["text"], next(e["text"] for e in result["events"] if e["type"] == "narration"))
 
     def submit_choice(self, choice, *, view=None, request_id="choice-request"):
         current = view or self.engine.view(self.game_id, self.page_id)

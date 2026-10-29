@@ -71,8 +71,11 @@ class GameEngine:
         # idempotency records separately so a failed/lost start is never run twice.
         self._start_records: dict[tuple[str, str], dict[str, Any]] = {}
 
-    def _snapshot_llm(self) -> Any:
-        return self.llm.snapshot() if hasattr(self.llm, "snapshot") else self.llm
+    def _snapshot_llm(self, on_event=None) -> Any:
+        llm = self.llm.snapshot() if hasattr(self.llm, "snapshot") else self.llm
+        if hasattr(llm, "set_event_sink"):
+            llm.set_event_sink(on_event)
+        return llm
 
     def _prune_locked(self) -> None:
         now = self.clock()
@@ -395,6 +398,7 @@ class GameEngine:
         normal_revision: int,
         request_id: str,
         seed: dict[str, Any] | Callable[[], dict[str, Any]],
+        on_event: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         if not page_id or len(page_id) > 128 or not conversation_epoch:
             raise GameError("INVALID_REQUEST", 422)
@@ -457,7 +461,7 @@ class GameEngine:
                 }
                 self._start_records[key] = start_record
         try:
-            llm = self._snapshot_llm()
+            llm = self._snapshot_llm(on_event)
             from .validation import validate_opening
             opening = normalize_opening(llm.opening(copy.deepcopy(session.seed)), session.character_name)
             validate_opening(opening)
@@ -505,6 +509,8 @@ class GameEngine:
                     temp.memory["important_facts"][view].append({"text": fact["text"], "source_event_ids": [opening_event["id"]]})
             add_turn(temp.memory, 1, events)
             self._add_public(temp, "narration", opening["narration"])
+            if on_event:
+                on_event({"type": "narration_preview", "text": opening["narration"]})
             character_text = ""
             if opening["character_should_reply"] and opening.get("character_event"):
                 character_text = self._character_reply(temp, llm)
@@ -634,6 +640,7 @@ class GameEngine:
         revision: int,
         request_id: str,
         request_input: dict[str, Any],
+        on_event: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         payload = {"page_id": page_id, "epoch": conversation_epoch, "revision": revision, "input": request_input}
         with self._lock:
@@ -664,7 +671,7 @@ class GameEngine:
             generation = session.generation
             temp = copy.deepcopy(session)
             temp.status = "active"
-        llm = self._snapshot_llm()
+        llm = self._snapshot_llm(on_event)
         try:
             text, selection, chosen_label = self._chosen_input(temp, request_input)
             if not text and selection is None:
@@ -886,6 +893,9 @@ class GameEngine:
                 if hook.get("status") == "open" and next_turn - hook["introduced_turn"] >= 2:
                     hook["status"] = "ignored"
 
+            narration = "\n\n".join(output[key] for key in ("narration", "hook") if output.get(key))
+            if on_event and narration:
+                on_event({"type": "narration_preview", "text": narration})
             character_text = ""
             can_character_perceive = any(event["text_by_view"].get("character") for event in world_events)
             if output["character_should_reply"] and can_character_perceive:

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import copy
+import asyncio
+import json
+import threading
 import unittest
 import uuid
 
@@ -68,6 +71,48 @@ class GameHTTPTests(unittest.TestCase):
         api.state.mem_pending = self.old_pending
         api.state.mem_user_turns = self.old_user_turns
         api.state.session_ctx = self.old_session_ctx
+
+    def stream_events(self, response):
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.headers["content-type"].startswith("text/event-stream"))
+        return [json.loads(line[5:]) for line in response.text.splitlines() if line.startswith("data:")]
+
+    def test_streamed_turn_commits_once_and_can_be_recovered_or_replayed(self):
+        before_memory = copy.deepcopy(api.state.memory)
+        body = {"page_id": self.page_id, "conversation_epoch": self.status["conversation_epoch"],
+                "revision": self.game_view["revision"], "request_id": "stream-turn",
+                "input": {"kind": "text", "text": "直接の発話。", "interaction_id": self.game_view["interaction"]["id"]}}
+        events = self.stream_events(self.client.post(f"/game/{self.game_id}/turn?stream=true", json=body))
+        self.assertEqual(events[0], {"type": "phase", "phase": "resolve"})
+        self.assertEqual(events[-1]["type"], "result")
+        result = events[-1]["result"]
+        self.assertEqual(result["world_turn"], 2)
+        self.assertEqual(api.state.memory, before_memory)
+        calls = len(api._game_engine.llm.resolve_calls)
+        replay = self.stream_events(self.client.post(f"/game/{self.game_id}/turn?stream=true", json=body))[-1]["result"]
+        self.assertEqual(replay, result)
+        self.assertEqual(len(api._game_engine.llm.resolve_calls), calls)
+        recovered = self.client.get(f"/game/{self.game_id}/requests/stream-turn", params={"page_id": self.page_id}).json()
+        self.assertEqual(recovered["result"], result)
+        self.assertNotIn("gm_context", str(events))
+
+    def test_streamed_failure_keeps_previous_turn_and_reports_code(self):
+        body = {"page_id": self.page_id, "conversation_epoch": self.status["conversation_epoch"],
+                "revision": self.game_view["revision"], "request_id": "bad-stream-choice",
+                "input": {"kind": "choice", "choice_id": "nonexistent", "interaction_id": self.game_view["interaction"]["id"]}}
+        events = self.stream_events(self.client.post(f"/game/{self.game_id}/turn?stream=true", json=body))
+        self.assertEqual(events[-1], {"type": "error", "code": "INVALID_CHOICE", "status": 409})
+        self.assertEqual(api._game_engine.view(self.game_id, self.page_id)["world_turn"], 1)
+
+    def test_streamed_start_returns_public_final_view(self):
+        api._game_engine.close_page(self.page_id)
+        self.page_id = "stream-start-page-" + uuid.uuid4().hex
+        body = {**self.start_body, "page_id": self.page_id, "request_id": "stream-start"}
+        events = self.stream_events(self.client.post('/game/start?stream=true', json=body))
+        self.assertEqual(events[0], {"type": "phase", "phase": "opening"})
+        self.assertEqual(events[-1]["type"], "result")
+        self.assertEqual(events[-1]["result"]["status"], "active")
+        self.assertNotIn("seed", str(events))
 
     def test_game_turn_is_one_json_response_and_does_not_touch_normal_memory(self):
         normal_before = {
@@ -221,6 +266,27 @@ class GameHTTPTests(unittest.TestCase):
         self.assertEqual(api.state.mem_pending, pending)
         self.assertEqual(api.state.mem_user_turns, user_turns)
         self.assertEqual(api.state.session_ctx, context)
+
+
+class GameStreamTransportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_progress_is_delivered_while_generation_is_still_running(self):
+        release = threading.Event()
+        finished = threading.Event()
+        def operation(emit):
+            release.wait(5)
+            emit({"type": "character_preview", "text": "返答"})
+            finished.set()
+            return {"revision": 2}
+        response = api._game_stream_response(operation, "resolve")
+        try:
+            first = await asyncio.wait_for(anext(response.body_iterator), 1)
+            self.assertIn('"phase": "resolve"', first)
+            self.assertFalse(finished.is_set())
+        finally:
+            release.set()
+        events = [frame async for frame in response.body_iterator]
+        self.assertIn('"character_preview"', events[0])
+        self.assertIn('"result"', events[-1])
 
 
 if __name__ == "__main__":

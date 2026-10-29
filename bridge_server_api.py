@@ -2213,27 +2213,75 @@ def conversation_view_reset(req: ConversationViewResetRequest):
         return result
 
 
+def _game_stream_response(operation, phase: str):
+    """Stream public previews; generation survives disconnect for idempotent recovery."""
+    events = queue.Queue(maxsize=128)
+    disconnected = threading.Event()
+
+    def emit(event):
+        if disconnected.is_set():
+            return
+        # Previews are full text snapshots, so a slow reader can skip old snapshots.
+        if events.full():
+            try:
+                events.get_nowait()
+            except queue.Empty:
+                pass
+        events.put_nowait(event)
+
+    def run():
+        try:
+            emit({"type": "phase", "phase": phase})
+            result = operation(emit)
+            emit({"type": "result", "result": result})
+        except GameError as error:
+            emit({"type": "error", "code": error.code, "status": error.status_code})
+        except HTTPException as error:
+            detail = error.detail if isinstance(error.detail, dict) else {}
+            emit({"type": "error", "code": detail.get("code", "INVALID_REQUEST"), "status": error.status_code})
+        except Exception as error:
+            print(f"[Game] Streaming request failed: {type(error).__name__}")
+            emit({"type": "error", "code": "INTERNAL_ERROR", "status": 500})
+
+    def body():
+        threading.Thread(target=run, daemon=True).start()
+        try:
+            while True:
+                try:
+                    event = events.get(timeout=10)
+                except queue.Empty:
+                    yield ": keep-alive\n\n"
+                    continue
+                yield "data: " + json.dumps(event, ensure_ascii=False) + "\n\n"
+                if event["type"] in {"result", "error"}:
+                    return
+        finally:
+            disconnected.set()
+
+    return StreamingResponse(body(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 @app.post("/game/start")
-def game_start(req: GameStartRequest):
-    return _game_engine.start(
-        page_id=req.page_id,
-        conversation_epoch=req.conversation_epoch,
-        normal_revision=req.normal_revision,
-        request_id=req.request_id,
-        seed=_capture_game_seed,
-    )
+def game_start(req: GameStartRequest, stream: bool = False):
+    def operation(emit):
+        return _game_engine.start(
+            page_id=req.page_id, conversation_epoch=req.conversation_epoch,
+            normal_revision=req.normal_revision, request_id=req.request_id,
+            seed=_capture_game_seed, on_event=emit,
+        )
+    return _game_stream_response(operation, "opening") if stream else operation(None)
 
 
 @app.post("/game/{game_id}/turn")
-def game_turn(game_id: str, req: GameTurnRequest):
-    return _game_engine.submit(
-        game_id,
-        page_id=req.page_id,
-        conversation_epoch=req.conversation_epoch,
-        revision=req.revision,
-        request_id=req.request_id,
-        request_input=req.input.model_dump(exclude_none=True),
-    )
+def game_turn(game_id: str, req: GameTurnRequest, stream: bool = False):
+    def operation(emit):
+        return _game_engine.submit(
+            game_id, page_id=req.page_id, conversation_epoch=req.conversation_epoch,
+            revision=req.revision, request_id=req.request_id,
+            request_input=req.input.model_dump(exclude_none=True), on_event=emit,
+        )
+    return _game_stream_response(operation, "resolve") if stream else operation(None)
 
 
 @app.get("/game/{game_id}")

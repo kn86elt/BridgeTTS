@@ -1362,6 +1362,7 @@ body.no-bubble-blur .msg-bubble {
 .game-pending-selection { opacity: .85; }
 .game-choice-number { color: var(--accent); font-weight: 700; min-width: 1.4em; }
 .game-notice, .game-working { color: var(--muted); text-align: center; font-size: 12px; }
+.game-error-notice { padding: 12px; border: 1px solid var(--border); border-radius: 10px; color: var(--text); white-space: pre-wrap; }
 .log-popup-item[aria-disabled="true"] { opacity: .45; cursor: not-allowed; }
 @media (max-width: 600px) { #game-view { padding: 8px 8px 16px; } .game-player-event { max-width: 90%; } }
 </style>
@@ -3383,7 +3384,7 @@ $logMenuBtn.addEventListener('click', e => {
     { label: ((gameView?.status === 'active' || gameView?.status === 'suspended' || gameVisible()) ? '✓ ' : '　') + 'ゲームモード（実験的）',
       role: 'menuitemcheckbox', checked: gameView?.status === 'active' || gameView?.status === 'suspended' || gameVisible(),
       disabled: !['off', 'active'].includes(gameUiPhase),
-      tooltip: '会話を引き継いで物語を進めます。解除すると中断し、同じページで再開できます',
+      tooltip: '実験的な機能です。LLMの応答やコンテキスト長によって失敗する場合があります。会話を引き継いで物語を進め、解除すると中断します',
       action: toggleGameMode },
     null, // セパレータ
     { label: 'テキストを読み上げ (実験的)',
@@ -3933,6 +3934,111 @@ function scrollBottom() { $messages.scrollTop = $messages.scrollHeight; }
    ゲームモード — 独立した表示・要求状態
 ══════════════════════════════ */
 function gameVisible() { return gameUiPhase !== 'off'; }
+function clearGameStreamPreview() {
+  gameViewRoot?.querySelector('.game-stream-preview')?.remove();
+  gameViewRoot?.querySelector('.game-narration-preview')?.remove();
+}
+function updateGameProgress(event, generation) {
+  if (generation !== gameDisplayGeneration || gameUiPhase === 'off' || !gameViewRoot) return;
+  if (event.type === 'phase') {
+    if (event.phase === 'character') gameViewRoot.querySelector('.game-stream-preview')?.remove();
+    showGameWorking(true);
+    const labels = { opening: '場面を生成中…', resolve: '行動の結果を確認中…', character: 'キャラクターの返答を生成中…',
+      choices: '次の選択肢を準備中…', summary: 'ゲームの履歴を整理中…' };
+    const working = gameViewRoot.querySelector('.game-working');
+    if (working) working.textContent = (event.retry ? '返答を調整しています。' : '') + (labels[event.phase] || '処理中…');
+  } else if (event.type === 'narration_preview' && typeof event.text === 'string') {
+    let preview = gameViewRoot.querySelector('.game-narration-preview');
+    if (!preview) {
+      preview = document.createElement('div'); preview.className = 'game-narration game-narration-preview';
+      const label = document.createElement('div'); label.className = 'game-character-name';
+      label.textContent = '地の文（未確定）';
+      const text = document.createElement('div'); text.className = 'game-narration-preview-text';
+      preview.append(label, text); gameViewRoot.appendChild(preview);
+    }
+    preview.querySelector('.game-narration-preview-text').textContent = event.text;
+    scrollBottom();
+  } else if (event.type === 'character_preview' && typeof event.text === 'string') {
+    let preview = gameViewRoot.querySelector('.game-stream-preview');
+    if (!preview) {
+      preview = document.createElement('div'); preview.className = 'game-character-bubble game-stream-preview';
+      const label = document.createElement('div'); label.className = 'game-character-name';
+      label.textContent = (selectedName || 'キャラクター') + '（生成中・未確定）';
+      const text = document.createElement('div'); text.className = 'game-stream-text';
+      preview.append(label, text); gameViewRoot.appendChild(preview);
+    }
+    preview.querySelector('.game-stream-text').textContent = event.text.slice(0, 600);
+    scrollBottom();
+  }
+}
+async function fetchGameResponse(url, body, generation) {
+  const response = await fetch(url + '?stream=true', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  // Older servers still return JSON. Keep their request/recovery protocol usable.
+  if (!response.headers?.get('content-type')?.includes('text/event-stream')) return response;
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (generation !== gameDisplayGeneration || gameUiPhase === 'off') throw new Error('DISPLAY_CANCELLED');
+      buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+      const packets = buffer.split(/\r?\n\r?\n/); buffer = packets.pop();
+      for (const packet of packets) {
+        const data = packet.split(/\r?\n/).filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
+        if (!data) continue;
+        const event = JSON.parse(data);
+        if (event.type === 'result') return { ok: true, status: 200, json: async () => event.result };
+        if (event.type === 'error') return { ok: false, status: event.status || 500, json: async () => ({ detail: { code: event.code || 'INTERNAL_ERROR' } }) };
+        updateGameProgress(event, generation);
+      }
+      if (done) throw new Error('STREAM_INTERRUPTED');
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+}
+function appendGameExperimentalNotice() {
+  if (!gameViewRoot) return;
+  const node = document.createElement('div'); node.className = 'game-notice';
+  node.textContent = 'ゲームモードは実験的な機能です。LLMの応答やコンテキスト長によって、開始・進行に失敗する場合があります。';
+  gameViewRoot.appendChild(node);
+}
+function gameFailureMessage(code, context = 'turn') {
+  const reasons = {
+    INVALID_MODEL_OUTPUT: 'LLMの返答をゲームの進行に利用できませんでした。',
+    LLM_TIMEOUT: 'LLMの応答が制限時間内に完了しませんでした。',
+    LLM_FAILED: 'LLMへの接続または生成に失敗しました。',
+    MEMORY_COMPACTION_FAILED: 'ゲーム履歴の整理に失敗しました。',
+    STALE_REVISION: '現在の状況や選択肢が更新されています。',
+    INVALID_CHOICE: 'その選択肢は現在利用できません。',
+    GAME_CLOSED: 'ゲームのセッションが終了しています。',
+    STALE_CONVERSATION: '通常会話が切り替わり、このゲームを続けられません。',
+    SESSION_LIMIT: 'ゲームの進行量が上限に達しました。',
+    OWNER_MISMATCH: 'このゲームは別のページで操作されています。',
+  };
+  const reason = reasons[code] || '処理を完了できませんでした。';
+  let guidance;
+  if (code === 'OWNER_MISMATCH') guidance = 'ゲームを開始したページに戻って操作してください。';
+  else if (['GAME_CLOSED', 'STALE_CONVERSATION', 'SESSION_LIMIT'].includes(code)) guidance = 'ゲームモードを終了し、新しく開始してください。';
+  else if (context === 'start') guidance = 'もう一度ゲームモードを開始してください。';
+  else if (['STALE_REVISION', 'INVALID_CHOICE'].includes(code)) guidance = '現在の選択肢を確認して、選び直してください。';
+  else guidance = '進行は更新されていません。入力や選択肢を確認し、もう一度お試しください。';
+  const hint = ['INVALID_MODEL_OUTPUT', 'LLM_TIMEOUT', 'LLM_FAILED'].includes(code)
+    ? '\n繰り返す場合は、LLM側のコンテキスト長や生成設定を見直すと改善する場合があります。' : '';
+  return reason + '\n' + guidance + hint + (code ? '\nエラー: ' + code : '');
+}
+function showGameFailure(code, context = 'turn') {
+  clearGameStreamPreview();
+  const message = gameFailureMessage(code, context);
+  const parent = gameViewRoot || $messages;
+  parent.querySelector('.game-error-notice')?.remove();
+  const node = document.createElement('div'); node.className = 'game-error-notice'; node.setAttribute('role', 'alert');
+  node.textContent = message; parent.appendChild(node);
+  showErrorToast(message);
+  scrollBottom();
+}
 function gameRequestId() {
   return crypto.randomUUID ? crypto.randomUUID() : `req_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
@@ -3979,6 +4085,7 @@ function enterGameView({ resetDraft = false } = {}) {
   }
   gameViewRoot = document.createElement('div');
   gameViewRoot.id = 'game-view';
+  appendGameExperimentalNotice();
   $messages.insertBefore(gameViewRoot, $msgScrollBottom);
   $input.value = gameDraft;
   scrollBottom();
@@ -4075,6 +4182,7 @@ function renderGameView(view, notice = '') {
   if (!gameViewRoot || !view) return;
   gameView = view;
   gameViewRoot.replaceChildren();
+  appendGameExperimentalNotice();
   const transcript = view.transcript || view.events || [];
   const latestInteractionId = [...transcript].reverse().find(event => event.type === 'interaction')?.id;
   for (const entry of transcript) gameViewRoot.appendChild(makeGameEventNode(entry, view.interaction, latestInteractionId));
@@ -4095,6 +4203,7 @@ function mergeGameTranscript(view) {
 }
 function showGameWorking(show) {
   if (!gameViewRoot) return;
+  if (show) gameViewRoot.querySelector('.game-error-notice')?.remove();
   const previous = gameViewRoot.querySelector('.game-working');
   if (previous) previous.remove();
   const pending = gameViewRoot.querySelector('.game-pending-selection');
@@ -4149,6 +4258,7 @@ async function toggleGameMode() {
   catch (error) { showErrorToast('会話状態を確認できません: ' + error.message); return; }
   if (status.busy) { showErrorToast('通常の生成が終わってから開始してください'); return; }
   gameDisplayGeneration++;
+  $messages.querySelector('.game-error-notice')?.remove();
   enterGameView({ resetDraft: true });
   setGamePhase('starting');
   showGameWorking(true);
@@ -4161,12 +4271,13 @@ async function requestGameStart(body, generation) {
     if (generation !== gameDisplayGeneration || gameUiPhase === 'off') return;
     let response;
     try {
-      response = await fetch(`${API}/game/start`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      response = await fetchGameResponse(`${API}/game/start`, body, generation);
     } catch (_) {
+      clearGameStreamPreview();
       await new Promise(resolve => setTimeout(resolve, 750));
       continue; // 同じ開始IDだけを再送する
     }
-    if (response.ok) {
+    if (response.ok && response.status !== 202) {
       const result = await response.json();
       if (generation !== gameDisplayGeneration || gameUiPhase === 'off') return;
       gameStartRequest = null;
@@ -4181,13 +4292,19 @@ async function requestGameStart(body, generation) {
     if (generation === gameDisplayGeneration) {
       const message = error.detail?.code || `HTTP ${response.status}`;
       leaveGameView({ keepGame: false });
-      showErrorToast('ゲームを開始できませんでした: ' + message);
+      showGameFailure(message, 'start');
     }
     return;
   }
   if (generation === gameDisplayGeneration) {
     showGameWorking(false);
     renderGameView({ transcript: [], interaction: null, status: 'starting' }, '開始結果を確認できません。再送は同じ開始要求で続けます。');
+    const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'game-choice'; retry.textContent = '開始結果を再確認';
+    retry.addEventListener('click', () => {
+      if (!gameStartRequest || generation !== gameDisplayGeneration) return;
+      retry.disabled = true; showGameWorking(true); return requestGameStart(gameStartRequest, generation);
+    });
+    gameViewRoot.appendChild(retry);
   }
 }
 async function suspendGameMode() {
@@ -4256,10 +4373,8 @@ async function submitGameInput(input, originalText, existingBody = null) {
     displayText: selected?.label || originalText, selectedChoiceId: selected?.id };
   setGamePhase('submitting'); showGameWorking(true);
   try {
-    const response = await fetch(`${API}/game/${gameView.game_id}/turn`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-    });
-    if (!response.ok) {
+    const response = await fetchGameResponse(`${API}/game/${gameView.game_id}/turn`, body, gameRequest.generation);
+    if (!response.ok || response.status === 202) {
       const error = await response.json().catch(() => ({}));
       if (response.status === 409) {
         const latest = await fetch(`${API}/game/${gameView.game_id}?page_id=${encodeURIComponent(pageId)}`);
@@ -4275,14 +4390,19 @@ async function submitGameInput(input, originalText, existingBody = null) {
     gameRequest = null; setGamePhase('active'); renderGameView(result);
   } catch (error) {
     if (!gameRequest || gameRequest.generation !== gameDisplayGeneration || gameUiPhase === 'off') return;
+    clearGameStreamPreview();
     if (error.message === 'STALE_REVISION' || error.message === 'INVALID_CHOICE') {
-      gameRequest = null; setGamePhase('active'); showGameWorking(false); showErrorToast('候補が更新されています。入力を確認してください。'); return;
+      gameRequest = null; setGamePhase('active'); showGameWorking(false); showGameFailure(error.message); return;
     }
     await recoverGameRequest(error.message);
   }
 }
 async function recoverGameRequest(message = '') {
   if (!gameRequest || !gameView) return;
+  clearGameStreamPreview();
+  setGamePhase('recovering'); showGameWorking(true);
+  const working = gameViewRoot?.querySelector('.game-working');
+  if (working) working.textContent = '送信した操作の結果を確認中…';
   const captured = gameRequest;
   const generation = captured.generation;
   for (let attempt = 0; attempt < 240; attempt++) {
@@ -4298,14 +4418,19 @@ async function recoverGameRequest(message = '') {
         }
         if (state.status === 'failed') {
           gameRequest = null; setGamePhase('active'); showGameWorking(false);
-          showErrorToast('処理に失敗しました: ' + state.error + '。入力を確認して再試行してください。'); return;
+          showGameFailure(state.error); return;
         }
+      } else if (response.status === 410) {
+        leaveGameView({ keepGame: false }); showGameFailure('GAME_CLOSED'); return;
       }
     } catch (_) { /* 接続が戻るまで同じrequest_idの結果を確認する */ }
     await new Promise(resolve => setTimeout(resolve, 750));
   }
   setGamePhase('active'); showGameWorking(false);
-  showErrorToast('結果をまだ確認できません。入力は保持しました。再送せず、送信ボタンで同じ要求の状態を確認できます.');
+  const notice = document.createElement('div'); notice.className = 'game-error-notice'; notice.setAttribute('role', 'status');
+  notice.textContent = '処理結果をまだ確認できません。進行が確定している可能性があります。入力は保持しています。送信ボタンで同じ要求の結果を再確認してください。';
+  gameViewRoot.querySelector('.game-error-notice')?.remove(); gameViewRoot.appendChild(notice);
+  showErrorToast(notice.textContent);
 }
 function ensureGameAudioQueue() {
   if (!gameAudioQueue.length || gameAudioPlaying || gameUiPhase === 'off') return;

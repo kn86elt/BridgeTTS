@@ -119,3 +119,27 @@ class CharacterReplyTests(unittest.TestCase):
         payload["previous_reply"] = "行きます。"
         self.assertEqual(OpenAIGameLLM(client, "test").character_reply(payload), "行きません。")
         self.assertEqual(client.chat.completions.create.call_count, 1)
+
+    def test_streaming_shows_only_content_and_resets_before_repair(self):
+        class Stream:
+            def __init__(self, pieces):
+                self.pieces = pieces
+                self.closed = False
+            def __iter__(self):
+                yield SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=None, reasoning_content="private reasoning"))])
+                for piece in self.pieces:
+                    yield SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=piece))])
+            def close(self):
+                self.closed = True
+        first, second = Stream(["GM:", "説明"]), Stream(["窓を", "見てみよう。"])
+        client = Mock()
+        client.chat.completions.create.side_effect = [first, second]
+        llm = OpenAIGameLLM(client, "test")
+        events = []; llm.set_event_sink(events.append)
+        self.assertEqual(llm.character_reply(self.payload()), "窓を見てみよう。")
+        self.assertTrue(first.closed and second.closed)
+        self.assertTrue(client.chat.completions.create.call_args.kwargs["stream"])
+        self.assertNotIn("private reasoning", str(events))
+        reset = next(i for i, event in enumerate(events) if event.get("retry"))
+        self.assertEqual(events[reset]["phase"], "character")
+        self.assertEqual(events[-1], {"type": "character_preview", "text": "窓を見てみよう。"})

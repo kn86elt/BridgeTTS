@@ -57,6 +57,14 @@ class OpenAIGameLLM:
         self.client = client
         self.model = model or "local-model"
         self.deadline = time.monotonic() + REQUEST_TIMEOUT_SECONDS
+        self.on_event = None
+
+    def set_event_sink(self, callback) -> None:
+        self.on_event = callback
+
+    def _emit(self, event: dict[str, Any]) -> None:
+        if self.on_event is not None:
+            self.on_event(event)
 
     def _remaining_timeout(self) -> float:
         remaining = self.deadline - time.monotonic()
@@ -70,6 +78,7 @@ class OpenAIGameLLM:
         user_payload: dict[str, Any] = payload
         last_error = "invalid JSON or contract"
         for attempt in range(MAX_REPAIR_ATTEMPTS + 1):
+            self._emit({"type": "phase", "phase": role, "retry": bool(attempt)})
             if attempt:
                 user_payload = {
                     "original_payload": payload,
@@ -124,20 +133,40 @@ class OpenAIGameLLM:
         messages = payload["messages"]
         previous_reply = payload.get("previous_reply", "")
         for attempt in range(MAX_REPAIR_ATTEMPTS + 1):
+            self._emit({"type": "phase", "phase": "character", "retry": bool(attempt)})
             try:
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
-                    stream=False,
+                    stream=self.on_event is not None,
                     timeout=self._remaining_timeout(),
                 )
+                if self.on_event is not None:
+                    text = ""
+                    try:
+                        for chunk in response:
+                            self._remaining_timeout()
+                            if not chunk.choices:
+                                continue
+                            content = chunk.choices[0].delta.content
+                            if isinstance(content, str):
+                                text += content
+                                self._emit({"type": "character_preview", "text": text[:600]})
+                                if len(text) > 600:
+                                    break
+                    finally:
+                        response.close()
+                    text = text.strip()
+                else:
+                    text = (response.choices[0].message.content or "").strip()
+            except GameError:
+                raise
             except TimeoutError as exc:
                 raise GameError("LLM_TIMEOUT", 504) from exc
             except Exception as exc:
                 name = type(exc).__name__.lower()
                 code = "LLM_TIMEOUT" if "timeout" in name else "LLM_FAILED"
                 raise GameError(code, 504 if code == "LLM_TIMEOUT" else 502) from exc
-            text = (response.choices[0].message.content or "").strip()
             invalid = (
                 not text or len(text) > 600 or text.startswith("```")
                 or text.lstrip().startswith(("{", "1.", "1)"))
