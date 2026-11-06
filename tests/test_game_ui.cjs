@@ -15,6 +15,7 @@ function source(name) {
 }
 class Element {
   constructor() {
+    this.style = {};
     this.children = []; this.dataset = {}; this.attributes = {};
     this.className = ''; this.textContent = '';
     this.classList = {
@@ -52,9 +53,11 @@ function setup() {
   let finish;
   const pending = new Promise(resolve => { finish = resolve; });
   const context = vm.createContext({
+    characterCatalog: [], selectedIndex: 0,
+    $bigImg: new Element(), $bgEl: new Element(), $bgToggle: { checked: true },
     TextDecoder, selectedName: 'ミオ', selectedImageUrl: null,
     gameAudioPending: new Set(), gameAudioRequested: new Set(['char-stream']), gameAudioCache: new Map(), gameAudioFailed: new Set(), ttsEnabled: false,
-    document: { createElement: () => new Element(), createDocumentFragment: () => new Element() },
+    document: { createElement: () => new Element(), createDocumentFragment: () => new Element(), querySelectorAll: () => [] },
     gameView: initial, gameViewRoot: new Element(), $messages: new Element(), gameUiPhase: 'active',
     gameRequest: null, gameSaveRequest: null, gameLoadRequest: null, gameStorageBusy: false,
     gameDisplayGeneration: 1, conversationEpoch: 'epoch', pageId: 'page', API: '',
@@ -62,7 +65,7 @@ function setup() {
     gameRequestId: () => 'request', scrollBottom() {}, showErrorToast(message) { context.error = message; },
     fetch: () => pending, setTimeout,
   });
-  for (const name of ['gameVisible', 'clearGameStreamPreview', 'updateGameProgress', 'fetchGameResponse', 'appendGameExperimentalNotice', 'gameFailureMessage', 'showGameFailure', 'setGamePhase', 'makeGameEventNode', 'renderGameView',
+  for (const name of ['displayedCharacter', 'syncCharacterPresentation', 'setBackgroundImage', 'gameVisible', 'clearGameStreamPreview', 'updateGameProgress', 'fetchGameResponse', 'appendGameExperimentalNotice', 'gameFailureMessage', 'showGameFailure', 'setGamePhase', 'makeGameEventNode', 'renderGameView',
     'mergeGameTranscript', 'showGameWorking', 'submitGameInput', 'submitGameChoice', 'recoverGameRequest']) {
     vm.runInContext(source(name), context);
   }
@@ -352,6 +355,39 @@ test('loading replaces history and character, unlocks choices, and never autopla
   assert.equal(c.gameViewRoot.querySelector('.game-character-name').textContent, 'ミオ');
   assert.ok(c.gameAudioRequested.has('restored-speech'));
   assert.ok(c.gameViewRoot.querySelectorAll('.game-choice').every(button => !button.disabled));
+});
+
+test('loading another character updates selection, portrait and background', async () => {
+  const { context: c, initial } = setupLoad();
+  c.selectedName = 'Other'; c.selectedImageUrl = '/characters/0/image';
+  c.characterCatalog = [
+    { index: 0, character_id: 'other', name: 'Other', has_image: true },
+    { index: 1, character_id: 'mio', name: 'Mio', has_image: true },
+  ];
+  const cards = [new Element(), new Element()];
+  cards.forEach((card, index) => { card.dataset.index = String(index); });
+  cards[0].classList.toggle('active', true);
+  c.document.querySelectorAll = () => cards;
+  c.$bigImg.src = c.selectedImageUrl;
+  c.fetch = async () => ({ ok: true, json: async () => ({
+    ...initial, game_id: 'loaded', character_id: 'mio', character_name: 'Mio',
+  }) });
+  await c.requestGameLoad();
+  assert.equal(c.$bigImg.src, '/characters/1/image');
+  assert.equal(c.$bgEl.style.backgroundImage, 'url(/characters/1/image)');
+  assert.equal(cards[0].className.includes('active'), false);
+  assert.equal(cards[1].className.includes('active'), true);
+  assert.equal(c.selectedName, 'Other', 'normal conversation selection is preserved');
+  c.setGamePhase('off');
+  assert.equal(c.$bigImg.src, '/characters/0/image');
+  assert.equal(cards[0].className.includes('active'), true);
+  c.setGamePhase('active');
+  assert.equal(c.$bigImg.src, '/characters/1/image');
+  c.gameView.character_id = 'missing';
+  c.syncCharacterPresentation();
+  assert.equal(c.$bigImg.style.display, 'none');
+  assert.equal(c.$bgEl.style.backgroundImage, 'none');
+  assert.ok(cards.every(card => !card.className.includes('active')));
 });
 
 test('uncertain load locks input and rechecks the same request, corrupt save retains current view', async () => {

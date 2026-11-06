@@ -2129,6 +2129,7 @@ body.no-bubble-blur .msg-bubble {
 
 const API = '';  // 同一オリジン
 
+let characterCatalog = [];
 let selectedIndex    = null;
 let selectedName     = '';
 let selectedImageUrl = null;
@@ -3779,10 +3780,12 @@ async function loadCharacters() {
     const res = await fetch(`${API}/characters`);
     if (!res.ok) throw new Error('サーバーからのデータ取得に失敗しました');
     const list = await res.json();
+    characterCatalog = list || [];
     $charList.innerHTML = '';
 
     if (!list || list.length === 0) {
       $charList.innerHTML = '<div id="no-chars">キャラクターが見つかりません</div>';
+      syncCharacterPresentation();
       return;
     }
 
@@ -3831,6 +3834,7 @@ async function loadCharacters() {
       $charList.appendChild(card);
     });
 
+    syncCharacterPresentation();
     if (window.innerWidth <= 600 && selectedIndex === null) openSidebar();
   } catch(err) {
     console.error('loadCharacters error:', err);
@@ -3907,6 +3911,29 @@ function appendSystemMsg(text) {
   scrollBottom();
 }
 
+function displayedCharacter() {
+  if (!gameVisible() || !gameView?.character_name) {
+    return { index: selectedIndex, imageUrl: selectedImageUrl };
+  }
+  // IDs remain stable when the character list is reordered. Do not confuse
+  // two characters with the same name, or show the previous character when
+  // a saved character has since been removed.
+  const character = characterCatalog.find(c => gameView.character_id
+    ? c.character_id === gameView.character_id : c.name === gameView.character_name);
+  return {
+    index: character?.index ?? null,
+    imageUrl: character?.has_image ? `${API}/characters/${character.index}/image` : null,
+  };
+}
+function syncCharacterPresentation() {
+  const { index, imageUrl } = displayedCharacter();
+  document.querySelectorAll('.char-card').forEach(card => {
+    card.classList.toggle('active', index !== null && String(index) === card.dataset.index);
+  });
+  $bigImg.src = imageUrl || '';
+  $bigImg.style.display = imageUrl ? 'block' : 'none';
+  setBackgroundImage(imageUrl);
+}
 function setBackgroundImage(url) {
   if (!url) { $bgEl.style.backgroundImage = 'none'; return; }
   $bgEl.style.backgroundImage = `url(${url})`;
@@ -4149,6 +4176,7 @@ function setGamePhase(phase) {
   $input.placeholder = visible
     ? '話しかける、行動を書く、数字で選ぶ…'
     : 'メッセージを入力... (Enter で送信)';
+  syncCharacterPresentation();
 }
 function enterGameView({ resetDraft = false } = {}) {
   if (normalViewFragment) return;
@@ -4213,8 +4241,9 @@ function makeGameEventNode(entry, currentInteraction, latestInteractionId) {
   }
   if (entry.type === 'character') {
     const row = document.createElement('div'); row.className = 'game-character-event';
-    if (selectedImageUrl && (!gameView?.character_name || gameView.character_name === selectedName)) {
-      const avatar = document.createElement('img'); avatar.className = 'game-character-avatar'; avatar.src = selectedImageUrl; avatar.alt = '';
+    const imageUrl = displayedCharacter().imageUrl;
+    if (imageUrl) {
+      const avatar = document.createElement('img'); avatar.className = 'game-character-avatar'; avatar.src = imageUrl; avatar.alt = '';
       row.appendChild(avatar);
     }
     const bubble = document.createElement('div'); bubble.className = 'game-character-bubble';
@@ -4259,6 +4288,7 @@ function makeGameEventNode(entry, currentInteraction, latestInteractionId) {
 function renderGameView(view, notice = '') {
   if (!gameViewRoot || !view) return;
   gameView = view;
+  syncCharacterPresentation();
   gameViewRoot.replaceChildren();
   appendGameExperimentalNotice();
   const transcript = view.transcript || view.events || [];

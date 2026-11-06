@@ -7,6 +7,7 @@ import threading
 import tempfile
 import unittest
 import uuid
+from unittest.mock import patch
 
 import bridge_server_api as api
 from fastapi.testclient import TestClient
@@ -78,6 +79,21 @@ class GameHTTPTests(unittest.TestCase):
         api.state.mem_pending = self.old_pending
         api.state.mem_user_turns = self.old_user_turns
         api.state.session_ctx = self.old_session_ctx
+
+    def test_character_catalog_exposes_same_identity_as_game_seed(self):
+        previous = api.state.chars
+        self.addCleanup(setattr, api.state, "chars", previous)
+        characters = [
+            {"name": "Same name", "prompt": "characters/first/prompt.txt", "image_path": None, "has_voice": False},
+            {"name": "Same name", "prompt": "characters/second/prompt.txt", "image_path": "image.png", "has_voice": True},
+        ]
+        with patch.object(api, "get_dynamic_characters", return_value=characters):
+            response = self.client.get("/characters")
+        self.assertEqual(response.status_code, 200)
+        result = response.json()
+        self.assertEqual([c["character_id"] for c in result],
+                         [api.os.path.abspath(c["prompt"]) for c in characters])
+        self.assertNotEqual(result[0]["character_id"], result[1]["character_id"])
 
     def test_save_list_load_and_continue_preserve_normal_conversation(self):
         normal_before = copy.deepcopy((api.state.memory, api.state.mem_pending, api.state.mem_user_turns, api.state.session_ctx))

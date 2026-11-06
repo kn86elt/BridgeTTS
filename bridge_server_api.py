@@ -778,6 +778,7 @@ def list_characters():
     state.chars = get_dynamic_characters()
     return [{
         "index":         i,
+        "character_id":  os.path.abspath(c.get("prompt", c["name"])),
         "name":          c["name"],
         "has_image":     c["image_path"] is not None,
         "has_voice":     c["has_voice"],
