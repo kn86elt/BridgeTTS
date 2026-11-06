@@ -56,7 +56,8 @@ function setup() {
     gameAudioPending: new Set(), gameAudioRequested: new Set(['char-stream']), gameAudioCache: new Map(), gameAudioFailed: new Set(), ttsEnabled: false,
     document: { createElement: () => new Element(), createDocumentFragment: () => new Element() },
     gameView: initial, gameViewRoot: new Element(), $messages: new Element(), gameUiPhase: 'active',
-    gameRequest: null, gameDisplayGeneration: 1, conversationEpoch: 'epoch', pageId: 'page', API: '',
+    gameRequest: null, gameSaveRequest: null, gameLoadRequest: null, gameStorageBusy: false,
+    gameDisplayGeneration: 1, conversationEpoch: 'epoch', pageId: 'page', API: '',
     $gameModeBadge: new Element(), $input: new Element(), $sendBtn: new Element(),
     gameRequestId: () => 'request', scrollBottom() {}, showErrorToast(message) { context.error = message; },
     fetch: () => pending, setTimeout,
@@ -236,4 +237,104 @@ test('failed streamed generation discards its preview and retains retryable choi
   assert.equal(c.gameRequest, null);
   assert.ok(c.gameViewRoot.querySelectorAll('.game-choice').every(button => !button.disabled));
   assert.match(c.error, /もう一度お試し/);
+});
+
+test('save locks choices and retries a lost response with the same request', async () => {
+  const { context: c } = setup();
+  for (const name of ['gameStorageError', 'saveGameProgress']) vm.runInContext(source(name), c);
+  c.document.getElementById = () => ({ close() {} });
+  const bodies = [];
+  c.fetch = async (_url, options) => {
+    assert.equal(c.gameUiPhase, 'saving');
+    assert.ok(c.gameViewRoot.querySelectorAll('.game-choice').every(button => button.disabled));
+    bodies.push(JSON.parse(options.body));
+    throw new Error('lost');
+  };
+  await c.saveGameProgress('窓辺の続き');
+  assert.equal(c.gameUiPhase, 'active');
+  assert.ok(c.gameSaveRequest);
+  c.fetch = async (_url, options) => {
+    bodies.push(JSON.parse(options.body));
+    return { ok: true, json: async () => ({ name: '窓辺の続き' }) };
+  };
+  await c.saveGameProgress();
+  assert.deepEqual(bodies[0], bodies[1]);
+  assert.equal(c.gameSaveRequest, null);
+  assert.equal(c.gameStorageBusy, false);
+  assert.match(c.error, /セーブしました/);
+});
+
+function setupLoad() {
+  const result = setup(), c = result.context;
+  for (const name of ['gameStorageError', 'requestGameLoad', 'loadGameSave', 'openGameSaves']) vm.runInContext(source(name), c);
+  c.gameUiPhase = 'loading';
+  c.gameLoadRequest = { saveId: 'saved', generation: 1, phase: 'active', body: { request_id: 'load-once' } };
+  c.ensureGameLease = () => {}; c.closeSidebar = () => {};
+  return result;
+}
+
+test('loading replaces history and character, unlocks choices, and never autoplays old speech', async () => {
+  const { context: c, initial } = setupLoad();
+  c.selectedName = '別のキャラクター';
+  c.requestGameAudio = () => { throw new Error('loaded speech must not autoplay'); };
+  const loaded = { ...initial, game_id: 'loaded-game', character_name: 'ミオ',
+    transcript: [{ id: 'restored-speech', type: 'character', text: 'おかえり。' }, ...initial.transcript] };
+  c.fetch = async () => ({ ok: true, json: async () => loaded });
+  await c.requestGameLoad();
+  assert.equal(c.gameLoadRequest, null);
+  assert.equal(c.gameView.game_id, 'loaded-game');
+  assert.equal(c.gameUiPhase, 'active');
+  assert.equal(c.gameViewRoot.querySelector('.game-character-name').textContent, 'ミオ');
+  assert.ok(c.gameAudioRequested.has('restored-speech'));
+  assert.ok(c.gameViewRoot.querySelectorAll('.game-choice').every(button => !button.disabled));
+});
+
+test('uncertain load locks input and rechecks the same request, corrupt save retains current view', async () => {
+  const { context: c, initial } = setupLoad();
+  c.fetch = async () => { throw new Error('connection lost'); };
+  await c.requestGameLoad();
+  assert.equal(c.gameUiPhase, 'loading');
+  assert.equal(c.gameLoadRequest.body.request_id, 'load-once');
+  const retry = c.gameViewRoot.querySelector('.game-load-retry');
+  assert.ok(retry);
+  let sent;
+  c.fetch = async (_url, options) => {
+    sent = JSON.parse(options.body);
+    return { ok: false, status: 422, json: async () => ({ detail: { code: 'SAVE_CORRUPT' } }) };
+  };
+  await retry.listeners.click();
+  assert.equal(sent.request_id, 'load-once');
+  assert.equal(c.gameLoadRequest, null);
+  assert.equal(c.gameView, initial);
+  assert.equal(c.gameUiPhase, 'active');
+  assert.match(c.error, /破損/);
+});
+
+test('late load response cannot replace a newer display', async () => {
+  const { context: c, finish, initial } = setupLoad();
+  const loading = c.requestGameLoad();
+  c.gameDisplayGeneration++;
+  finish({ ok: true, json: async () => ({ ...initial, game_id: 'old-load' }) });
+  await loading;
+  assert.equal(c.gameView, initial);
+});
+
+test('load cancellation keeps current game and save names are rendered as text', async () => {
+  const { context: c, initial } = setupLoad();
+  c.gameUiPhase = 'active'; c.gameLoadRequest = null;
+  c.isGenerating = false; c.activePolls = new Set(); c.isScenarioPlaying = false; c.isFileReading = false;
+  const confirmDialog = { dataset: {}, showModal() {} };
+  c.document.getElementById = () => confirmDialog;
+  c.fetch = () => { throw new Error('cancel must not send a request'); };
+  await c.loadGameSave('saved');
+  assert.equal(confirmDialog.dataset.saveId, 'saved');
+  assert.equal(c.gameView, initial);
+  const list = new Element(), dialog = { showModal() {}, close() {} };
+  c.document.getElementById = id => id === 'game-saves-list' ? list : dialog;
+  c.fetch = async () => ({ ok: true, json: async () => ({ saves: [
+    { id: 'saved', name: '<img onerror=alert(1)>', character_name: 'ミオ', world_turn: 4, saved_at: '2026-11-07T00:00:00Z' },
+  ] }) });
+  await c.openGameSaves();
+  assert.equal(list.children[0].children[0].textContent, '<img onerror=alert(1)>');
+  assert.match(list.children[0].children[1].textContent, /ターン 4/);
 });

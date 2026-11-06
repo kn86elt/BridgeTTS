@@ -8,6 +8,7 @@ log/
 output/
 exports/
 memory/
+game_saves/
 *~
 run-bridge-test.bat
 changelog_detail.md

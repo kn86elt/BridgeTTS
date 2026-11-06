@@ -1346,6 +1346,16 @@ body.no-bubble-blur .msg-bubble {
   border: 1px solid var(--border); border-radius: 999px; padding: 3px 7px;
 }
 #game-mode-badge.active { display: inline-flex; }
+.game-storage-dialog { width: 520px; max-width: calc(100vw - 32px); max-height: 80vh; margin: auto; padding: 0; border: 1px solid var(--border); border-radius: 14px; background: var(--body-gradient); color: var(--text); }
+.game-storage-dialog::backdrop { background: rgba(0, 0, 0, .45); }
+.game-storage-dialog .log-modal-header { display: flex; align-items: center; justify-content: space-between; color: var(--text); }
+.game-storage-dialog .log-modal-close { padding: 6px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; font-size: 18px; }
+.game-storage-dialog input { width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); }
+.game-storage-dialog .log-modal-btn { padding: 8px 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); cursor: pointer; }
+.game-storage-dialog .primary { border-color: var(--accent); background: var(--user-bg); }
+.game-save-entry { display: flex; flex-direction: column; gap: 5px; width: 100%; margin-bottom: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: inherit; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.game-save-entry:hover { border-color: var(--accent); }
+.game-save-meta { color: var(--muted); font-size: 12px; }
 #game-view { display: flex; flex-direction: column; gap: 12px; width: 100%; padding: 14px 16px 24px; box-sizing: border-box; }
 .game-narration { align-self: center; max-width: 720px; color: var(--muted); font-style: italic; text-align: center; line-height: 1.7; white-space: pre-wrap; padding: 8px 14px; }
 .game-player-event { align-self: flex-end; max-width: 78%; border-radius: 14px 14px 4px 14px; padding: 9px 13px; background: var(--accent); color: #fff; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -1904,6 +1914,41 @@ body.no-bubble-blur .msg-bubble {
 <!-- ══════════════════════════════
      ログ 読み込みモーダル
 ══════════════════════════════ -->
+<dialog id="game-save-dialog" class="game-storage-dialog" aria-labelledby="game-save-title">
+  <form onsubmit="event.preventDefault(); saveGameProgress(this.elements.saveName.value)">
+    <div class="log-modal-header"><span id="game-save-title">ゲームをセーブ</span></div>
+    <div class="log-modal-body">
+      <label for="game-save-name">セーブ名</label>
+      <input id="game-save-name" name="saveName" type="text" maxlength="100" required autofocus>
+      <p class="game-save-meta">毎回、新しいデータとして保存します。同じ名前のセーブも残ります。</p>
+    </div>
+    <div class="log-modal-footer">
+      <button type="button" class="log-modal-btn" onclick="this.closest('dialog').close()">キャンセル</button>
+      <button type="submit" class="log-modal-btn primary">セーブ</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="game-load-confirm" class="game-storage-dialog" aria-labelledby="game-load-confirm-title">
+  <div class="log-modal-header"><span id="game-load-confirm-title">ゲームをロードしますか？</span></div>
+  <div class="log-modal-body">現在のゲームを保存した時点に置き換えます。未保存の進行は失われます。</div>
+  <div class="log-modal-footer">
+    <button type="button" class="log-modal-btn" onclick="this.closest('dialog').close()">キャンセル</button>
+    <button type="button" class="log-modal-btn primary" onclick="const dialog = this.closest('dialog'); dialog.close(); loadGameSave(dialog.dataset.saveId, true)">ロード</button>
+  </div>
+</dialog>
+
+<dialog id="game-saves-dialog" class="game-storage-dialog" aria-labelledby="game-saves-title">
+  <div class="log-modal-header">
+    <span id="game-saves-title">ゲームをロード</span>
+    <form method="dialog"><button class="log-modal-close" aria-label="閉じる">✕</button></form>
+  </div>
+  <div class="log-modal-body">
+    <p class="game-save-meta">保存した時点から再開します。通常会話の記憶は変更しません。</p>
+    <div id="game-saves-list" aria-live="polite"></div>
+  </div>
+</dialog>
+
 <div class="log-modal-backdrop" id="log-load-backdrop">
   <div class="log-modal" style="width:520px;max-width:98vw">
     <div class="log-modal-header">
@@ -2117,9 +2162,12 @@ let pageId              = (crypto.randomUUID ? crypto.randomUUID() : `page_${Dat
 let conversationEpoch   = '';
 let normalRevision      = 0;
 let gameView            = null;
-let gameUiPhase         = 'off';   // off / starting / active / submitting / suspending / resuming
+let gameUiPhase         = 'off';   // off / starting / active / submitting / suspending / resuming / saving / loading
 let gameRequest         = null;
 let gameStartRequest    = null;
+let gameSaveRequest     = null;
+let gameLoadRequest     = null;
+let gameStorageBusy     = false;
 let gameDisplayGeneration = 0;
 let normalViewFragment  = null;
 let normalDraft          = '';
@@ -3386,6 +3434,12 @@ $logMenuBtn.addEventListener('click', e => {
       disabled: !['off', 'active'].includes(gameUiPhase),
       tooltip: '実験的な機能です。LLMの応答やコンテキスト長によって失敗する場合があります。会話を引き継いで物語を進め、解除すると中断します',
       action: toggleGameMode },
+    { label: 'ゲームをセーブ', action: saveGameProgress,
+      disabled: gameStorageBusy || !!gameRequest || !gameView || !['active', 'suspended'].includes(gameView.status) || !['off', 'active'].includes(gameUiPhase),
+      disabledHint: 'ゲームの進行が確定してから保存できます' },
+    { label: 'ゲームをロード', action: openGameSaves,
+      disabled: gameStorageBusy || !!gameRequest || !['off', 'active'].includes(gameUiPhase),
+      disabledHint: '処理が終わってからロードできます' },
     null, // セパレータ
     { label: 'テキストを読み上げ (実験的)',
       disabled: gameVisible(), disabledHint: 'ゲームモードを解除してから使用',
@@ -3963,7 +4017,7 @@ function updateGameProgress(event, generation) {
     if (!preview) {
       preview = document.createElement('div'); preview.className = 'game-character-bubble game-stream-preview';
       const label = document.createElement('div'); label.className = 'game-character-name';
-      label.textContent = (selectedName || 'キャラクター') + '（生成中・未確定）';
+      label.textContent = (gameView?.character_name || selectedName || 'キャラクター') + '（生成中・未確定）';
       const text = document.createElement('div'); text.className = 'game-stream-text';
       preview.append(label, text); gameViewRoot.appendChild(preview);
     }
@@ -4115,6 +4169,8 @@ function leaveGameView({ keepGame = true } = {}) {
     gameView = null;
     gameRequest = null;
     gameStartRequest = null;
+    gameSaveRequest = null;
+    gameLoadRequest = null;
     gameAudioRequested.clear();
     gameAudioFailed.clear();
     gameAudioCache.clear();
@@ -4135,12 +4191,12 @@ function makeGameEventNode(entry, currentInteraction, latestInteractionId) {
   }
   if (entry.type === 'character') {
     const row = document.createElement('div'); row.className = 'game-character-event';
-    if (selectedImageUrl) {
+    if (selectedImageUrl && (!gameView?.character_name || gameView.character_name === selectedName)) {
       const avatar = document.createElement('img'); avatar.className = 'game-character-avatar'; avatar.src = selectedImageUrl; avatar.alt = '';
       row.appendChild(avatar);
     }
     const bubble = document.createElement('div'); bubble.className = 'game-character-bubble';
-    const name = document.createElement('div'); name.className = 'game-character-name'; name.textContent = selectedName || '';
+    const name = document.createElement('div'); name.className = 'game-character-name'; name.textContent = gameView?.character_name || selectedName || '';
     const text = document.createElement('div'); text.textContent = entry.text || '';
     bubble.append(name, text);
     const replay = document.createElement('button'); replay.type = 'button'; replay.className = 'game-audio-replay'; replay.textContent = '▶';
@@ -4231,20 +4287,158 @@ function ensureGameLease() {
   if (!gameView?.game_id) return;
   gameLeaseTimer = setInterval(async () => {
     const id = gameView?.game_id;
+    const generation = gameDisplayGeneration;
     if (!id) return;
     try {
       const response = await fetch(`${API}/game/${id}/lease`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ page_id: pageId }),
       });
-      if (response.status === 410) {
+      if (response.status === 410 && generation === gameDisplayGeneration && id === gameView?.game_id) {
         leaveGameView({ keepGame: false });
         showErrorToast('ゲームのセッションが終了しました');
       }
     } catch (_) { /* 次のleaseで再確認する */ }
   }, 60_000);
 }
+function gameStorageError(code) {
+  const messages = {
+    SAVE_NOT_FOUND: 'セーブデータが見つかりません。',
+    SAVE_CORRUPT: 'セーブデータが破損しているため読み込めません。',
+    SAVE_VERSION_UNSUPPORTED: 'このバージョンのセーブデータには対応していません。',
+    SAVE_READ_FAILED: 'セーブデータを読み込めませんでした。',
+    SAVE_WRITE_FAILED: 'セーブできませんでした。保存先の空き容量や書き込み権限を確認してください。',
+    SAVE_TOO_LARGE: 'セーブデータの容量が上限を超えています。',
+    GAME_BUSY: '生成や音声処理が終わってから操作してください。',
+    STALE_REVISION: 'ゲームの状態が変わりました。現在の状態を確認してやり直してください。',
+    STALE_CONVERSATION: '通常会話が切り替わりました。もう一度操作してください。',
+    OWNER_MISMATCH: '別のページでゲームを操作中です。そのページで中断・終了してください。',
+    GAME_CLOSED: 'ゲームのセッションが終了しました。保存一覧からロードし直してください。',
+  };
+  return messages[code] || '処理に失敗しました: ' + code;
+}
+async function saveGameProgress(name = null) {
+  if (gameStorageBusy || gameRequest || !gameView || !['off', 'active'].includes(gameUiPhase) || !['active', 'suspended'].includes(gameView.status)) return;
+  if (!gameSaveRequest || gameSaveRequest.gameId !== gameView.game_id || gameSaveRequest.body.revision !== gameView.revision) {
+    if (name === null) {
+      document.getElementById('game-save-name').value = `${gameView.character_name || selectedName} — ターン ${gameView.world_turn}`;
+      document.getElementById('game-save-dialog').showModal();
+      return;
+    }
+    if (!name.trim() || name.trim().length > 100) { showErrorToast('セーブ名は1〜100文字で入力してください'); return; }
+    gameSaveRequest = { gameId: gameView.game_id, body: { page_id: pageId, revision: gameView.revision, request_id: gameRequestId(), name: name.trim() } };
+  }
+  document.getElementById('game-save-dialog').close();
+  const request = gameSaveRequest;
+  const phase = gameUiPhase, generation = gameDisplayGeneration;
+  gameStorageBusy = true;
+  if (phase === 'active') setGamePhase('saving');
+  try {
+    const response = await fetch(`${API}/game/${request.gameId}/save`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request.body),
+    });
+    const data = await response.json();
+    if (generation !== gameDisplayGeneration) return;
+    if (!response.ok) { gameSaveRequest = null; showErrorToast(gameStorageError(data.detail?.code || `HTTP ${response.status}`)); return; }
+    gameSaveRequest = null;
+    showErrorToast(`「${data.name}」をセーブしました`, 'success');
+  } catch (_) {
+    if (generation === gameDisplayGeneration) showErrorToast('保存結果を確認できません。「ゲームをセーブ」を押すと同じ保存要求を再確認します。');
+  } finally {
+    gameStorageBusy = false;
+    if (generation === gameDisplayGeneration) setGamePhase(phase);
+  }
+}
+async function openGameSaves() {
+  if (gameStorageBusy || gameRequest || !['off', 'active'].includes(gameUiPhase)) return;
+  const dialog = document.getElementById('game-saves-dialog');
+  const list = document.getElementById('game-saves-list');
+  list.replaceChildren(); list.textContent = '読み込み中…'; dialog.showModal();
+  try {
+    const response = await fetch(`${API}/game/saves`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(gameStorageError(data.detail?.code || `HTTP ${response.status}`));
+    list.textContent = '';
+    if (!data.saves.length) list.textContent = 'セーブデータはありません。ゲーム中のメニューから「ゲームをセーブ」を選んでください。';
+    for (const save of data.saves) {
+      const button = document.createElement('button'); button.type = 'button'; button.className = 'game-save-entry';
+      const name = document.createElement('strong'); name.textContent = save.name;
+      const meta = document.createElement('span'); meta.className = 'game-save-meta';
+      meta.textContent = `${save.character_name} · ターン ${save.world_turn} · ${new Date(save.saved_at).toLocaleString()}`;
+      button.append(name, meta);
+      button.addEventListener('click', () => { dialog.close(); return loadGameSave(save.id); });
+      list.appendChild(button);
+    }
+    if (data.unavailable) {
+      const warning = document.createElement('p'); warning.textContent = `読み込めないセーブデータが${data.unavailable}件あります。`; list.appendChild(warning);
+    }
+  } catch (error) { list.textContent = error.message; }
+}
+async function loadGameSave(saveId, confirmed = false) {
+  if (gameStorageBusy || gameRequest || !['off', 'active'].includes(gameUiPhase)) return;
+  if (isGenerating || activePolls.size || isScenarioPlaying || isFileReading) { showErrorToast('通常の生成や読み上げが終わってからロードしてください'); return; }
+  if (gameView && !confirmed) {
+    const dialog = document.getElementById('game-load-confirm');
+    dialog.dataset.saveId = saveId; dialog.showModal(); return;
+  }
+  gameStorageBusy = true;
+  const generation = gameDisplayGeneration;
+  try {
+    const status = await refreshConversationStatus();
+    if (generation !== gameDisplayGeneration) return;
+    if (status.busy) { showErrorToast(gameStorageError('GAME_BUSY')); return; }
+    if (isAudioPlaying) stopAllAudio();
+    if (autoReplyTimer) { clearTimeout(autoReplyTimer); autoReplyTimer = null; }
+    autoReplyEnabled = false;
+    stopGameAudio();
+    const phase = gameUiPhase;
+    gameDisplayGeneration++;
+    enterGameView(); setGamePhase('loading'); showGameWorking(true);
+    gameLoadRequest = { saveId, generation: gameDisplayGeneration, phase, body: {
+      page_id: pageId, conversation_epoch: conversationEpoch, normal_revision: normalRevision,
+      request_id: gameRequestId(), expected_game_id: gameView?.game_id || null, expected_revision: gameView?.revision ?? null,
+    } };
+  } catch (error) { showErrorToast('会話状態を確認できません: ' + error.message); }
+  finally { gameStorageBusy = false; }
+  if (gameLoadRequest) await requestGameLoad();
+}
+async function requestGameLoad() {
+  const request = gameLoadRequest;
+  if (!request || gameStorageBusy || request.generation !== gameDisplayGeneration) return;
+  gameStorageBusy = true;
+  gameViewRoot?.querySelector('.game-load-retry')?.remove();
+  showGameWorking(true);
+  try {
+    const response = await fetch(`${API}/game/saves/${encodeURIComponent(request.saveId)}/load`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request.body),
+    });
+    const data = await response.json();
+    if (request.generation !== gameDisplayGeneration) return;
+    if (!response.ok) {
+      gameLoadRequest = null; showGameWorking(false);
+      if (['GAME_CLOSED', 'STALE_CONVERSATION'].includes(data.detail?.code)) leaveGameView({ keepGame: false });
+      else if (request.phase === 'off') leaveGameView({ keepGame: true });
+      else setGamePhase(request.phase);
+      showErrorToast(gameStorageError(data.detail?.code || `HTTP ${response.status}`));
+      return;
+    }
+    gameLoadRequest = null; gameSaveRequest = null; gameStartRequest = null; gameRequest = null;
+    gameAudioRequested.clear(); gameAudioFailed.clear(); gameAudioCache.clear();
+    // Restored history is replayed only on demand, never as a burst of TTS jobs.
+    for (const entry of data.transcript || []) if (entry.type === 'character') gameAudioRequested.add(entry.id);
+    gameDraft = ''; $input.value = '';
+    gameView = data; setGamePhase('active'); renderGameView(data, 'セーブした時点から再開しました。'); ensureGameLease();
+    closeSidebar();
+  } catch (_) {
+    if (request.generation !== gameDisplayGeneration) return;
+    showGameWorking(false);
+    const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'game-load-retry game-save-entry';
+    retry.textContent = 'ロード結果を確認できません。クリックして同じ要求の結果を再確認';
+    retry.addEventListener('click', requestGameLoad); gameViewRoot.appendChild(retry);
+  } finally { gameStorageBusy = false; }
+}
 async function toggleGameMode() {
+  if (gameStorageBusy) return;
   if (gameVisible()) { await suspendGameMode(); return; }
   if (gameView?.status === 'suspended') { await resumeGameMode(); return; }
   if (isGenerating || activePolls.size > 0 || isScenarioPlaying) {
@@ -4359,7 +4553,7 @@ async function sendGameInput() {
   await submitGameInput(body.input, text, body);
 }
 async function submitGameInput(input, originalText, existingBody = null) {
-  if (!gameView || gameUiPhase !== 'active' || gameRequest) return;
+  if (gameStorageBusy || !gameView || gameUiPhase !== 'active' || gameRequest) return;
   const body = existingBody || {
     page_id: pageId, conversation_epoch: conversationEpoch, revision: gameView.revision,
     request_id: gameRequestId(), input,

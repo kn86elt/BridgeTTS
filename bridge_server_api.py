@@ -19,6 +19,7 @@ from PIL import Image
 from game_mode import GameEngine, GameError
 from game_mode.llm import OpenAIGameLLM
 from game_mode.transcript import GameTranscriptWriter
+from game_mode.saves import GameSaveStore
 import io
 import math
 import webbrowser
@@ -681,6 +682,7 @@ def _normal_busy() -> bool:
     return False
 
 
+_game_save_store = GameSaveStore(Path(__file__).resolve().parent / "game_saves")
 _game_engine = GameEngine(
     _GameLLMFactory(),
     gate_lock=_conversation_gate,
@@ -2058,6 +2060,18 @@ class GameStartRequest(_StrictGameModel):
     request_id: str
 
 
+class GameSaveRequest(_StrictGameModel):
+    page_id: str
+    revision: int
+    request_id: str
+    name: str
+
+
+class GameLoadRequest(GameStartRequest):
+    expected_game_id: str | None = None
+    expected_revision: int | None = None
+
+
 class GameInput(_StrictGameModel):
     kind: str
     interaction_id: str
@@ -2271,6 +2285,21 @@ def game_start(req: GameStartRequest, stream: bool = False):
             seed=_capture_game_seed, on_event=emit,
         )
     return _game_stream_response(operation, "opening") if stream else operation(None)
+
+
+@app.get("/game/saves")
+def game_saves():
+    return _game_save_store.list()
+
+
+@app.post("/game/saves/{save_id}/load")
+def game_load(save_id: str, req: GameLoadRequest):
+    return _game_engine.load(_game_save_store, save_id, **req.model_dump())
+
+
+@app.post("/game/{game_id}/save")
+def game_save(game_id: str, req: GameSaveRequest):
+    return _game_engine.save(_game_save_store, game_id, **req.model_dump())
 
 
 @app.post("/game/{game_id}/turn")

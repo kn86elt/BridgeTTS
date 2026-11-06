@@ -342,6 +342,8 @@ class GameEngine:
     ) -> dict[str, Any]:
         view = {
             "game_id": session.game_id,
+            "character_id": session.character_id,
+            "character_name": session.character_name,
             "request_id": None,
             "status": session.status,
             "revision": session.revision,
@@ -1044,6 +1046,83 @@ class GameEngine:
             result = self._view(session, [], include_transcript=False)
             result["request_id"] = request_id
             self._finish_record(session, request_id, result)
+            return result
+
+    def save(self, store, game_id: str, *, page_id: str, revision: int,
+             request_id: str, name: str) -> dict[str, Any]:
+        name = name.strip()
+        if not name or len(name) > 100 or not request_id or len(request_id) > 128:
+            raise GameError("INVALID_REQUEST", 422)
+        with self._lock:
+            self._prune_locked()
+            session = self._session
+            if not session or session.game_id != game_id:
+                raise GameError("GAME_CLOSED", 410)
+            self._guard_owner(session, page_id)
+            save_id = store.identity(game_id, page_id, request_id)
+            request_hash = _stable_hash({"revision": revision, "name": name})
+            prior = store.prior(save_id, request_hash)
+            if prior is not None:
+                return prior
+            if revision != session.revision:
+                raise GameError("STALE_REVISION")
+            if session.status not in {"active", "suspended"}:
+                raise GameError("GAME_BUSY")
+            result = store.save(session, name, save_id, request_hash)
+            session.lease_expires_at = self.clock() + LEASE_SECONDS
+            return result
+
+    def load(self, store, save_id: str, *, page_id: str, conversation_epoch: str,
+             normal_revision: int, request_id: str, expected_game_id: str | None = None,
+             expected_revision: int | None = None) -> dict[str, Any]:
+        if not page_id or len(page_id) > 128 or not conversation_epoch or not request_id or len(request_id) > 128:
+            raise GameError("INVALID_REQUEST", 422)
+        digest = _stable_hash({"mode": "load", "save_id": save_id, "epoch": conversation_epoch,
+                               "normal_revision": normal_revision, "game_id": expected_game_id,
+                               "revision": expected_revision})
+        with self.gate_lock, self._lock:
+            self._prune_locked()
+            key = (page_id, request_id)
+            prior = self._start_records.get(key)
+            if prior:
+                if prior["payload_hash"] != digest:
+                    raise GameError("REQUEST_ID_REUSED")
+                if not self._session or self._session.game_id != prior["game_id"]:
+                    raise GameError("GAME_CLOSED", 410)
+                self._guard_owner(self._session, page_id, conversation_epoch)
+                return self._view(self._session)
+            if self._closed_pages.get(page_id, 0) > self.clock():
+                raise GameError("GAME_CLOSED", 410)
+            if self.normal_busy():
+                raise GameError("GAME_BUSY")
+            epoch, revision = self.conversation_state()
+            if epoch and (epoch != conversation_epoch or revision != normal_revision):
+                raise GameError("STALE_CONVERSATION")
+            current = self._session
+            if current:
+                self._guard_owner(current, page_id, conversation_epoch)
+                if current.status not in {"active", "suspended"}:
+                    raise GameError("GAME_BUSY")
+                if current.game_id != expected_game_id or current.revision != expected_revision:
+                    raise GameError("STALE_REVISION")
+            elif expected_game_id is not None:
+                raise GameError("GAME_CLOSED", 410)
+            # Read and validate before replacing the current game. A failed load
+            # must leave it playable, including its pending target selection.
+            restored = store.restore(save_id, game_id=str(uuid.uuid4()), owner_page_id=page_id,
+                                     conversation_epoch=conversation_epoch, normal_revision=normal_revision,
+                                     lease_expires_at=self.clock() + LEASE_SECONDS)
+            self._check_size(restored)
+            if restored.pending:
+                restored.pending.id = _id("interaction")
+            if current:
+                self._close_locked(current, "load_save")
+            self._session = restored
+            result = self._view(restored)
+            result["request_id"] = request_id
+            self._start_records[key] = {"payload_hash": digest, "status": "committed",
+                                        "game_id": restored.game_id, "response": copy.deepcopy(result),
+                                        "expires_at": self.clock() + TOMBSTONE_SECONDS}
             return result
 
     def lease(self, game_id: str, page_id: str) -> None:

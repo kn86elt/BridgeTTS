@@ -4,6 +4,7 @@ import copy
 import asyncio
 import json
 import threading
+import tempfile
 import unittest
 import uuid
 
@@ -11,6 +12,7 @@ import bridge_server_api as api
 from fastapi.testclient import TestClient
 
 from tests.fakes import FakeGameLLM
+from game_mode.saves import GameSaveStore
 
 
 class GameHTTPTests(unittest.TestCase):
@@ -21,6 +23,10 @@ class GameHTTPTests(unittest.TestCase):
         cls.client = TestClient(api.app)
 
     def setUp(self):
+        self.save_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.save_directory.cleanup)
+        self.old_save_store = api._game_save_store
+        api._game_save_store = GameSaveStore(self.save_directory.name)
         self.old_llm = api._game_engine.llm
         self.old_save = api._game_engine.transcript_save
         self.old_load_settings = api.load_settings
@@ -63,6 +69,7 @@ class GameHTTPTests(unittest.TestCase):
         except Exception:
             pass
         api._game_engine.llm = self.old_llm
+        api._game_save_store = self.old_save_store
         api._game_engine.transcript_save = self.old_save
         api.load_settings = self.old_load_settings
         api._capture_game_seed = self.old_seed
@@ -71,6 +78,48 @@ class GameHTTPTests(unittest.TestCase):
         api.state.mem_pending = self.old_pending
         api.state.mem_user_turns = self.old_user_turns
         api.state.session_ctx = self.old_session_ctx
+
+    def test_save_list_load_and_continue_preserve_normal_conversation(self):
+        normal_before = copy.deepcopy((api.state.memory, api.state.mem_pending, api.state.mem_user_turns, api.state.session_ctx))
+        response = self.client.post(f"/game/{self.game_id}/save", json={
+            "page_id": self.page_id, "revision": self.game_view["revision"], "request_id": "save-http", "name": "窓辺の続き",
+        })
+        self.assertEqual(response.status_code, 200, response.text)
+        saved = response.json()
+        listing = self.client.get("/game/saves")
+        self.assertEqual(listing.status_code, 200, listing.text)
+        self.assertEqual(listing.json()["saves"], [saved])
+        self.assertNotIn("system_prompt", listing.text)
+        self.client.post(f"/game/{self.game_id}/close", json={"page_id": self.page_id, "request_id": "close"})
+        # A different page can load after close/restart, with no character selected.
+        self.page_id = "load-page-" + uuid.uuid4().hex
+        api.state.selected = None
+        body = {**self.start_body, "page_id": self.page_id, "request_id": "load-http"}
+        response = self.client.post(f"/game/saves/{saved['id']}/load", json=body)
+        self.assertEqual(response.status_code, 200, response.text)
+        loaded = response.json()
+        self.assertNotEqual(loaded["game_id"], self.game_id)
+        self.assertEqual(loaded["character_name"], "ミオ")
+        self.assertEqual(loaded["transcript"], self.game_view["transcript"])
+        replay = self.client.post(f"/game/saves/{saved['id']}/load", json=body)
+        self.assertEqual(replay.json()["game_id"], loaded["game_id"])
+        next_turn = self.client.post(f"/game/{loaded['game_id']}/turn", json={
+            "page_id": self.page_id, "conversation_epoch": body["conversation_epoch"], "revision": loaded["revision"],
+            "request_id": "after-load", "input": {"kind": "choice", "interaction_id": loaded["interaction"]["id"],
+                                                 "choice_id": loaded["interaction"]["choices"][0]["id"]},
+        })
+        self.assertEqual(next_turn.status_code, 200, next_turn.text)
+        self.assertEqual(next_turn.json()["world_turn"], loaded["world_turn"] + 1)
+        self.assertEqual(normal_before, (api.state.memory, api.state.mem_pending, api.state.mem_user_turns, api.state.session_ctx))
+
+    def test_save_endpoint_rejects_other_owner_and_stale_revision(self):
+        body = {"page_id": "other-page", "revision": self.game_view["revision"], "request_id": "save", "name": "save"}
+        response = self.client.post(f"/game/{self.game_id}/save", json=body)
+        self.assertEqual(response.json()["detail"]["code"], "OWNER_MISMATCH")
+        body.update(page_id=self.page_id, revision=0)
+        response = self.client.post(f"/game/{self.game_id}/save", json=body)
+        self.assertEqual(response.json()["detail"]["code"], "STALE_REVISION")
+        self.assertEqual(self.client.get("/game/saves").json()["saves"], [])
 
     def stream_events(self, response):
         self.assertEqual(response.status_code, 200)
