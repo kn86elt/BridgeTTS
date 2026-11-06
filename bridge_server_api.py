@@ -1438,6 +1438,25 @@ def _tts_reference_is_multiple(client) -> bool:
     return is_array(root)
 
 
+def _character_voice_reference(character: dict):
+    """Capture references for this character, keeping its legacy file first."""
+    primary = character.get("voice_path")
+    if not primary or character.get("char_format") not in {"subfolder", "zip"}:
+        return primary
+    directory = Path(character["prompt"]).parent
+    paths = [primary]
+    paths.extend(str(path) for path in sorted(directory.iterdir(), key=lambda p: (p.name.casefold(), p.name))
+                 if path.is_file() and path.suffix.lower() == ".wav" and path != Path(primary))
+    return paths
+
+
+def _tts_reference_paths(voice_path, *, multiple: bool) -> list[str]:
+    # Queued audio and saved games carry their own captured list; never consult
+    # state.selected here. Old saves and flat characters still pass one string.
+    paths = list(voice_path) if isinstance(voice_path, (list, tuple)) else [voice_path]
+    return paths if multiple else paths[:1]
+
+
 def generate_and_encode_tts(text, voice_path, embedding_path=None):
     """TTSを生成してBase64文字列で返す。
     embedding_path が指定されAPIが対応している場合はSpeaker Embeddingを使用する。
@@ -1486,16 +1505,20 @@ def generate_and_encode_tts(text, voice_path, embedding_path=None):
                         print(f"[TTS] WARNING: Embedding読み込み失敗。音声ファイルにフォールバック: {embedding_path}")
                         use_embedding = False
 
+            multiple_references = _tts_reference_is_multiple(tts)
+            uploaded_references = []
             if not use_embedding and voice_path:
-                if not os.path.exists(voice_path):
-                    print(f"[TTS] WARNING: voice_path が見つかりません: {voice_path}")
-                else:
-                    uploaded_audio = _handle_file_with_retry(voice_path, "audio")
-                    if uploaded_audio is None:
-                        print(f"[TTS] WARNING: リファレンス音声の読み込みに失敗。音声なしで生成します: {voice_path}")
+                for reference_path in _tts_reference_paths(voice_path, multiple=multiple_references):
+                    if not os.path.isfile(reference_path):
+                        print(f"[TTS] WARNING: リファレンス音声が見つかりません: {reference_path}")
+                        continue
+                    reference = _handle_file_with_retry(reference_path, "audio")
+                    if reference is None:
+                        print(f"[TTS] WARNING: リファレンス音声の読み込みに失敗。スキップします: {reference_path}")
+                    else:
+                        uploaded_references.append(reference)
 
-            if _tts_reference_is_multiple(tts):
-                uploaded_audio = [uploaded_audio] if uploaded_audio is not None else []
+            uploaded_audio = uploaded_references if multiple_references else next(iter(uploaded_references), None)
             predict_kwargs = {**filtered_config, "text": text, "api_name": "/_run_generation",
                               "uploaded_audio": uploaded_audio}
             if tts_supports_embedding:
@@ -1518,7 +1541,7 @@ def generate_and_encode_tts(text, voice_path, embedding_path=None):
     return None
 
 
-def enqueue_tts(sentence: str, voice_path: str, req_id: str, embedding_path=None):
+def enqueue_tts(sentence: str, voice_path: str | list[str] | None, req_id: str, embedding_path=None):
     """キューに積む前に queued カウンターをインクリメントする（必ずペアで使う）"""
     with finished_audios_lock:
         if req_id in finished_audios:
@@ -1555,7 +1578,7 @@ def stream_llm_with_tts(messages: list, tts_enabled: bool, memorize_user_text: s
         or no_voice_mode == "default_voice"
     )
     # デフォルト音声モード時は voice_path=None でTTSを呼ぶ
-    tts_voice_path = state.selected.get("voice_path") if state.selected.get("has_voice") else None
+    tts_voice_path = _character_voice_reference(state.selected) if state.selected.get("has_voice") else None
     tts_embedding_path = state.selected.get("embedding_path") if has_embedding else None
 
     full_answer = ""
@@ -1996,7 +2019,7 @@ def _tts_direct_reserved(req: DirectTTSRequest):
     """入力テキストをそのままTTSに渡して音声を返す"""
     if not state.selected:
         raise HTTPException(400, "キャラクターが選択されていません")
-    voice_path = state.selected.get("voice_path")
+    voice_path = _character_voice_reference(state.selected)
     embedding_path = state.selected.get("embedding_path")
     settings = load_settings()
     no_voice_mode = settings.get("no_voice_mode", "off")
@@ -2180,7 +2203,7 @@ def _capture_game_seed() -> dict:
         "memory_enabled": bool(settings.get("memory_enabled", True)),
         "started_context": {"time": time.strftime("%Y-%m-%d %H:%M:%S")},
         "voice": {
-            "voice_path": selected.get("voice_path") if selected.get("has_voice") else None,
+            "voice_path": _character_voice_reference(selected) if selected.get("has_voice") else None,
             "embedding_path": selected.get("embedding_path") if has_embedding else None,
             "tts_available": has_tts,
         },
@@ -2504,7 +2527,7 @@ def tts_regen(req: TtsRegenRequest):
     フロントエンドは /audio_poll/{req_id} でポーリングして音声を受け取る。"""
     if not state.selected:
         raise HTTPException(400, "キャラクターが選択されていません")
-    voice_path = state.selected.get("voice_path")
+    voice_path = _character_voice_reference(state.selected)
     embedding_path = state.selected.get("embedding_path")
     settings = load_settings()
     no_voice_mode = settings.get("no_voice_mode", "off")
@@ -2680,7 +2703,7 @@ def tts_export(req: TtsExportRequest):
     """テキストをTTSで生成(バッチ分割→WAV結合→任意でMP3変換)してファイルとして保存。"""
     if not state.selected:
         raise HTTPException(400, "キャラクターが選択されていません")
-    voice_path = state.selected.get("voice_path")
+    voice_path = _character_voice_reference(state.selected)
     embedding_path = state.selected.get("embedding_path")
     settings = load_settings()
     no_voice_mode = settings.get("no_voice_mode", "off")

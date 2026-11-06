@@ -2,6 +2,7 @@ import base64
 import json
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -9,7 +10,7 @@ import bridge_server_api as api
 
 
 class ReferenceAudioTests(unittest.TestCase):
-    def generate(self, schema, *, embedding=False, version="v3", config=None):
+    def generate(self, schema, *, embedding=False, version="v3", config=None, additional=False, failed_reference=None):
         file_data = {"path": "reference.wav", "meta": {"_type": "gradio.FileData"}}
         client = Mock()
         client._info = {"named_endpoints": {"/_run_generation": {"parameters": [
@@ -19,8 +20,19 @@ class ReferenceAudioTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             audio = Path(directory) / "reference.wav"
             speaker = Path(directory) / "voice.speaker.safetensors"
-            output = Path(directory) / "output.wav"
+            output_dir = Path(directory) / "generated"
+            output_dir.mkdir()
+            output = output_dir / "output.wav"
             audio.write_bytes(b"reference")
+            if additional:
+                references = Path(directory)
+                for name in ("02.wav", "01.WAV", "ignored.mp3"):
+                    (references / name).write_bytes(b"reference")
+                (references / "nested.wav").mkdir()
+            def upload(path, _label):
+                if Path(path).name == failed_reference:
+                    return None
+                return {**file_data, "path": Path(path).name} if additional else file_data
             speaker.write_bytes(b"embedding")
             output.write_bytes(b"generated audio")
             client.predict.return_value = [str(output)]
@@ -29,14 +41,76 @@ class ReferenceAudioTests(unittest.TestCase):
                  patch.object(api, "tts_supports_embedding", True), \
                  patch.object(api, "tts_api_version", version), \
                  patch.object(api, "TTS_CONFIG", {version: config} if config is not None else api.TTS_CONFIG), \
-                 patch.object(api, "_handle_file_with_retry", return_value=file_data):
-                encoded = api.generate_and_encode_tts("テスト", str(audio), str(speaker) if embedding else None)
+                 patch.object(api, "_handle_file_with_retry", side_effect=upload):
+                reference = api._character_voice_reference({
+                    "voice_path": str(audio), "prompt": str(Path(directory) / "reference.txt"),
+                    "char_format": "subfolder" if additional else "flat",
+                })
+                encoded = api.generate_and_encode_tts("テスト", reference, str(speaker) if embedding else None)
             self.assertEqual(base64.b64decode(encoded), b"generated audio")
         return client.predict.call_args.kwargs, file_data
 
     def test_multiple_file_api_receives_list(self):
         kwargs, file_data = self.generate({"type": "array", "items": {"type": "object"}})
         self.assertEqual(kwargs["uploaded_audio"], [file_data])
+
+    def test_multiple_wavs_are_ordered_and_scoped_to_character_folder(self):
+        kwargs, _ = self.generate({"type": "array"}, version="v4", additional=True)
+        self.assertEqual([item["path"] for item in kwargs["uploaded_audio"]], ["reference.wav", "01.WAV", "02.wav"])
+
+    def test_only_folder_and_zip_characters_capture_multiple_references(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "voice.wav").write_bytes(b"voice")
+            (root / "extra.wav").write_bytes(b"extra")
+            for format in ("flat", "subfolder", "zip"):
+                with self.subTest(format=format):
+                    primary = str(root / "voice.wav")
+                    result = api._character_voice_reference({
+                        "voice_path": primary, "prompt": str(root / "voice.txt"), "char_format": format,
+                    })
+                    self.assertEqual(result, primary if format == "flat" else [primary, str(root / "extra.wav")])
+
+    def test_character_discovery_supports_folder_zip_and_unchanged_flat_layout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "characters"
+            root.mkdir()
+            (root / "Flat.txt").write_text("character", encoding="utf-8")
+            (root / "Flat.wav").write_bytes(b"primary")
+            (root / "Other.wav").write_bytes(b"not a Flat reference")
+            folder = root / "Folder"
+            folder.mkdir()
+            for name, data in (("Folder.txt", b"character"), ("Folder.wav", b"primary"), ("extra.wav", b"extra")):
+                (folder / name).write_bytes(data)
+            with zipfile.ZipFile(root / "Zip.zip", "w") as archive:
+                archive.writestr("Zip/Zip.txt", "character")
+                archive.writestr("Zip/Zip.wav", b"primary")
+                archive.writestr("Zip/extra.wav", b"extra")
+            characters = []
+            with patch.object(api, "ZIP_CACHE_DIR", str(Path(directory) / "cache")):
+                api._scan_char_dir(str(root), characters, set())
+            by_name = {character["name"]: character for character in characters}
+            self.assertEqual(api._character_voice_reference(by_name["Flat"]), str(root / "Flat.wav"))
+            for name in ("Folder", "Zip"):
+                character = by_name[name]
+                references = api._character_voice_reference(character)
+                self.assertEqual([Path(path).name for path in references], [name + ".wav", "extra.wav"])
+                self.assertEqual(api._tts_reference_paths(references, multiple=False), [character["voice_path"]])
+
+    def test_legacy_versions_keep_original_reference_with_extra_wavs_present(self):
+        for version in ("v2", "v3"):
+            with self.subTest(version=version):
+                kwargs, file_data = self.generate({"type": "object"}, version=version, additional=True)
+                self.assertEqual(kwargs["uploaded_audio"], file_data)
+
+    def test_failed_extra_reference_does_not_discard_other_references(self):
+        kwargs, _ = self.generate({"type": "array"}, additional=True, failed_reference="01.WAV")
+        self.assertEqual([item["path"] for item in kwargs["uploaded_audio"]], ["reference.wav", "02.wav"])
+
+    def test_embedding_preference_ignores_extra_wavs(self):
+        kwargs, _ = self.generate({"type": "array"}, embedding=True, additional=True)
+        self.assertEqual(kwargs["uploaded_audio"], [])
+        self.assertEqual(kwargs["uploaded_speaker_embedding"]["path"], "voice.speaker.safetensors")
 
     def test_legacy_single_file_api_keeps_dict(self):
         kwargs, file_data = self.generate({"type": "object"})
