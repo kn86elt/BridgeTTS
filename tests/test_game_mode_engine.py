@@ -352,6 +352,27 @@ class GameEngineTests(unittest.TestCase):
         self.assertEqual(resumed["world_turn"], before["world_turn"])
         self.assertEqual(resumed["revision"], suspended["revision"] + 1)
 
+    def test_start_during_normal_generation_uses_independent_snapshot(self):
+        seed = {"character_name": "Mio", "normal_history": [{"role": "user", "content": "hello"}]}
+        engine = GameEngine(FakeGameLLM(), normal_busy=lambda: True,
+                            conversation_state=lambda: ("epoch", 4))
+        started = engine.start(page_id="page", conversation_epoch="epoch", normal_revision=4,
+                               request_id="start", seed=lambda: seed)
+        seed["normal_history"].append({"role": "assistant", "content": "late reply"})
+        self.assertEqual(started["status"], "active")
+        self.assertEqual(len(engine.current("page").seed["normal_history"]), 1)
+        with self.assertRaises(GameError) as error:
+            engine.guard_normal("page", "epoch")
+        self.assertEqual(error.exception.code, "GAME_BUSY")
+
+    def test_archived_events_do_not_block_next_turn(self):
+        session = self.engine._session
+        archived = {"id": "archived", "text_by_view": {"player": "昔の記録" * 13000}}
+        session.memory["event_ledger"].append(archived)
+        result = self.submit_text("こんにちは", request_id="after-long-archive")
+        self.assertEqual(result["world_turn"], self.started["world_turn"] + 1)
+        self.assertTrue(archived in self.engine.current(self.page_id).memory["event_ledger"])
+
     def test_summary_generation_is_separate_for_each_view(self):
         memory = new_memory({"location": "room", "scene_time": "", "entities": [], "hooks": []})
         for turn in range(1, 14):

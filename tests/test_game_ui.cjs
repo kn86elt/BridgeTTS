@@ -70,6 +70,71 @@ function setup() {
   return { context, finish, initial };
 }
 
+test('game can start while normal chat and audio are pending', async () => {
+  const { context: c } = setup();
+  Object.assign(c, {
+    gameUiPhase: 'off', gameView: null, isGenerating: true,
+    activePolls: new Set(['normal-audio']), isScenarioPlaying: false, isFileReading: false,
+    autoReplyTimer: null, autoReplyEnabled: true, normalRevision: 4,
+    stopAllAudio() { c.audioStopped = true; }, enterGameView() {},
+    refreshConversationStatus: async () => ({ busy: true }),
+    requestGameStart: async body => { c.startedBody = body; },
+  });
+  vm.runInContext(source('toggleGameMode'), c);
+  await c.toggleGameMode();
+  assert.equal(c.gameUiPhase, 'starting');
+  assert.equal(c.startedBody.normal_revision, 4);
+  assert.equal(c.autoReplyEnabled, false);
+  assert.equal(c.audioStopped, true);
+  assert.equal(c.error, undefined);
+});
+
+test('late normal completion preserves game controls and suppresses normal audio', () => {
+  const { context: c } = setup();
+  Object.assign(c, { isGenerating: true, audioQueue: [], audioQueueMeta: [] });
+  for (const name of ['finishNormalGeneration', '_pushAudio', 'playNextAudio']) {
+    vm.runInContext(source(name), c);
+  }
+  for (const phase of ['starting', 'submitting', 'active']) {
+    c.setGamePhase(phase);
+    c.finishNormalGeneration();
+    assert.equal(c.$sendBtn.disabled, phase !== 'active');
+    assert.equal(c.$input.disabled, phase !== 'active');
+    assert.equal(c.isGenerating, false);
+  }
+  c._pushAudio('late-normal-audio', null);
+  c.playNextAudio();
+  assert.equal(c.audioQueue.length, 0);
+});
+
+test('switching to game stops normal audio and cancels delayed playback', () => {
+  const { context: c } = setup();
+  let audio;
+  let fallback;
+  Object.assign(c, {
+    gameUiPhase: 'off', audioQueue: ['normal-audio'], audioQueueMeta: [], isAudioPlaying: false,
+    getAudioCtx: () => null, _clearActivePlayBtn() {}, stopReplay() {},
+    setTimeout(callback) { fallback = callback; return 7; },
+    clearTimeout(id) { if (id === 7) c.timerCleared = true; },
+    Audio: class {
+      constructor() { audio = this; }
+      setAttribute() {} load() {} pause() { this.paused = true; }
+      play() { assert.fail('Stopped audio must not start'); }
+    },
+  });
+  vm.runInContext('let stopCurrentNormalAudio = null;', c);
+  for (const name of ['stopAllAudio', 'playNextAudio']) vm.runInContext(source(name), c);
+  c.playNextAudio();
+  c.stopAllAudio();
+  c.setGamePhase('starting');
+  fallback();
+  assert.equal(audio.paused, true);
+  assert.equal(audio.oncanplaythrough, null);
+  assert.equal(c.timerCleared, true);
+  assert.equal(c.audioQueue.length, 0);
+  assert.equal(c.isAudioPlaying, false);
+});
+
 test('choice is visible and locked before HTTP completes, then committed once', async () => {
   const { context: c, finish, initial } = setup();
   const sending = c.submitGameChoice('interaction-1', 'open');

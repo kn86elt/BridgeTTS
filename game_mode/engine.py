@@ -426,8 +426,6 @@ class GameEngine:
                     if prior["status"] == "running":
                         raise GameError("REQUEST_RUNNING", 202)
                     raise GameError(prior.get("error", "REQUEST_FAILED"), prior.get("http_status", 502))
-                if self.normal_busy():
-                    raise GameError("GAME_BUSY")
                 current_epoch, current_revision = self.conversation_state()
                 if current_epoch and current_epoch != conversation_epoch:
                     raise GameError("STALE_CONVERSATION")

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 from typing import Any, Callable
 
 from .models import GameError
+from .validation import validate_summary
 
 RECENT_TURNS = 6
 COMPACT_TURNS = 12
@@ -95,12 +97,18 @@ def compact_if_needed(
 ) -> None:
     """Summarize old turns independently per viewpoint on the speculative copy."""
     turns = memory.get("recent_turns", [])
-    encoded_size = len(str(memory).encode("utf-8"))
-    if len(turns) <= COMPACT_TURNS and encoded_size <= COMPACT_CHARS:
+    # The ledger is an archive, never a role prompt. Counting it makes every
+    # sufficiently long game hit the limit even after successful compaction.
+    # These limits are characters, not UTF-8 bytes (notably for Japanese).
+    context_size = len(json.dumps({
+        key: memory.get(key) for key in
+        ("current_scene", "important_facts", "summaries", "recent_turns")
+    }, ensure_ascii=False, separators=(",", ":")))
+    if len(turns) <= COMPACT_TURNS and context_size <= COMPACT_CHARS:
         return
     old = turns[:-RECENT_TURNS]
     if not old:
-        if encoded_size > HARD_CONTEXT_CHARS:
+        if context_size > HARD_CONTEXT_CHARS:
             raise GameError("MEMORY_COMPACTION_FAILED", 413)
         return
     outputs: dict[str, str] = {}
@@ -112,19 +120,26 @@ def compact_if_needed(
         if not visible:
             outputs[view] = memory["summaries"].get(view, "")
             continue
-        result = summarize(view, {
-            "previous_summary": memory["summaries"].get(view, ""),
-            "turns": visible,
-            "important_facts": deepcopy(memory["important_facts"].get(view, [])),
-        })
-        text = result.get("text", "")
-        source_ids = set(result.get("source_event_ids", []))
-        allowed_ids = {
-            event["event_id"] for turn in visible for event in turn["events"]
-        }
-        if not isinstance(text, str) or len(text) > SUMMARY_MAX_CHARS or not source_ids <= allowed_ids:
-            if encoded_size > HARD_CONTEXT_CHARS:
-                raise GameError("MEMORY_COMPACTION_FAILED", 413)
+        try:
+            result = summarize(view, {
+                "previous_summary": memory["summaries"].get(view, ""),
+                "turns": visible,
+                "important_facts": deepcopy(memory["important_facts"].get(view, [])),
+            })
+            validate_summary(result)
+            text = result["text"]
+            source_ids = set(result["source_event_ids"])
+            allowed_ids = {
+                event["event_id"] for turn in visible for event in turn["events"]
+            }
+            if len(text) > SUMMARY_MAX_CHARS or not source_ids <= allowed_ids:
+                raise ValueError("invalid summary sources or length")
+        except (GameError, ValueError) as exc:
+            # Keep both projections intact and retry on the next turn when
+            # there is still room. The LLM adapter raises GameError after its
+            # own retries, rather than returning an invalid summary object.
+            if context_size > HARD_CONTEXT_CHARS:
+                raise GameError("MEMORY_COMPACTION_FAILED", 413) from exc
             return
         outputs[view] = text
     memory["summaries"] = outputs

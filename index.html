@@ -2692,7 +2692,19 @@ document.getElementById('sys-auto-reply-item').addEventListener('click', () => {
 /* ══════════════════════════════
    Audio Player (iPhone対応版)
 ══════════════════════════════ */
+let stopCurrentNormalAudio = null;
+function stopAllAudio() {
+  stopCurrentNormalAudio?.();
+  stopCurrentNormalAudio = null;
+  audioQueue.length = 0;
+  audioQueueMeta.length = 0;
+  stopReplay();
+  isAudioPlaying = false;
+  activePlayRow = null;
+  _clearActivePlayBtn();
+}
 function playNextAudio() {
+  if (gameVisible()) return;
   if (audioQueue.length === 0 || isAudioPlaying) {
     // キューが空になったタイミングで後処理
     if (audioQueue.length === 0 && !isAudioPlaying) {
@@ -2737,16 +2749,25 @@ function playNextAudio() {
   audio.preload = 'auto';
   audio.setAttribute('playsinline', '');   // iOS必須
 
-  const onEnd = () => { isAudioPlaying = false; playNextAudio(); };
+  const onEnd = () => { stopCurrentNormalAudio = null; isAudioPlaying = false; playNextAudio(); };
 
   let fallbackTimer = null;
+  let stopped = false;
+  stopCurrentNormalAudio = () => {
+    stopped = true;
+    clearTimeout(fallbackTimer);
+    audio.oncanplaythrough = audio.onended = audio.onerror = null;
+    audio.pause();
+  };
 
   const tryPlay = () => {
+    if (stopped) return;
     clearTimeout(fallbackTimer);
     audio.oncanplaythrough = null;
     const promise = audio.play();
     if (promise !== undefined) {
       promise.catch(err => {
+        if (stopped) return;
         console.warn('[Audio] play() blocked:', err.name);
         if (err.name === 'NotAllowedError') {
           // iOSポリシーブロック: キュー先頭に差し戻して次操作を待つ
@@ -2798,6 +2819,7 @@ function _clearActivePlayBtn() {
 
 // audioQueue と audioQueueMeta に同時に積むヘルパー
 function _pushAudio(url, row) {
+  if (gameVisible()) return;
   audioQueue.push(url);
   audioQueueMeta.push({ row: row || null });
 }
@@ -4441,16 +4463,14 @@ async function toggleGameMode() {
   if (gameStorageBusy) return;
   if (gameVisible()) { await suspendGameMode(); return; }
   if (gameView?.status === 'suspended') { await resumeGameMode(); return; }
-  if (isGenerating || activePolls.size > 0 || isScenarioPlaying) {
-    showErrorToast('通常の生成や音声が終わってから開始してください'); return;
+  if (isScenarioPlaying || isFileReading) {
+    showErrorToast('シナリオ再生やテキスト読み上げを停止してから開始してください'); return;
   }
-  if (isAudioPlaying && typeof stopAllAudio === 'function') stopAllAudio();
   if (autoReplyTimer) { clearTimeout(autoReplyTimer); autoReplyTimer = null; }
   if (autoReplyEnabled) autoReplyEnabled = false;
-  let status;
-  try { status = await refreshConversationStatus(); }
+  try { await refreshConversationStatus(); }
   catch (error) { showErrorToast('会話状態を確認できません: ' + error.message); return; }
-  if (status.busy) { showErrorToast('通常の生成が終わってから開始してください'); return; }
+  stopAllAudio();
   gameDisplayGeneration++;
   $messages.querySelector('.game-error-notice')?.remove();
   enterGameView({ resetDraft: true });
@@ -4745,8 +4765,9 @@ function appendErrorDetail(text) {
   const el = document.createElement('div');
   el.className = 'error-detail-bubble';
   el.textContent = text;
-  $messages.insertBefore(el, $msgScrollBottom);
-  scrollBottom();
+  if (normalViewFragment) normalViewFragment.appendChild(el);
+  else $messages.insertBefore(el, $msgScrollBottom);
+  if (!gameVisible()) scrollBottom();
 }
 
 /* ══════════════════════════════
@@ -4788,7 +4809,7 @@ async function consumeStream(response, bubbleRefs, cursorEl) {
         cursorEl.remove();
         appendToken(textEl, data.token);
         textEl.appendChild(cursorEl);
-        scrollBottom();
+        if (!gameVisible()) scrollBottom();
       }
       if (data.done) {
         cursorEl.remove();
@@ -4798,7 +4819,7 @@ async function consumeStream(response, bubbleRefs, cursorEl) {
       if (data.error) {
         cursorEl.remove();
         textEl.insertAdjacentText('beforeend', `\n[エラー: ${data.error}]`);
-        showErrorToast(data.error);
+        if (!gameVisible()) showErrorToast(data.error);
       }
     }
   }
@@ -4810,6 +4831,16 @@ async function consumeStream(response, bubbleRefs, cursorEl) {
 /* ══════════════════════════════
    送信
 ══════════════════════════════ */
+function finishNormalGeneration() {
+  isGenerating = false;
+  if (gameVisible()) {
+    setGamePhase(gameUiPhase);
+    return;
+  }
+  $sendBtn.disabled = false;
+  setStatus('active', `${selectedName} と接続中`);
+  $input.focus();
+}
 async function sendMessage() {
   if (gameVisible()) { await sendGameInput(); return; }
   if (isGenerating || selectedIndex === null) return;
@@ -4868,8 +4899,7 @@ async function sendMessage() {
         showErrorToast('直接TTS失敗: ' + e.message);
         finalizeReplayBtn(charRefs.footer, charRefs.spinner, [], charRefs.textEl, hasVoice);
       }
-      isGenerating = false;
-      setStatus('active', `${selectedName} と接続中`);
+      finishNormalGeneration();
     } else {
       // TTS無効でも音声ありモデルなら ↻ 表示
       finalizeReplayBtn(charRefs.footer, charRefs.spinner, [], charRefs.textEl, hasVoice);
@@ -4906,10 +4936,7 @@ async function sendMessage() {
     const { reqId, collectedAudio, footer, spinner, errorDetail } =
       await consumeStream(res, charRefs, cursor);
 
-    isGenerating = false;
-    $sendBtn.disabled = false;
-    setStatus('active', `${selectedName} と接続中`);
-    $input.focus();
+    finishNormalGeneration();
 
     // ログにアシスタント応答を追記
     const assistantText = charRefs.textEl.textContent.trim();
@@ -4927,10 +4954,7 @@ async function sendMessage() {
     if (cursor.parentNode) cursor.remove();
     charRefs.textEl.insertAdjacentText('beforeend', `\n[通信エラー: ${e.message}]`);
   } finally {
-    isGenerating = false;
-    $sendBtn.disabled = false;
-    setStatus('active', `${selectedName} と接続中`);
-    $input.focus();
+    finishNormalGeneration();
   }
 }
 
@@ -4954,9 +4978,7 @@ async function runInitialGreeting(ttsEnabled) {
     syncConversationHeaders(res);
     const { reqId, collectedAudio, footer, spinner, errorDetail } =
       await consumeStream(res, charRefs, cursor);
-    isGenerating = false;
-    $sendBtn.disabled = false;
-    setStatus('active', `${selectedName} と接続中`);
+    finishNormalGeneration();
     // ログにアシスタント挨拶を追記
     const greetText = charRefs.textEl.textContent.trim();
     if (greetText) appendLog('assistant', greetText);
@@ -4972,9 +4994,7 @@ async function runInitialGreeting(ttsEnabled) {
     charRefs.textEl.textContent = `[通信エラー: ${e.message}]`;
   }
 
-  isGenerating = false;
-  $sendBtn.disabled = false;
-  setStatus('active', `${selectedName} と接続中`);
+  finishNormalGeneration();
 }
 
 /* ══════════════════════════════
