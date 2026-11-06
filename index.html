@@ -1350,7 +1350,7 @@ body.no-bubble-blur .msg-bubble {
 .game-storage-dialog::backdrop { background: rgba(0, 0, 0, .45); }
 .game-storage-dialog .log-modal-header { display: flex; align-items: center; justify-content: space-between; color: var(--text); }
 .game-storage-dialog .log-modal-close { padding: 6px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; font-size: 18px; }
-.game-storage-dialog input { width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); }
+.game-storage-dialog input[type="text"] { width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); }
 .game-storage-dialog .log-modal-btn { padding: 8px 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); cursor: pointer; }
 .game-storage-dialog .primary { border-color: var(--accent); background: var(--user-bg); }
 .game-save-entry { display: flex; flex-direction: column; gap: 5px; width: 100%; margin-bottom: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: inherit; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
@@ -1920,6 +1920,8 @@ body.no-bubble-blur .msg-bubble {
     <div class="log-modal-body">
       <label for="game-save-name">セーブ名</label>
       <input id="game-save-name" name="saveName" type="text" maxlength="100" required autofocus>
+      <label class="game-save-meta"><input id="game-save-use-dialogue" type="checkbox" onchange="toggleGameSaveDialogueName()"> セーブ名を直前のセリフにする</label>
+      <p class="game-save-meta">直前のキャラクターのセリフを使います。長い場合は100文字以内に短縮します。</p>
       <p class="game-save-meta">毎回、新しいデータとして保存します。同じ名前のセーブも残ります。</p>
     </div>
     <div class="log-modal-footer">
@@ -1944,7 +1946,7 @@ body.no-bubble-blur .msg-bubble {
     <form method="dialog"><button class="log-modal-close" aria-label="閉じる">✕</button></form>
   </div>
   <div class="log-modal-body">
-    <p class="game-save-meta">保存した時点から再開します。通常会話の記憶は変更しません。</p>
+    <p class="game-save-meta">保存した時点から再開します。通常チャットの履歴は保持され、ゲームモードを解除すると元のキャラクターと履歴に戻れます。</p>
     <div id="game-saves-list" aria-live="polite"></div>
   </div>
 </dialog>
@@ -4369,11 +4371,37 @@ function gameStorageError(code) {
   };
   return messages[code] || '処理に失敗しました: ' + code;
 }
+function gameSaveDialogueName() {
+  const entry = [...(gameView?.transcript || [])].reverse().find(entry =>
+    entry.type === 'character' && typeof entry.text === 'string' && entry.text.trim());
+  // Keep the input's UTF-16 maxlength without splitting an emoji surrogate pair.
+  return (entry?.text || '').replace(/\s+/g, ' ').trim().slice(0, 100).replace(/[\uD800-\uDBFF]$/, '');
+}
+function toggleGameSaveDialogueName() {
+  const input = document.getElementById('game-save-name');
+  const checkbox = document.getElementById('game-save-use-dialogue');
+  if (checkbox.checked) {
+    const name = gameSaveDialogueName();
+    if (!name) { checkbox.checked = false; return; }
+    input.dataset.manualName = input.value;
+    input.value = name;
+    input.readOnly = true;
+  } else {
+    input.value = input.dataset.manualName ?? input.value;
+    input.readOnly = false;
+  }
+}
 async function saveGameProgress(name = null) {
   if (gameStorageBusy || gameRequest || !gameView || !['off', 'active'].includes(gameUiPhase) || !['active', 'suspended'].includes(gameView.status)) return;
   if (!gameSaveRequest || gameSaveRequest.gameId !== gameView.game_id || gameSaveRequest.body.revision !== gameView.revision) {
     if (name === null) {
       document.getElementById('game-save-name').value = `${gameView.character_name || selectedName} — ターン ${gameView.world_turn}`;
+      const input = document.getElementById('game-save-name');
+      input.readOnly = false;
+      delete input.dataset.manualName;
+      const checkbox = document.getElementById('game-save-use-dialogue');
+      checkbox.checked = false;
+      checkbox.disabled = !gameSaveDialogueName();
       document.getElementById('game-save-dialog').showModal();
       return;
     }

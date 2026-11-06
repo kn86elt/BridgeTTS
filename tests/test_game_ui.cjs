@@ -307,6 +307,49 @@ test('failed streamed generation discards its preview and retains retryable choi
   assert.match(c.error, /もう一度お試し/);
 });
 
+test('save dialogue checkbox uses latest character speech and restores manual name', async () => {
+  const { context: c } = setup();
+  for (const name of ['gameSaveDialogueName', 'toggleGameSaveDialogueName', 'gameStorageError', 'saveGameProgress']) {
+    vm.runInContext(source(name), c);
+  }
+  const input = new Element(), checkbox = new Element();
+  const dialog = { showModal() {}, close() {} };
+  c.document.getElementById = id => ({
+    'game-save-name': input, 'game-save-use-dialogue': checkbox, 'game-save-dialog': dialog,
+  })[id];
+  c.gameView.transcript = [
+    { type: 'character', text: '古いセリフ' },
+    { type: 'character', text: '  また明日。\n待っているね。  ' },
+    { type: 'narration', text: '夜になった。' },
+    { type: 'player', text: 'プレイヤーの入力' },
+  ];
+  await c.saveGameProgress();
+  assert.equal(checkbox.checked, false);
+  assert.equal(checkbox.disabled, false);
+  input.value = '手入力の名前';
+  checkbox.checked = true; c.toggleGameSaveDialogueName();
+  assert.equal(input.value, 'また明日。 待っているね。');
+  assert.equal(input.readOnly, true);
+  checkbox.checked = false; c.toggleGameSaveDialogueName();
+  assert.equal(input.value, '手入力の名前');
+  assert.equal(input.readOnly, false);
+  checkbox.checked = true; c.toggleGameSaveDialogueName();
+  let saved;
+  c.fetch = async (_url, options) => {
+    saved = JSON.parse(options.body);
+    return { ok: true, json: async () => ({ name: saved.name }) };
+  };
+  await c.saveGameProgress(input.value);
+  assert.equal(saved.name, 'また明日。 待っているね。');
+  c.gameView.transcript = [{ type: 'character', text: 'あ'.repeat(99) + '😀続き' }];
+  assert.equal(c.gameSaveDialogueName(), 'あ'.repeat(99));
+  c.gameView.transcript = [{ type: 'narration', text: 'セリフなし' }];
+  await c.saveGameProgress();
+  assert.equal(checkbox.disabled, true);
+  assert.equal(checkbox.checked, false);
+  assert.equal(input.readOnly, false);
+});
+
 test('save locks choices and retries a lost response with the same request', async () => {
   const { context: c } = setup();
   for (const name of ['gameStorageError', 'saveGameProgress']) vm.runInContext(source(name), c);
