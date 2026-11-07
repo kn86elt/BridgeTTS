@@ -14,3 +14,4 @@ run-bridge-test.bat
 changelog_detail.md
 sync.cmd
 .scratch/
+tests/

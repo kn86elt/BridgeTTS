@@ -1036,13 +1036,7 @@ def _build_context_block(settings: dict) -> str:
         return "\n".join(lines)
 
     mem     = load_memory(state.selected["name"])
-    sctx    = state.session_ctx or {}
-    elapsed = sctx.get("elapsed") or _elapsed_text(mem.get("last_seen"), now)
-    sess    = int(mem.get("sessions", 0))
-    if elapsed == "初めての会話" or (sess <= 1 and int(mem.get("turns", 0)) == 0):
-        lines.append("- ユーザーとの会話: これが初めての会話。")
-    else:
-        lines.append(f"- ユーザーとの会話: {sess}回目。{elapsed}。")
+    lines.append("- チャットの利用履歴は、作中で会った回数や会っていない期間を表さない。相手との関係はペルソナ設定と会話内容に従う。")
 
     facts    = [f for f in mem.get("user_facts", []) if f]
     episodes = mem.get("episodes", [])[-6:]
@@ -1050,7 +1044,7 @@ def _build_context_block(settings: dict) -> str:
 
     if facts or episodes or promises:
         lines.append("")
-        lines.append("# ユーザーについての記憶(会話の中で自然に活かす。列挙したり「覚えてるよ」と確認したりしない)")
+        lines.append("# ユーザーについての記憶(今の話題に関係するときだけ自然に活かす。挨拶では持ち出さない。列挙したり「覚えてるよ」と確認したりしない)")
         for f in facts:
             lines.append(f"- {f}")
         if episodes:
@@ -1110,21 +1104,13 @@ def _touch_memory_turn(char_name: str) -> None:
 
 
 def _greeting_instruction(settings: dict) -> str:
-    """会話開始時の挨拶指示。時間帯と前回からの経過に合わせて変える"""
+    """会話開始時は、時間帯に合う短い挨拶だけを返す。"""
     now  = _datetime.now()
-    base = (f"会話開始時の最初の一言をください。今は{_time_of_day(now)}です。"
-            "挨拶だけで終わらず、今の自分の様子や気分、ふと思ったことをひとこと添えて、"
-            "自然に話しかけてください。1〜2文。")
-    if not settings.get("memory_enabled", True):
-        return base
-    elapsed = (state.session_ctx or {}).get("elapsed", "")
-    if elapsed == "初めての会話":
-        return base + "相手とはまだ知り合ったばかりなので、距離感に気をつけて。"
-    if elapsed == "さっきまで話していた続き":
-        return base + "さっきまで話していた続きなので、改めての挨拶は不要です。"
-    if elapsed:
-        return base + f"相手と話すのは{elapsed}です。それを踏まえた一言にしてください。記憶にあることに触れてもかまいません。"
-    return base
+    return (f"会話開始時の挨拶をください。今は{_time_of_day(now)}です。"
+            "キャラクターの口調と設定上の関係に合う、シンプルな挨拶だけを短く1文で返してください。"
+            "記憶の話題、自分の近況、質問は添えず、ユーザーの次の発言を待ってください。"
+            "アクセス間隔から『久しぶり』などの再会や初対面を演出しないでください。"
+            "挨拶後にユーザーが空欄を送ったときに、改めて自然な話題を一つ振ってください。")
 
 
 # ── LLM による記憶抽出 ──────────────────────────────────────────────
@@ -1296,6 +1282,12 @@ def _build_llm_messages(settings: dict) -> list[dict]:
         max_msgs = 30
     if max_msgs > 0 and len(history) > max_msgs:
         history = history[-max_msgs:]
+
+    if history and history[-1].get("role") == "user" and not history[-1].get("content", "").strip():
+        sys_content += ("\n\n# 今回の空欄送信への応答\n"
+                        "挨拶の直後なら、挨拶を繰り返さずキャラクターから自然な話題を一つ振る。"
+                        "会話の途中なら直前の話の続きを話すか、話し切っていれば別の話題へ移る。"
+                        "記憶を必ず使う必要はない。今の流れに合うときだけ使い、返事を催促しない。")
 
     return [{"role": "system", "content": sys_content}] + history
 
