@@ -81,6 +81,7 @@ DEFAULT_SETTINGS = {
     "auto_reply_user_prompt": "",  # 空=デフォルトプロンプト使用
     # Speaker Embedding設定
     "prefer_speaker_embedding": True,   # True=Embeddingを優先(両方ある場合)
+    "v4_include_legacy_reference": False, # v4の複数参照時に従来音声も追加する
     # 記憶・関係性設定
     "memory_enabled":         True,  # True=キャラごとにユーザーを記憶する
     "memory_update_interval": 6,     # ユーザー発言N回ごとに記憶を更新 (1〜30)
@@ -1508,7 +1509,10 @@ def generate_and_encode_tts(text, voice_path, embedding_path=None):
             multiple_references = _tts_reference_is_multiple(tts)
             uploaded_references = []
             if not use_embedding and voice_path:
-                for reference_path in _tts_reference_paths(voice_path, multiple=multiple_references):
+                reference_paths = _tts_reference_paths(voice_path, multiple=multiple_references)
+                if multiple_references and len(reference_paths) > 1 and not settings.get("v4_include_legacy_reference", False):
+                    reference_paths = reference_paths[1:]
+                for reference_path in reference_paths:
                     if not os.path.isfile(reference_path):
                         print(f"[TTS] WARNING: リファレンス音声が見つかりません: {reference_path}")
                         continue

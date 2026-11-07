@@ -1552,6 +1552,10 @@ body.no-bubble-blur .msg-bubble {
           <input type="checkbox" id="ac-prefer-speaker-embedding">
           <span>Speaker Embeddingsが利用可能な場合優先して使用する（両方ある場合の優先順位）</span>
         </label>
+        <label class="api-check-label" style="margin-top:6px">
+          <input type="checkbox" id="ac-v4-include-legacy-reference">
+          <span>v4で旧バージョンの参照音声も渡す</span>
+        </label>
       </div>
 
       <!-- ── チャットログ設定 ── -->
@@ -6650,6 +6654,7 @@ const $acCharDirStatus       = document.getElementById('ac-char-dir-status');
 const $acCharDirAlsoDefault  = document.getElementById('ac-char-dir-also-default');
 const $acCharDirAlsoDefaultLabel = document.getElementById('ac-char-dir-also-default-label');
 const $acPreferSpeakerEmbedding = document.getElementById('ac-prefer-speaker-embedding');
+const $acV4IncludeLegacyReference = document.getElementById('ac-v4-include-legacy-reference');
 const $acLogAutoSave         = document.getElementById('ac-log-auto-save');
 const $acAutoReplyDelay      = document.getElementById('ac-auto-reply-delay');
 const $acArTriggerAudio      = document.getElementById('ac-ar-trigger-audio');
@@ -7077,6 +7082,7 @@ async function openApiConfigModal() {
       $acFfmpegPathRow.style.display = $acFfmpegPathEnabled.checked ? '' : 'none';
       $acCharDirAlsoDefault.checked = !!s.char_dir_also_default;
       $acPreferSpeakerEmbedding.checked = !!s.prefer_speaker_embedding;
+      $acV4IncludeLegacyReference.checked = !!s.v4_include_legacy_reference;
       $acLogAutoSave.checked = s.log_auto_save !== false;
       // 参照音声なしキャラのTTS設定
       const nvm = s.no_voice_mode || 'off';
@@ -7176,6 +7182,7 @@ $acApplyBtn.addEventListener('click', async () => {
         ffmpeg_path:           $acFfmpegPath.value.trim(),
         char_dir_also_default:      $acCharDirAlsoDefault.checked,
         prefer_speaker_embedding:   $acPreferSpeakerEmbedding.checked,
+        v4_include_legacy_reference: $acV4IncludeLegacyReference.checked,
         log_auto_save:              $acLogAutoSave.checked,
         no_voice_mode:            $acNoVoiceDefault.checked ? 'default_voice' : 'off',
         tts_api_version:          $acTtsVersion.value,
