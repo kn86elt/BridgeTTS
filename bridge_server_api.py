@@ -63,6 +63,8 @@ DEFAULT_SETTINGS = {
     "llm_path":     "/v1",         # APIパス
     "llm_api_key":  "lm-studio",   # APIキー (ローカルサーバ用ダミーキー等)
     "llm_model":    "",            # モデル名 (空="local-model"フォールバック)
+    "llm_temperature":      "",    # 生成温度 (空=サーバ既定, 0〜2)
+    "llm_presence_penalty": "",    # 反復抑制 (空=サーバ既定, -2〜2)
     # TTS接続設定（永続化）
     "tts_use_env":  False,         # True=環境変数TTS_API_URLを優先使用
     "tts_host":     "localhost",   # TTSサーバのホスト/IP
@@ -885,6 +887,21 @@ def _build_system_prompt(base_prompt: str, char_setting: str, settings: dict) ->
     return "\n\n".join(parts)
 
 
+# ── キャラ定義のサニタイズ（wiki転載ノイズ除去） ──
+_MD_LINK_RE  = re.compile(r'\[([^\]]*)\]\(\s*(?:https?|ftp)://[^)]*\)')
+_BARE_URL_RE = re.compile(r'https?://[^\s)」）】>"\']+')
+
+
+def _sanitize_char_prompt(text: str) -> str:
+    """キャラクター定義から wiki リンク記法と URL を除去する。
+    キャラ設定 sanitize_enabled=False のキャラには適用しない。"""
+    text = _MD_LINK_RE.sub(r'\1', text)             # [表示文字](URL) → 表示文字 / [](URL) → 消去
+    text = _BARE_URL_RE.sub('', text)               # 裸URLを除去
+    text = re.sub(r'[ \t　 ]+(?=\r?\n)', '', text)     # 行末空白を除去 (全角空白・nbsp含む)
+    text = re.sub(r'(?:\r?\n){3,}', '\n\n', text)   # 3連以上の改行を空行1つに
+    return text.strip()
+
+
 # ══════════════════════════════════════════════════════
 #  キャラクター長期記憶 / 関係性 (memory/<キャラ名>.json)
 # ══════════════════════════════════════════════════════
@@ -925,6 +942,7 @@ def _default_memory(char_name: str) -> dict:
     return {
         "char_name":            _memory_key(char_name),
         "relationship_enabled": False,  # キャラ設定: 関係性の変化を有効にする (既定: 無効)
+        "sanitize_enabled":     True,   # キャラ設定: プロンプトのサニタイズ (既定: 有効)
         "user_facts":           [],     # ユーザーに関する事実
         "episodes":             [],     # {"date": "YYYY-MM-DD", "summary": "..."}
         "promises":             [],     # 約束・次に話すこと
@@ -968,10 +986,11 @@ def save_memory(char_name: str, mem: dict) -> None:
 
 
 def reset_memory(char_name: str) -> dict:
-    """記憶を初期状態に戻す。キャラ設定(relationship_enabled)は保持する"""
+    """記憶を初期状態に戻す。キャラ設定(relationship_enabled / sanitize_enabled)は保持する"""
     old = load_memory(char_name)
     mem = _default_memory(char_name)
     mem["relationship_enabled"] = bool(old.get("relationship_enabled", False))
+    mem["sanitize_enabled"] = old.get("sanitize_enabled", True) is not False
     save_memory(char_name, mem)
     return mem
 
@@ -979,6 +998,12 @@ def reset_memory(char_name: str) -> dict:
 def set_relationship_enabled(char_name: str, enabled: bool) -> None:
     mem = load_memory(char_name)
     mem["relationship_enabled"] = bool(enabled)
+    save_memory(char_name, mem)
+
+
+def set_sanitize_enabled(char_name: str, enabled: bool) -> None:
+    mem = load_memory(char_name)
+    mem["sanitize_enabled"] = bool(enabled)
     save_memory(char_name, mem)
 
 
@@ -1313,6 +1338,8 @@ def select_character(req: SelectRequest, request: Request):
 
     with open(selected["prompt"], "r", encoding="utf-8") as f:
         char_setting = f.read().strip()
+    if load_memory(selected["name"]).get("sanitize_enabled", True) is not False:
+        char_setting = _sanitize_char_prompt(char_setting)
 
     # システムプロンプトの合成
     settings = load_settings()
@@ -1357,6 +1384,8 @@ def update_system_prompt(request: Request):
 
     with open(state.selected["prompt"], "r", encoding="utf-8") as f:
         char_setting = f.read().strip()
+    if load_memory(state.selected["name"]).get("sanitize_enabled", True) is not False:
+        char_setting = _sanitize_char_prompt(char_setting)
 
     settings = load_settings()
     sys_prompt_text = _build_system_prompt("", char_setting, settings)
@@ -1610,10 +1639,20 @@ def stream_llm_with_tts(messages: list, tts_enabled: bool, memorize_user_text: s
 
     try:
         model_name = LLM_MODEL or "local-model"
+        llm_kwargs = {}
+        for s_key, api_key_name in (("llm_temperature", "temperature"),
+                                    ("llm_presence_penalty", "presence_penalty")):
+            raw = str(settings.get(s_key, "") or "").strip()
+            if raw:
+                try:
+                    llm_kwargs[api_key_name] = float(raw)
+                except ValueError:
+                    pass
         stream = client.chat.completions.create(
             model=model_name,
             messages=messages,
             stream=True,
+            **llm_kwargs,
         )
 
         for chunk in stream:
@@ -2825,6 +2864,8 @@ def get_api_config():
         "llm_path":        settings.get("llm_path", "/v1"),
         "llm_api_key":     settings.get("llm_api_key", "lm-studio"),
         "llm_model":       settings.get("llm_model", ""),
+        "llm_temperature":      settings.get("llm_temperature", ""),
+        "llm_presence_penalty": settings.get("llm_presence_penalty", ""),
         "llm_api_url":     LLM_API_URL,   # 現在実際に使用中のURL
         # TTS設定
         "tts_use_env":     settings.get("tts_use_env", False),
@@ -2850,7 +2891,8 @@ def post_api_config(data: dict = Body(...)):
 
     # ── LLM設定 ──
     llm_fields = ["llm_use_env", "llm_preset", "llm_host", "llm_port",
-                  "llm_path", "llm_api_key", "llm_model"]
+                  "llm_path", "llm_api_key", "llm_model",
+                  "llm_temperature", "llm_presence_penalty"]
     llm_changed = any(f in data for f in llm_fields)
     if llm_changed:
         for f in llm_fields:
@@ -2985,6 +3027,7 @@ async def create_character(
     voice: Optional[UploadFile] = File(None),
     embedding: Optional[UploadFile] = File(None),
     relationship_enabled: str = Form("false"),   # "true"=関係性の変化を有効化
+    sanitize_enabled: str = Form("true"),        # "true"=プロンプトのサニタイズを適用
 ):
     """新規キャラクターをサブフォルダ形式で作成する"""
     safe_name = _safe_char_name(name)
@@ -3020,6 +3063,7 @@ async def create_character(
             f.write(await embedding.read())
 
     set_relationship_enabled(safe_name, relationship_enabled.lower() == "true")
+    set_sanitize_enabled(safe_name, sanitize_enabled.lower() == "true")
 
     return JSONResponse({"status": "ok", "name": safe_name})
 
@@ -3035,6 +3079,7 @@ async def duplicate_character(
     copy_voice: str = Form("true"),       # "false" = 複製しない（ファイルを削除）
     copy_embedding: str = Form("true"),   # "false" = 複製しない（ファイルを削除）
     relationship_enabled: str = Form("false"),   # "true"=関係性の変化を有効化
+    sanitize_enabled: str = Form("true"),        # "true"=プロンプトのサニタイズを適用
 ):
     """既存キャラクターを複製する。name/prompt/image/voice が指定された場合はその値を使う。"""
     state.chars = get_dynamic_characters()
@@ -3127,6 +3172,7 @@ async def duplicate_character(
 
     # 記憶は複製しない (新しいキャラとして白紙から始める)。設定フラグのみ保存
     set_relationship_enabled(new_name, relationship_enabled.lower() == "true")
+    set_sanitize_enabled(new_name, sanitize_enabled.lower() == "true")
 
     return JSONResponse({"status": "ok", "name": new_name})
 
@@ -3156,6 +3202,7 @@ def get_character_info(idx: int):
         "has_embedding":  char.get("has_embedding", False),
         "embedding_file": os.path.basename(char["embedding_path"]) if char.get("embedding_path") else None,
         "relationship_enabled": bool(load_memory(char["name"]).get("relationship_enabled", False)),
+        "sanitize_enabled":     load_memory(char["name"]).get("sanitize_enabled", True) is not False,
     })
 
 
@@ -3205,6 +3252,7 @@ async def edit_character(
     voice: Optional[UploadFile] = File(None),
     embedding: Optional[UploadFile] = File(None),
     relationship_enabled: str = Form("false"),   # "true"=関係性の変化を有効化
+    sanitize_enabled: str = Form("true"),        # "true"=プロンプトのサニタイズを適用
 ):
     """既存キャラクターの名前・プロンプト・画像・音声・Embeddingを更新する"""
     state.chars = get_dynamic_characters()
@@ -3251,6 +3299,7 @@ async def edit_character(
             f.write(await embedding.read())
 
     set_relationship_enabled(char["name"], relationship_enabled.lower() == "true")
+    set_sanitize_enabled(char["name"], sanitize_enabled.lower() == "true")
 
     return JSONResponse({"status": "ok"})
 

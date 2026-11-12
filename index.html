@@ -1429,6 +1429,14 @@ body.no-bubble-blur .msg-bubble {
           <div id="ac-llm-unload-row" style="display:none; margin-top:10px">
             <button class="modal-btn secondary" id="ac-llm-unload-btn" style="width:100%; font-size:12px">🗑 モデルをアンロード</button>
           </div>
+          <div style="margin-top:8px">
+            <div class="api-field-label">temperature（空＝サーバ既定、0〜2）</div>
+            <input class="api-field-input" id="ac-llm-temperature" type="number" step="0.05" min="0" max="2" placeholder="例: 0.8">
+          </div>
+          <div style="margin-top:8px">
+            <div class="api-field-label">presence_penalty（空＝サーバ既定、-2〜2）</div>
+            <input class="api-field-input" id="ac-llm-presence" type="number" step="0.05" min="-2" max="2" placeholder="例: 0.4">
+          </div>
         </div>
         <label class="api-check-label" id="ac-llm-env-row">
           <input type="checkbox" id="ac-llm-use-env">
@@ -1688,6 +1696,13 @@ body.no-bubble-blur .msg-bubble {
         <label class="ce-copy-label">
           <input type="checkbox" id="ce-relationship">
           <span>関係性の変化を有効にする（会話の内容に応じて親密度と距離感が変わる）</span>
+        </label>
+      </div>
+      <div class="ce-field">
+        <label class="ce-label">プロンプト読み込み</label>
+        <label class="ce-copy-label">
+          <input type="checkbox" id="ce-sanitize" checked>
+          <span>サニタイズを適用する（URL・wikiリンク記法を除去してLLMに渡す）</span>
         </label>
       </div>
     </div>
@@ -6230,6 +6245,7 @@ const $ceCopyVoice       = document.getElementById('ce-copy-voice');
 const $ceCopyEmbRow      = document.getElementById('ce-copy-embedding-row');
 const $ceCopyEmbedding   = document.getElementById('ce-copy-embedding');
 const $ceRelationship    = document.getElementById('ce-relationship');
+const $ceSanitize        = document.getElementById('ce-sanitize');
 const $ceMp3Lbl   = document.getElementById('ce-mp3-label');
 const $ceMp3Btn   = document.getElementById('ce-mp3-btn');
 
@@ -6307,6 +6323,7 @@ function openCharEditModal(mode, idx = null) {
   $ceCopyVoice.checked     = false;
   $ceCopyEmbedding.checked = false;
   $ceRelationship.checked  = false;   // 既定: 関係性の変化は無効
+  $ceSanitize.checked      = true;    // 既定: サニタイズ有効
   // MP3変換行をリセット（create / duplicate では非表示）
   $ceMp3Row.style.display = 'none';
   $ceMp3Btn.disabled = true;
@@ -6325,6 +6342,7 @@ function openCharEditModal(mode, idx = null) {
         if (d.has_voice)     $ceVoiceLbl.textContent     = d.voice_file ? `（既存: ${d.voice_file}）` : '（既存ファイル）';
         if (d.has_embedding) $ceEmbeddingLbl.textContent = d.embedding_file ? `（既存: ${d.embedding_file}）` : '（既存ファイル）';
         $ceRelationship.checked = !!d.relationship_enabled;
+        $ceSanitize.checked = d.sanitize_enabled !== false;
         _updateMp3Btn(d, idx);
       })
       .catch(() => {});
@@ -6351,6 +6369,7 @@ function openCharEditModal(mode, idx = null) {
         if (d.has_embedding)
           $ceEmbeddingLbl.textContent = d.embedding_file ? `（既存: ${d.embedding_file}）` : '（既存ファイルをコピー）';
         $ceRelationship.checked = !!d.relationship_enabled;
+        $ceSanitize.checked = d.sanitize_enabled !== false;
       })
       .catch(() => {});
   }
@@ -6398,6 +6417,7 @@ document.getElementById('char-edit-ok').addEventListener('click', async () => {
   if ($ceVoiceInp.files[0])     fd.append('voice',     $ceVoiceInp.files[0]);
   if ($ceEmbeddingInp.files[0]) fd.append('embedding', $ceEmbeddingInp.files[0]);
   fd.append('relationship_enabled', $ceRelationship.checked ? 'true' : 'false');
+  fd.append('sanitize_enabled', $ceSanitize.checked ? 'true' : 'false');
   if (charEditMode === 'duplicate') {
     fd.append('copy_voice',     $ceCopyVoice.checked     ? 'true' : 'false');
     fd.append('copy_embedding', $ceCopyEmbedding.checked ? 'true' : 'false');
@@ -6670,6 +6690,8 @@ const $acLlmPort     = document.getElementById('ac-llm-port');
 const $acLlmPath     = document.getElementById('ac-llm-path');
 const $acLlmKey      = document.getElementById('ac-llm-key');
 const $acLlmModel             = document.getElementById('ac-llm-model');
+const $acLlmTemperature       = document.getElementById('ac-llm-temperature');
+const $acLlmPresence          = document.getElementById('ac-llm-presence');
 const $acLlmModelSelect       = document.getElementById('ac-llm-model-select');
 const $acLlmFetchBtn          = document.getElementById('ac-llm-fetch-btn');
 const $acLlmModelNote         = document.getElementById('ac-llm-model-note');
@@ -7009,6 +7031,8 @@ async function openApiConfigModal() {
       $acLlmPath.value   = d.llm_path   || '/v1';
       $acLlmKey.value    = d.llm_api_key || '';
       $acLlmModel.value  = d.llm_model  || '';
+      $acLlmTemperature.value = d.llm_temperature      != null ? String(d.llm_temperature) : '';
+      $acLlmPresence.value    = d.llm_presence_penalty != null ? String(d.llm_presence_penalty) : '';
       // モデルセレクトに現在値をセット（llama.cpp以外）
       $acLlmModelSelect.innerHTML = '';
       if (d.llm_model) {
@@ -7153,6 +7177,8 @@ $acApplyBtn.addEventListener('click', async () => {
       llm_path:    $acLlmPath.value.trim() || '/v1',
       llm_api_key: $acLlmKey.value.trim(),
       llm_model:   $acLlmModel.value.trim(),
+      llm_temperature:      $acLlmTemperature.value.trim(),
+      llm_presence_penalty: $acLlmPresence.value.trim(),
       tts_use_env: $acTtsUseEnv.checked,
       tts_host:    $acTtsHost.value.trim(),
       tts_port:    parseInt($acTtsPort.value, 10) || 7860,

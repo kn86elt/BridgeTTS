@@ -129,7 +129,7 @@ git pull
 
 1. GitHubのCODE→Download ZIPから最新の ZIP をダウンロードして展開します。
 2. `bridge_server_api.py` と `index.html` を新しいものに差し替えます。
-3. 起動スクリプト（`.bat` / `.sh`）は通常そのままで問題ありませんが、[更新履歴](Changelog.md)に起動スクリプトの変更が記載されている場合は差し替えてください。
+3. 起動スクリプト（`.bat` / `.sh`）は通常そのままで問題ありませんが、[更新履歴](docs/Changelog.md)に起動スクリプトの変更が記載されている場合は差し替えてください。
 
 
 ## キャラクターデータの配置
@@ -471,7 +471,7 @@ set CHAR_DIR=C:\path\to\your-characters
 
 ## 更新履歴
 
-[Changelog.md](Changelog.md) を参照してください。
+[Changelog.md](docs/Changelog.md) を参照してください。
 
 ---
 
