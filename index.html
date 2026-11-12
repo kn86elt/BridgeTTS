@@ -1650,6 +1650,12 @@ body.no-bubble-blur .msg-bubble {
         <textarea class="ce-textarea" id="ce-prompt" placeholder="キャラクターの性格・設定を入力..."></textarea>
       </div>
       <div class="ce-field">
+        <label class="ce-label">重要設定（任意・プロンプトより優先されます）</label>
+        <input type="text" class="ce-input" id="ce-profile-address" placeholder="ユーザーの呼び方（例: 隊長さん）" style="margin-bottom:6px">
+        <input type="text" class="ce-input" id="ce-profile-person" placeholder="一人称（例: わたし）" style="margin-bottom:6px">
+        <input type="text" class="ce-input" id="ce-profile-tone" placeholder="口調・語尾の特徴（例: おっとり、語尾を伸ばす）">
+      </div>
+      <div class="ce-field">
         <label class="ce-label">画像ファイル (.png / .jpg / .webp)</label>
         <div class="ce-file-row">
           <span class="ce-file-label" id="ce-image-label">未選択</span>
@@ -6246,6 +6252,9 @@ const $ceCopyEmbRow      = document.getElementById('ce-copy-embedding-row');
 const $ceCopyEmbedding   = document.getElementById('ce-copy-embedding');
 const $ceRelationship    = document.getElementById('ce-relationship');
 const $ceSanitize        = document.getElementById('ce-sanitize');
+const $ceProfileAddress  = document.getElementById('ce-profile-address');
+const $ceProfilePerson   = document.getElementById('ce-profile-person');
+const $ceProfileTone     = document.getElementById('ce-profile-tone');
 const $ceMp3Lbl   = document.getElementById('ce-mp3-label');
 const $ceMp3Btn   = document.getElementById('ce-mp3-btn');
 
@@ -6324,6 +6333,9 @@ function openCharEditModal(mode, idx = null) {
   $ceCopyEmbedding.checked = false;
   $ceRelationship.checked  = false;   // 既定: 関係性の変化は無効
   $ceSanitize.checked      = true;    // 既定: サニタイズ有効
+  $ceProfileAddress.value  = '';
+  $ceProfilePerson.value   = '';
+  $ceProfileTone.value     = '';
   // MP3変換行をリセット（create / duplicate では非表示）
   $ceMp3Row.style.display = 'none';
   $ceMp3Btn.disabled = true;
@@ -6343,6 +6355,10 @@ function openCharEditModal(mode, idx = null) {
         if (d.has_embedding) $ceEmbeddingLbl.textContent = d.embedding_file ? `（既存: ${d.embedding_file}）` : '（既存ファイル）';
         $ceRelationship.checked = !!d.relationship_enabled;
         $ceSanitize.checked = d.sanitize_enabled !== false;
+        const prof = d.profile || {};
+        $ceProfileAddress.value = prof.user_address || '';
+        $ceProfilePerson.value  = prof.first_person || '';
+        $ceProfileTone.value    = prof.tone || '';
         _updateMp3Btn(d, idx);
       })
       .catch(() => {});
@@ -6370,6 +6386,10 @@ function openCharEditModal(mode, idx = null) {
           $ceEmbeddingLbl.textContent = d.embedding_file ? `（既存: ${d.embedding_file}）` : '（既存ファイルをコピー）';
         $ceRelationship.checked = !!d.relationship_enabled;
         $ceSanitize.checked = d.sanitize_enabled !== false;
+        const prof = d.profile || {};
+        $ceProfileAddress.value = prof.user_address || '';
+        $ceProfilePerson.value  = prof.first_person || '';
+        $ceProfileTone.value    = prof.tone || '';
       })
       .catch(() => {});
   }
@@ -6418,6 +6438,9 @@ document.getElementById('char-edit-ok').addEventListener('click', async () => {
   if ($ceEmbeddingInp.files[0]) fd.append('embedding', $ceEmbeddingInp.files[0]);
   fd.append('relationship_enabled', $ceRelationship.checked ? 'true' : 'false');
   fd.append('sanitize_enabled', $ceSanitize.checked ? 'true' : 'false');
+  fd.append('profile_user_address', $ceProfileAddress.value.trim());
+  fd.append('profile_first_person', $ceProfilePerson.value.trim());
+  fd.append('profile_tone',         $ceProfileTone.value.trim());
   if (charEditMode === 'duplicate') {
     fd.append('copy_voice',     $ceCopyVoice.checked     ? 'true' : 'false');
     fd.append('copy_embedding', $ceCopyEmbedding.checked ? 'true' : 'false');

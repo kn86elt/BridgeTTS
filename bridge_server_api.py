@@ -601,6 +601,7 @@ def _scan_char_dir(scan_dir: str, char_list: list, seen_names: set) -> None:
                 )
             if char:
                 char["char_format"] = "zip"
+                char["zip_path"] = full_path
                 seen_names.add(base)
                 char_list.append(char)
 
@@ -900,6 +901,95 @@ def _sanitize_char_prompt(text: str) -> str:
     text = re.sub(r'[ \t　 ]+(?=\r?\n)', '', text)     # 行末空白を除去 (全角空白・nbsp含む)
     text = re.sub(r'(?:\r?\n){3,}', '\n\n', text)   # 3連以上の改行を空行1つに
     return text.strip()
+
+
+# ── キャラクター構造化プロファイル (<キャラ名>.prompt.json) ──
+PROFILE_FIELDS = ("user_address", "first_person", "tone")
+
+
+def _profile_json_default_path(char: dict) -> str:
+    """書き込み先の .prompt.json パス（zipはzipファイル隣のサイドカー）"""
+    if char.get("char_format") == "zip" and char.get("zip_path"):
+        return os.path.splitext(char["zip_path"])[0] + ".prompt.json"
+    return os.path.join(os.path.dirname(char["prompt"]),
+                        Path(char["prompt"]).stem + ".prompt.json")
+
+
+def _load_char_profile(char: dict) -> dict:
+    """<キャラ名>.prompt.json を読んで dict を返す（不在・無効は {}）。
+    zip はサイドカー優先、次に展開先（zip内同梱）を見る。"""
+    candidates = []
+    if char.get("char_format") == "zip" and char.get("zip_path"):
+        candidates.append(os.path.splitext(char["zip_path"])[0] + ".prompt.json")
+    candidates.append(os.path.join(os.path.dirname(char["prompt"]),
+                                   Path(char["prompt"]).stem + ".prompt.json"))
+    for path in candidates:
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        except Exception as e:
+            print(f"[Profile] Failed to load {path}: {e}")
+    return {}
+
+
+def _save_char_profile_fields(path: str, fields: dict) -> None:
+    """profile 3項目を .prompt.json に書き込む。全項目空なら profile キーを削除し、
+    他に意味のあるキーが無ければファイル自体を削除する。将来キー(prompt等)は温存。"""
+    data = {}
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                data = loaded
+        except Exception as e:
+            print(f"[Profile] Failed to load {path}: {e}")
+    profile = data.get("profile") if isinstance(data.get("profile"), dict) else {}
+    for key in PROFILE_FIELDS:
+        value = str(fields.get(key, "") or "").strip()
+        if value:
+            profile[key] = value
+        else:
+            profile.pop(key, None)
+    if profile:
+        data["profile"] = profile
+        data.setdefault("version", 1)
+    else:
+        data.pop("profile", None)
+    if any(k != "version" for k in data):
+        dir_ = os.path.dirname(path) or "."
+        fd, tmp_path = tempfile.mkstemp(dir=dir_, suffix=".tmp", prefix="profile_")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, path)
+        except Exception:
+            try: os.unlink(tmp_path)
+            except OSError: pass
+            raise
+    elif os.path.exists(path):
+        try:
+            os.remove(path)
+        except OSError as e:
+            print(f"[Profile] Failed to remove {path}: {e}")
+
+
+def _profile_block(profile: dict) -> str:
+    """profile から「最重要設定」ブロックを生成する（値のある行のみ）"""
+    lines = []
+    if profile.get("user_address"):
+        lines.append(f"- ユーザーの呼び方：{profile['user_address']}")
+    if profile.get("first_person"):
+        lines.append(f"- 一人称：{profile['first_person']}")
+    if profile.get("tone"):
+        lines.append(f"- 口調：{profile['tone']}")
+    if not lines:
+        return ""
+    return "# 最重要設定（上の記述と矛盾する場合はこちらを優先）\n" + "\n".join(lines)
 
 
 # ══════════════════════════════════════════════════════
@@ -1340,6 +1430,9 @@ def select_character(req: SelectRequest, request: Request):
         char_setting = f.read().strip()
     if load_memory(selected["name"]).get("sanitize_enabled", True) is not False:
         char_setting = _sanitize_char_prompt(char_setting)
+    profile_block = _profile_block(_load_char_profile(selected).get("profile") or {})
+    if profile_block:
+        char_setting = char_setting + "\n\n" + profile_block
 
     # システムプロンプトの合成
     settings = load_settings()
@@ -1386,6 +1479,9 @@ def update_system_prompt(request: Request):
         char_setting = f.read().strip()
     if load_memory(state.selected["name"]).get("sanitize_enabled", True) is not False:
         char_setting = _sanitize_char_prompt(char_setting)
+    profile_block = _profile_block(_load_char_profile(state.selected).get("profile") or {})
+    if profile_block:
+        char_setting = char_setting + "\n\n" + profile_block
 
     settings = load_settings()
     sys_prompt_text = _build_system_prompt("", char_setting, settings)
@@ -3028,6 +3124,9 @@ async def create_character(
     embedding: Optional[UploadFile] = File(None),
     relationship_enabled: str = Form("false"),   # "true"=関係性の変化を有効化
     sanitize_enabled: str = Form("true"),        # "true"=プロンプトのサニタイズを適用
+    profile_user_address: str = Form(""),        # 重要設定: ユーザーの呼び方
+    profile_first_person: str = Form(""),        # 重要設定: 一人称
+    profile_tone: str = Form(""),                # 重要設定: 口調・語尾
 ):
     """新規キャラクターをサブフォルダ形式で作成する"""
     safe_name = _safe_char_name(name)
@@ -3064,6 +3163,12 @@ async def create_character(
 
     set_relationship_enabled(safe_name, relationship_enabled.lower() == "true")
     set_sanitize_enabled(safe_name, sanitize_enabled.lower() == "true")
+    _save_char_profile_fields(
+        os.path.join(char_dir, safe_name + ".prompt.json"),
+        {"user_address": profile_user_address,
+         "first_person": profile_first_person,
+         "tone": profile_tone},
+    )
 
     return JSONResponse({"status": "ok", "name": safe_name})
 
@@ -3080,6 +3185,9 @@ async def duplicate_character(
     copy_embedding: str = Form("true"),   # "false" = 複製しない（ファイルを削除）
     relationship_enabled: str = Form("false"),   # "true"=関係性の変化を有効化
     sanitize_enabled: str = Form("true"),        # "true"=プロンプトのサニタイズを適用
+    profile_user_address: str = Form(""),        # 重要設定: ユーザーの呼び方
+    profile_first_person: str = Form(""),        # 重要設定: 一人称
+    profile_tone: str = Form(""),                # 重要設定: 口調・語尾
 ):
     """既存キャラクターを複製する。name/prompt/image/voice が指定された場合はその値を使う。"""
     state.chars = get_dynamic_characters()
@@ -3116,6 +3224,9 @@ async def duplicate_character(
             # <base>.speaker.safetensors → <new_name>.speaker.safetensors
             elif stem == base_name + ".speaker" and ext == ".safetensors":
                 os.rename(fpath, os.path.join(dest_dir, new_name + ".speaker.safetensors"))
+            # <base>.prompt.json → <new_name>.prompt.json
+            elif stem == base_name + ".prompt" and ext == ".json":
+                os.rename(fpath, os.path.join(dest_dir, new_name + ".prompt.json"))
     else:
         os.makedirs(dest_dir, exist_ok=True)
         for ext in [".txt", ".wav", ".mp3"] + IMAGE_EXTS:
@@ -3126,6 +3237,10 @@ async def duplicate_character(
         src_emb = os.path.join(CHAR_DIR, base_name + ".speaker.safetensors")
         if os.path.exists(src_emb):
             shutil.copy2(src_emb, os.path.join(dest_dir, new_name + ".speaker.safetensors"))
+        # プロファイル (.prompt.json) もコピー
+        src_profile = os.path.join(CHAR_DIR, base_name + ".prompt.json")
+        if os.path.exists(src_profile):
+            shutil.copy2(src_profile, os.path.join(dest_dir, new_name + ".prompt.json"))
 
     # プロンプトを上書き
     txt_path = os.path.join(dest_dir, new_name + ".txt")
@@ -3173,6 +3288,12 @@ async def duplicate_character(
     # 記憶は複製しない (新しいキャラとして白紙から始める)。設定フラグのみ保存
     set_relationship_enabled(new_name, relationship_enabled.lower() == "true")
     set_sanitize_enabled(new_name, sanitize_enabled.lower() == "true")
+    _save_char_profile_fields(
+        os.path.join(dest_dir, new_name + ".prompt.json"),
+        {"user_address": profile_user_address,
+         "first_person": profile_first_person,
+         "tone": profile_tone},
+    )
 
     return JSONResponse({"status": "ok", "name": new_name})
 
@@ -3203,6 +3324,7 @@ def get_character_info(idx: int):
         "embedding_file": os.path.basename(char["embedding_path"]) if char.get("embedding_path") else None,
         "relationship_enabled": bool(load_memory(char["name"]).get("relationship_enabled", False)),
         "sanitize_enabled":     load_memory(char["name"]).get("sanitize_enabled", True) is not False,
+        "profile":              (_load_char_profile(char).get("profile") or {}),
     })
 
 
@@ -3253,6 +3375,9 @@ async def edit_character(
     embedding: Optional[UploadFile] = File(None),
     relationship_enabled: str = Form("false"),   # "true"=関係性の変化を有効化
     sanitize_enabled: str = Form("true"),        # "true"=プロンプトのサニタイズを適用
+    profile_user_address: str = Form(""),        # 重要設定: ユーザーの呼び方
+    profile_first_person: str = Form(""),        # 重要設定: 一人称
+    profile_tone: str = Form(""),                # 重要設定: 口調・語尾
 ):
     """既存キャラクターの名前・プロンプト・画像・音声・Embeddingを更新する"""
     state.chars = get_dynamic_characters()
@@ -3300,6 +3425,12 @@ async def edit_character(
 
     set_relationship_enabled(char["name"], relationship_enabled.lower() == "true")
     set_sanitize_enabled(char["name"], sanitize_enabled.lower() == "true")
+    _save_char_profile_fields(
+        _profile_json_default_path(char),
+        {"user_address": profile_user_address,
+         "first_person": profile_first_person,
+         "tone": profile_tone},
+    )
 
     return JSONResponse({"status": "ok"})
 
