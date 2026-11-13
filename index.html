@@ -848,6 +848,8 @@ body { background: var(--body-gradient); }
   display: flex; flex-direction: column; gap: 14px;
 }
 .ce-field { display: flex; flex-direction: column; gap: 5px; }
+.ce-tuneup-status { font-size: 10px; line-height: 1.5; color: var(--muted); }
+.ce-tuneup-status a { color: var(--accent); margin-left: 6px; cursor: pointer; }
 .ce-label {
   font-family: 'Share Tech Mono', monospace;
   font-size: 11px; color: var(--accent); letter-spacing: .08em;
@@ -912,6 +914,58 @@ body { background: var(--body-gradient); }
   display: flex; justify-content: flex-end; gap: 8px;
   background: var(--sidebar-bg); flex-shrink: 0;
 }
+
+#tuneup-backdrop {
+  display: none;
+  position: fixed; inset: 0; z-index: 320;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(4px);
+  align-items: center; justify-content: center;
+}
+#tuneup-backdrop.open { display: flex; }
+#tuneup-modal {
+  width: min(720px, 95vw);
+  max-height: 90vh;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.5);
+}
+#tuneup-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--header-bg);
+  flex-shrink: 0;
+}
+#tuneup-header .modal-title {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 13px; color: var(--accent); letter-spacing: .1em;
+}
+#tuneup-close {
+  background: none; border: none; cursor: pointer;
+  color: var(--muted); font-size: 18px; line-height: 1;
+  padding: 2px 6px; border-radius: 4px;
+}
+#tuneup-close:hover { color: var(--text); }
+#tuneup-body {
+  flex: 1; overflow-y: auto; padding: 18px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.tw-step { display: none; flex-direction: column; gap: 12px; }
+.tw-step.active { display: flex; }
+.tw-step textarea { min-height: 240px; }
+.tw-choice-list { display: flex; flex-direction: column; gap: 10px; }
+.tw-progress { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; color: var(--muted); }
+.tw-error { min-height: 1.4em; color: #f87171; font-size: 12px; }
+.tw-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+#tuneup-footer {
+  display: flex; justify-content: flex-end; gap: 8px;
+  padding: 12px 18px; border-top: 1px solid var(--border); flex-shrink: 0;
+}
+#tuneup-footer button { min-width: 96px; }
 
 /* ══════════════════════════════
    記憶 モーダル
@@ -1648,6 +1702,10 @@ body.no-bubble-blur .msg-bubble {
       <div class="ce-field">
         <label class="ce-label">プロンプト</label>
         <textarea class="ce-textarea" id="ce-prompt" placeholder="キャラクターの性格・設定を入力..."></textarea>
+        <button type="button" class="ce-file-btn" id="ce-tuneup-btn" style="display:none; align-self:flex-start">✨ プロンプトのチューンアップ...</button>
+        <div class="ce-tuneup-status" id="ce-tuneup-status" style="display:none">
+          <span id="ce-tuneup-status-text"></span><a href="#" id="ce-tuneup-delete">破棄</a>
+        </div>
       </div>
       <div class="ce-field">
         <label class="ce-label">重要設定（任意・プロンプトより優先されます）</label>
@@ -1715,6 +1773,82 @@ body.no-bubble-blur .msg-bubble {
     <div id="char-edit-footer">
       <button class="modal-btn secondary" id="char-edit-cancel">キャンセル</button>
       <button class="modal-btn primary" id="char-edit-ok">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════
+     プロンプト・チューンアップ Wizard
+══════════════════════════════ -->
+<div id="tuneup-backdrop">
+  <div id="tuneup-modal">
+    <div id="tuneup-header">
+      <span class="modal-title">✨ PROMPT TUNE-UP</span>
+      <button type="button" id="tuneup-close">✕</button>
+    </div>
+    <div id="tuneup-body">
+      <div class="tw-step active" id="tw-step1">
+        <div class="ce-label">整形方法を選んでください</div>
+        <div class="tw-choice-list">
+          <button type="button" class="modal-btn primary" id="tw-external-btn">外部AIで整形（高品質・コピペ2回）</button>
+          <button type="button" class="modal-btn secondary" id="tw-local-btn">ローカルLLMで自動整形（お手軽）</button>
+        </div>
+      </div>
+      <div class="tw-step" id="tw-step2">
+        <div id="tw-step2a" style="display:none">
+          <div class="ce-field">
+            <label class="ce-label" for="tw-template">以下を外部AIに貼り付けてください</label>
+            <textarea class="ce-textarea" id="tw-template" readonly></textarea>
+            <div class="tw-actions">
+              <button type="button" class="modal-btn secondary" id="tw-template-back">戻る</button>
+              <button type="button" class="modal-btn secondary" id="tw-copy-btn">コピー</button>
+              <button type="button" class="modal-btn primary" id="tw-external-next">次へ（結果を貼り付け）</button>
+            </div>
+          </div>
+          <div class="api-field-note">ChatGPT / Claude / Gemini などに貼り付けて実行し、返ってきた結果をコピーしてください</div>
+          <div class="tw-error" id="tw-template-error"></div>
+        </div>
+        <div id="tw-step2b" style="display:none">
+          <div class="api-field-note">ローカルLLMで整形中です。受信した文字数と末尾を表示します。</div>
+          <div class="tw-progress" id="tw-run-progress">準備中...</div>
+          <div class="tw-error" id="tw-run-error"></div>
+          <div class="tw-actions">
+            <button type="button" class="modal-btn secondary" id="tw-run-cancel">中断</button>
+            <button type="button" class="modal-btn secondary" id="tw-run-retry" style="display:none">リトライ</button>
+            <button type="button" class="modal-btn primary" id="tw-run-external" style="display:none">外部AI方式に切り替え</button>
+          </div>
+        </div>
+      </div>
+      <div class="tw-step" id="tw-step3">
+        <div class="ce-field">
+          <label class="ce-label" for="tw-result">整形結果を貼り付けてください</label>
+          <textarea class="ce-textarea" id="tw-result" placeholder="JSONコードブロックを含む整形結果"></textarea>
+          <div class="tw-error" id="tw-result-error"></div>
+          <div class="tw-actions">
+            <button type="button" class="modal-btn secondary" id="tw-result-back">戻る</button>
+            <button type="button" class="modal-btn primary" id="tw-result-next">検証して次へ</button>
+          </div>
+        </div>
+      </div>
+      <div class="tw-step" id="tw-step4">
+        <div class="ce-field">
+          <label class="ce-label" for="tw-prompt">整形後のプロンプト</label>
+          <textarea class="ce-textarea" id="tw-prompt"></textarea>
+          <div class="api-field-note" id="tw-char-count">0文字</div>
+        </div>
+        <div class="ce-field">
+          <label class="ce-label">重要設定</label>
+          <input class="ce-input" id="tw-profile-address" type="text" placeholder="ユーザーの呼び方">
+          <input class="ce-input" id="tw-profile-person" type="text" placeholder="一人称">
+          <input class="ce-input" id="tw-profile-tone" type="text" placeholder="口調・語尾の特徴">
+        </div>
+        <div class="tw-error" id="tw-save-error"></div>
+      </div>
+    </div>
+    <div id="tuneup-footer">
+      <button type="button" class="modal-btn secondary" id="tw-cancel">キャンセル</button>
+      <button type="button" class="modal-btn secondary" id="tw-restart" style="display:none">やり直し</button>
+      <button type="button" class="modal-btn primary" id="tw-save" style="display:none">保存</button>
     </div>
   </div>
 </div>
@@ -6336,6 +6470,8 @@ function openCharEditModal(mode, idx = null) {
   $ceProfileAddress.value  = '';
   $ceProfilePerson.value   = '';
   $ceProfileTone.value     = '';
+  $ceTuneupBtn.style.display = 'none';
+  $ceTuneupStatus.style.display = 'none';
   // MP3変換行をリセット（create / duplicate では非表示）
   $ceMp3Row.style.display = 'none';
   $ceMp3Btn.disabled = true;
@@ -6345,6 +6481,7 @@ function openCharEditModal(mode, idx = null) {
     $ceTitle.textContent = '✦ NEW CHARACTER';
   } else if (mode === 'edit') {
     $ceTitle.textContent = '✦ EDIT CHARACTER';
+    $ceTuneupBtn.style.display = '';
     fetch(`${API}/characters/${idx}/info`)
       .then(r => r.json())
       .then(d => {
@@ -6359,6 +6496,7 @@ function openCharEditModal(mode, idx = null) {
         $ceProfileAddress.value = prof.user_address || '';
         $ceProfilePerson.value  = prof.first_person || '';
         $ceProfileTone.value    = prof.tone || '';
+        renderCharTuneupStatus(d.tuneup_status);
         _updateMp3Btn(d, idx);
       })
       .catch(() => {});
@@ -7262,6 +7400,293 @@ $acApplyBtn.addEventListener('click', async () => {
 
   closeApiConfigModal();
 });
+
+// ── プロンプト・チューンアップ Wizard ──
+const $ceTuneupBtn = document.getElementById('ce-tuneup-btn');
+const $ceTuneupStatus = document.getElementById('ce-tuneup-status');
+const $ceTuneupStatusText = document.getElementById('ce-tuneup-status-text');
+const $ceTuneupDelete = document.getElementById('ce-tuneup-delete');
+const $tuneupBackdrop = document.getElementById('tuneup-backdrop');
+const $twStep1 = document.getElementById('tw-step1');
+const $twStep2 = document.getElementById('tw-step2');
+const $twStep3 = document.getElementById('tw-step3');
+const $twStep4 = document.getElementById('tw-step4');
+const $twStep2a = document.getElementById('tw-step2a');
+const $twStep2b = document.getElementById('tw-step2b');
+const $twTemplate = document.getElementById('tw-template');
+const $twTemplateError = document.getElementById('tw-template-error');
+const $twRunProgress = document.getElementById('tw-run-progress');
+const $twRunError = document.getElementById('tw-run-error');
+const $twRunRetry = document.getElementById('tw-run-retry');
+const $twRunExternal = document.getElementById('tw-run-external');
+const $twResult = document.getElementById('tw-result');
+const $twResultError = document.getElementById('tw-result-error');
+const $twPrompt = document.getElementById('tw-prompt');
+const $twProfileAddress = document.getElementById('tw-profile-address');
+const $twProfilePerson = document.getElementById('tw-profile-person');
+const $twProfileTone = document.getElementById('tw-profile-tone');
+const $twCharCount = document.getElementById('tw-char-count');
+const $twSaveError = document.getElementById('tw-save-error');
+const $twSaveBtn = document.getElementById('tw-save');
+const $twRestartBtn = document.getElementById('tw-restart');
+let tuneupWizardIndex = null;
+let tuneupWizardAbort = null;
+
+function renderCharTuneupStatus(status) {
+  if (charEditMode !== 'edit' || charEditTarget === null || status === 'none' || !status) {
+    $ceTuneupStatus.style.display = 'none';
+    return;
+  }
+  $ceTuneupStatusText.textContent = status === 'stale'
+    ? '⚠ 元の定義が更新されています。再チューンアップを推奨'
+    : 'チューンアップ済みのプロンプトを使用中';
+  $ceTuneupStatus.style.display = '';
+}
+
+function showTuneupStep(step) {
+  const step2Active = step === 'step2a' || step === 'step2b';
+  $twStep1.classList.toggle('active', step === 'step1');
+  $twStep2.classList.toggle('active', step2Active);
+  $twStep3.classList.toggle('active', step === 'step3');
+  $twStep4.classList.toggle('active', step === 'step4');
+  $twStep2a.style.display = step === 'step2a' ? '' : 'none';
+  $twStep2b.style.display = step === 'step2b' ? '' : 'none';
+  $twSaveBtn.style.display = step === 'step4' ? '' : 'none';
+  $twRestartBtn.style.display = step === 'step4' ? '' : 'none';
+}
+
+function openTuneupWizard(idx) {
+  tuneupWizardIndex = idx;
+  tuneupWizardAbort = null;
+  $twTemplate.value = '';
+  $twTemplateError.textContent = '';
+  $twRunError.textContent = '';
+  $twRunProgress.textContent = '準備中...';
+  $twRunRetry.style.display = 'none';
+  $twRunExternal.style.display = 'none';
+  $twResult.value = '';
+  $twResultError.textContent = '';
+  $twSaveError.textContent = '';
+  showTuneupStep('step1');
+  $tuneupBackdrop.classList.add('open');
+}
+
+function closeTuneupWizard() {
+  if (tuneupWizardAbort) {
+    tuneupWizardAbort.abort();
+    tuneupWizardAbort = null;
+  }
+  $tuneupBackdrop.classList.remove('open');
+  tuneupWizardIndex = null;
+}
+
+async function openTuneupExternalStep() {
+  showTuneupStep('step2a');
+  $twTemplate.value = '';
+  $twTemplateError.textContent = 'テンプレートを読み込み中...';
+  try {
+    const res = await fetch(`${API}/characters/${tuneupWizardIndex}/tuneup_template`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || `通信エラー（HTTP ${res.status}）`);
+    $twTemplate.value = data.text || '';
+    $twTemplateError.textContent = '';
+  } catch (error) {
+    $twTemplateError.textContent = 'テンプレートを読み込めませんでした: ' + error.message;
+  }
+}
+
+function parseTuneupResult(rawText) {
+  let candidate = String(rawText || '').trim();
+  const fenced = candidate.match(/```(?:json)?[ \t]*\r?\n?([\s\S]*?)```/i);
+  if (fenced) candidate = fenced[1].trim();
+
+  let parsed;
+  try {
+    parsed = JSON.parse(candidate);
+  } catch (_) {
+    const start = candidate.indexOf('{');
+    const end = candidate.lastIndexOf('}');
+    if (start < 0 || end <= start) throw new Error('JSONを解析できませんでした。整形結果を確認してください。');
+    try {
+      parsed = JSON.parse(candidate.slice(start, end + 1));
+    } catch (__) {
+      throw new Error('JSONを解析できませんでした。整形結果を確認してください。');
+    }
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('JSONオブジェクトとして解析できませんでした。整形結果を確認してください。');
+  }
+  if (typeof parsed.prompt !== 'string' || !parsed.prompt.trim()) {
+    throw new Error('整形結果の prompt が空です。');
+  }
+  const profile = parsed.profile && typeof parsed.profile === 'object' && !Array.isArray(parsed.profile)
+    ? parsed.profile : {};
+  return { prompt: parsed.prompt, profile };
+}
+
+function showTuneupPreview(result) {
+  $twPrompt.value = result.prompt;
+  $twProfileAddress.value = typeof result.profile.user_address === 'string' ? result.profile.user_address : '';
+  $twProfilePerson.value = typeof result.profile.first_person === 'string' ? result.profile.first_person : '';
+  $twProfileTone.value = typeof result.profile.tone === 'string' ? result.profile.tone : '';
+  $twCharCount.textContent = `${$twPrompt.value.length}文字`;
+  $twSaveError.textContent = '';
+  showTuneupStep('step4');
+}
+
+async function runLocalTuneup() {
+  if (tuneupWizardIndex === null) return;
+  showTuneupStep('step2b');
+  $twRunError.textContent = '';
+  $twRunRetry.style.display = 'none';
+  $twRunExternal.style.display = 'none';
+  $twRunProgress.textContent = 'ローカルLLMに接続中...';
+  const controller = new AbortController();
+  tuneupWizardAbort = controller;
+  let output = '';
+  let serverDone = false;
+
+  try {
+    const res = await fetch(`${API}/characters/${tuneupWizardIndex}/tuneup_run`, {
+      method: 'POST', signal: controller.signal,
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || `通信エラー（HTTP ${res.status}）`);
+    }
+    if (!res.body) throw new Error('ストリーミング応答を読み込めませんでした');
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+      const frames = buffer.split(/\r?\n\r?\n/);
+      buffer = frames.pop() || '';
+      for (const frame of frames) {
+        const dataText = frame.split(/\r?\n/).filter(line => line.startsWith('data:'))
+          .map(line => line.slice(5).trimStart()).join('\n');
+        if (!dataText) continue;
+        let event;
+        try { event = JSON.parse(dataText); }
+        catch (_) { throw new Error('LLM応答を解析できませんでした'); }
+        if (typeof event.token === 'string') {
+          output += event.token;
+          $twRunProgress.textContent = `${output.length}文字を受信しました\n\n${output.slice(-240)}`;
+        }
+        if (event.error) throw new Error(event.error);
+        if (event.done) serverDone = true;
+      }
+      if (done || serverDone) break;
+    }
+    if (!serverDone) throw new Error('LLM応答が途中で終了しました');
+    showTuneupPreview(parseTuneupResult(output));
+  } catch (error) {
+    if (controller.signal.aborted) return;
+    $twRunError.textContent = error.message || 'ローカルLLMでの整形に失敗しました';
+    $twRunRetry.style.display = '';
+    $twRunExternal.style.display = '';
+  } finally {
+    if (tuneupWizardAbort === controller) tuneupWizardAbort = null;
+  }
+}
+
+$ceTuneupBtn.addEventListener('click', () => {
+  if (charEditMode === 'edit' && charEditTarget !== null) openTuneupWizard(charEditTarget);
+});
+$ceTuneupDelete.addEventListener('click', async event => {
+  event.preventDefault();
+  if (charEditMode !== 'edit' || charEditTarget === null) return;
+  if (!confirm('チューンアップ済みのプロンプトを破棄します。よろしいですか？')) return;
+  try {
+    const res = await fetch(`${API}/characters/${charEditTarget}/tuneup_delete`, { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || `通信エラー（HTTP ${res.status}）`);
+    renderCharTuneupStatus(data.tuneup_status);
+    showErrorToast('チューンアップ済みプロンプトを破棄しました', 'success');
+  } catch (error) {
+    showErrorToast('破棄に失敗しました: ' + error.message);
+  }
+});
+
+document.getElementById('tw-external-btn').addEventListener('click', openTuneupExternalStep);
+document.getElementById('tw-template-back').addEventListener('click', () => showTuneupStep('step1'));
+document.getElementById('tw-local-btn').addEventListener('click', runLocalTuneup);
+document.getElementById('tw-copy-btn').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText($twTemplate.value);
+    showErrorToast('テンプレートをコピーしました', 'success');
+  } catch (_) {
+    $twTemplate.focus();
+    $twTemplate.select();
+    $twTemplateError.textContent = '自動コピーできませんでした。選択されたテキストをコピーしてください。';
+  }
+});
+document.getElementById('tw-external-next').addEventListener('click', () => {
+  $twResult.value = '';
+  $twResultError.textContent = '';
+  showTuneupStep('step3');
+  $twResult.focus();
+});
+document.getElementById('tw-result-back').addEventListener('click', () => showTuneupStep('step2a'));
+document.getElementById('tw-result-next').addEventListener('click', () => {
+  try { showTuneupPreview(parseTuneupResult($twResult.value)); }
+  catch (error) { $twResultError.textContent = error.message; }
+});
+document.getElementById('tw-run-cancel').addEventListener('click', () => {
+  if (tuneupWizardAbort) {
+    tuneupWizardAbort.abort();
+    tuneupWizardAbort = null;
+  }
+  showTuneupStep('step1');
+});
+$twRunRetry.addEventListener('click', runLocalTuneup);
+$twRunExternal.addEventListener('click', openTuneupExternalStep);
+$twPrompt.addEventListener('input', () => { $twCharCount.textContent = `${$twPrompt.value.length}文字`; });
+$twRestartBtn.addEventListener('click', () => {
+  $twResult.value = '';
+  $twResultError.textContent = '';
+  $twSaveError.textContent = '';
+  showTuneupStep('step1');
+});
+$twSaveBtn.addEventListener('click', async () => {
+  if (tuneupWizardIndex === null) return;
+  const prompt = $twPrompt.value;
+  if (!prompt.trim()) { $twSaveError.textContent = '整形後のプロンプトを入力してください。'; return; }
+  $twSaveBtn.disabled = true;
+  $twSaveError.textContent = '';
+  try {
+    const res = await fetch(`${API}/characters/${tuneupWizardIndex}/tuneup_save`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt,
+        profile: {
+          user_address: $twProfileAddress.value,
+          first_person: $twProfilePerson.value,
+          tone: $twProfileTone.value,
+        },
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || `通信エラー（HTTP ${res.status}）`);
+    const profile = data.profile || {};
+    $ceProfileAddress.value = profile.user_address || '';
+    $ceProfilePerson.value = profile.first_person || '';
+    $ceProfileTone.value = profile.tone || '';
+    renderCharTuneupStatus(data.tuneup_status);
+    closeTuneupWizard();
+    showErrorToast('✓ チューンアップ済みプロンプトを保存しました', 'success');
+  } catch (error) {
+    $twSaveError.textContent = '保存に失敗しました: ' + error.message;
+  } finally {
+    $twSaveBtn.disabled = false;
+  }
+});
+document.getElementById('tw-cancel').addEventListener('click', closeTuneupWizard);
+document.getElementById('tuneup-close').addEventListener('click', closeTuneupWizard);
 </script>
 </body>
 </html>

@@ -6,7 +6,7 @@ bridge_server.py  –  WebUI版 bridge3.py
     uvicorn bridge_server:app --host 0.0.0.0 --port 8000 --reload
 """
 
-import os, subprocess, time, re, threading, queue, asyncio, json, zipfile, shutil, urllib.parse, tempfile, uuid, copy
+import os, subprocess, time, re, threading, queue, asyncio, json, zipfile, shutil, urllib.parse, tempfile, uuid, copy, hashlib
 from pathlib import Path
 from openai import OpenAI
 from fastapi import FastAPI, HTTPException, Body, Request
@@ -992,6 +992,90 @@ def _profile_block(profile: dict) -> str:
     return "# 最重要設定（上の記述と矛盾する場合はこちらを優先）\n" + "\n".join(lines)
 
 
+def _char_prompt_source_hash(char: dict) -> str:
+    """元のキャラクター定義を読み、整形元ハッシュを返す"""
+    with open(char["prompt"], "r", encoding="utf-8") as f:
+        text = f.read()
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()
+
+
+def _resolve_char_setting(char: dict) -> str:
+    """整形済みプロンプトまたは元txtと重要設定からキャラ設定を作る"""
+    data = _load_char_profile(char)
+    tuned_prompt = data.get("prompt")
+    if isinstance(tuned_prompt, str) and tuned_prompt:
+        char_setting = tuned_prompt
+    else:
+        with open(char["prompt"], "r", encoding="utf-8") as f:
+            char_setting = f.read().strip()
+        if load_memory(char["name"]).get("sanitize_enabled", True) is not False:
+            char_setting = _sanitize_char_prompt(char_setting)
+
+    profile_block = _profile_block(data.get("profile") or {})
+    if profile_block:
+        char_setting = char_setting + "\n\n" + profile_block
+    return char_setting
+
+
+def _tuneup_status(char: dict) -> str:
+    """整形済みプロンプトが元txtの内容と一致するか返す"""
+    data = _load_char_profile(char)
+    if "prompt" not in data:
+        return "none"
+    source_hash = data.get("source_hash")
+    if not isinstance(source_hash, str) or not source_hash:
+        return "stale"
+    try:
+        return "ok" if source_hash == _char_prompt_source_hash(char) else "stale"
+    except Exception:
+        return "stale"
+
+
+def _write_char_profile_json_atomic(path: str, data: dict) -> None:
+    """.prompt.json を一時ファイル経由で置き換える"""
+    dir_ = os.path.dirname(path) or "."
+    fd, tmp_path = tempfile.mkstemp(dir=dir_, suffix=".tmp", prefix="profile_")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+TUNEUP_TEMPLATE = """あなたはキャラクターチャット用のペルソナプロンプトを整形する専門家です。
+後述の【元のキャラクター定義】を、小型のローカルLLMでも扱いやすい形に整形してください。
+
+## 整形の要件
+1. wiki記法・URL・表組み・編集リンクなどのノイズを除去する。
+2. 戦闘ボイス・メニューやUI用ボイスなど、チャット会話で使わないセリフを除外する。
+3. 口調は例からの推測に任せず、明示的なルールとして言語化する（一人称、相手の呼び方、語尾、テンション、特徴的な言い回し）。
+4. セリフ例は会話文脈のものだけを10〜15行厳選する。可能なら2〜3組を「ユーザー: … / キャラ: …」の対話ペアにする。
+5. 人物像の要約は簡潔に（目安: 全体で2,000〜2,500文字以内）。
+6. 定義にない事実を創作しない。情報が見つからない項目は空文字にする。
+
+## 出力形式
+以下のJSONを、JSONコードブロック1個だけで出力してください。他の文章は書かないでください。
+"prompt" の中身は「人物要約 → 口調ルール → 厳選セリフ例」の順のプレーンテキストにしてください。
+
+{
+  "version": 1,
+  "profile": {
+    "user_address": "キャラクターがユーザー（会話相手）を呼ぶ呼び方",
+    "first_person": "一人称",
+    "tone": "口調・語尾の特徴（50文字以内）"
+  },
+  "prompt": "整形後のペルソナ全文"
+}
+
+## 元のキャラクター定義
+```"""
+
+
 # ══════════════════════════════════════════════════════
 #  キャラクター長期記憶 / 関係性 (memory/<キャラ名>.json)
 # ══════════════════════════════════════════════════════
@@ -1426,13 +1510,7 @@ def select_character(req: SelectRequest, request: Request):
         with open(BASE_PROMPT_FILE, "r", encoding="utf-8") as f:
             base_prompt = f.read().strip()
 
-    with open(selected["prompt"], "r", encoding="utf-8") as f:
-        char_setting = f.read().strip()
-    if load_memory(selected["name"]).get("sanitize_enabled", True) is not False:
-        char_setting = _sanitize_char_prompt(char_setting)
-    profile_block = _profile_block(_load_char_profile(selected).get("profile") or {})
-    if profile_block:
-        char_setting = char_setting + "\n\n" + profile_block
+    char_setting = _resolve_char_setting(selected)
 
     # システムプロンプトの合成
     settings = load_settings()
@@ -1475,13 +1553,7 @@ def update_system_prompt(request: Request):
     if not state.selected:
         raise HTTPException(400, "キャラクターが選択されていません")
 
-    with open(state.selected["prompt"], "r", encoding="utf-8") as f:
-        char_setting = f.read().strip()
-    if load_memory(state.selected["name"]).get("sanitize_enabled", True) is not False:
-        char_setting = _sanitize_char_prompt(char_setting)
-    profile_block = _profile_block(_load_char_profile(state.selected).get("profile") or {})
-    if profile_block:
-        char_setting = char_setting + "\n\n" + profile_block
+    char_setting = _resolve_char_setting(state.selected)
 
     settings = load_settings()
     sys_prompt_text = _build_system_prompt("", char_setting, settings)
@@ -3325,7 +3397,140 @@ def get_character_info(idx: int):
         "relationship_enabled": bool(load_memory(char["name"]).get("relationship_enabled", False)),
         "sanitize_enabled":     load_memory(char["name"]).get("sanitize_enabled", True) is not False,
         "profile":              (_load_char_profile(char).get("profile") or {}),
+        "tuneup_status":        _tuneup_status(char),
     })
+
+
+def _tuneup_char_for_index(idx: int) -> dict:
+    state.chars = get_dynamic_characters()
+    if idx < 0 or idx >= len(state.chars):
+        raise HTTPException(404)
+    return state.chars[idx]
+
+
+def _tuneup_template_text(char: dict) -> str:
+    try:
+        with open(char["prompt"], "r", encoding="utf-8") as f:
+            source_text = f.read()
+    except Exception as e:
+        print(f"[整形] 元のキャラクター定義 {char.get('prompt')} の読み込みに失敗しました: {e}")
+        raise HTTPException(500, "元のキャラクター定義を読み込めませんでした")
+    return TUNEUP_TEMPLATE + "\n" + source_text
+
+
+@app.get("/characters/{idx}/tuneup_template")
+def get_tuneup_template(idx: int):
+    char = _tuneup_char_for_index(idx)
+    return {"text": _tuneup_template_text(char)}
+
+
+@app.post("/characters/{idx}/tuneup_run")
+def run_tuneup(idx: int):
+    char = _tuneup_char_for_index(idx)
+    tuneup_text = _tuneup_template_text(char)
+
+    def events():
+        try:
+            stream = client.chat.completions.create(
+                model=LLM_MODEL or "local-model",
+                messages=[{"role": "user", "content": tuneup_text}],
+                temperature=0.2,
+                stream=True,
+            )
+            for chunk in stream:
+                delta = chunk.choices[0].delta.content or ""
+                if delta:
+                    yield f"data: {json.dumps({'token': delta}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'done': True}, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            print(f"[整形] LLM実行に失敗しました: {e}")
+            yield f"data: {json.dumps({'error': 'ローカルLLMでの整形に失敗しました'}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/characters/{idx}/tuneup_save")
+async def save_tuneup(idx: int, request: Request):
+    char = _tuneup_char_for_index(idx)
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "リクエスト形式が不正です")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "リクエスト形式が不正です")
+    prompt = body.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise HTTPException(400, "整形後のプロンプトを入力してください")
+
+    try:
+        source_hash = _char_prompt_source_hash(char)
+    except Exception as e:
+        print(f"[整形] 元のキャラクター定義 {char.get('prompt')} の読み込みに失敗しました: {e}")
+        raise HTTPException(500, "元のキャラクター定義を読み込めませんでした")
+
+    path = _profile_json_default_path(char)
+    data = {}
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+            if isinstance(existing, dict):
+                data = existing
+        except Exception as e:
+            print(f"[整形] {path} の読み込みに失敗しました: {e}")
+
+    incoming_profile = body.get("profile")
+    if not isinstance(incoming_profile, dict):
+        incoming_profile = {}
+    profile = {}
+    for key in PROFILE_FIELDS:
+        value = str(incoming_profile.get(key, "") or "").strip()
+        if value:
+            profile[key] = value
+
+    data["version"] = 1
+    if profile:
+        data["profile"] = profile
+    else:
+        data.pop("profile", None)
+    data["prompt"] = prompt
+    data["source_hash"] = source_hash
+    try:
+        _write_char_profile_json_atomic(path, data)
+    except Exception as e:
+        print(f"[整形] {path} の保存に失敗しました: {e}")
+        raise HTTPException(500, "整形結果を保存できませんでした")
+    return {"status": "ok", "tuneup_status": "ok", "profile": profile}
+
+
+@app.post("/characters/{idx}/tuneup_delete")
+def delete_tuneup(idx: int):
+    char = _tuneup_char_for_index(idx)
+    path = _profile_json_default_path(char)
+    if os.path.exists(path):
+        data = {}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+            if isinstance(existing, dict):
+                data = existing
+        except Exception as e:
+            print(f"[整形] {path} の読み込みに失敗しました: {e}")
+        data.pop("prompt", None)
+        data.pop("source_hash", None)
+        try:
+            if not any(key != "version" for key in data):
+                os.remove(path)
+            else:
+                _write_char_profile_json_atomic(path, data)
+        except Exception as e:
+            print(f"[整形] {path} の削除に失敗しました: {e}")
+            raise HTTPException(500, "チューンアップ済みプロンプトを削除できませんでした")
+    return {"status": "ok", "tuneup_status": "none"}
 
 
 @app.post("/characters/{idx}/convert_mp3")
