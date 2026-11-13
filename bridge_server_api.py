@@ -35,6 +35,7 @@ PROMPTS_DIR = "prompts"
 
 DEFAULT_SETTINGS = {
     "tts_batch_size": 0,      # TTSに投げる文章数 (0=すべて)
+    "tts_split_chars": "。！？?!♪♫☆★",  # 文末とみなす文字(この直後で文を区切る)
     "dark_mode": False,
     "blur_mode": True,
     "tts_enabled": True,
@@ -1742,9 +1743,43 @@ def enqueue_tts(sentence: str, voice_path: str | list[str] | None, req_id: str, 
     generate_queue.put((sentence, voice_path, embedding_path, req_id))
 
 
+# U+FE0F(異体字セレクタ: ⏸️等) / U+200D(ZWJ: 😮‍💨等) を含めて結合絵文字を1かたまりで扱う
 EMOJI_PAT = re.compile(
-    r'[\U0001F300-\U0001F9FF\U00002600-\U000027BF\U0001FA00-\U0001FFFF\U00002300-\U000023FF]+'
+    r'[\U0001F300-\U0001F9FF\U00002600-\U000027BF\U0001FA00-\U0001FFFF\U00002300-\U000023FF\uFE0F\u200D]+'
 )
+
+# 文末とみなす文字の既定値。設定 tts_split_chars で変更できる。
+# ♪♫☆★ は「〜ですよ♪」のように句点なしで文を終える口調への対応。
+# 「～」「…」は文中にも頻出し誤分割しやすいため既定に含めない。
+DEFAULT_SENTENCE_TERMINATORS = "。！？?!♪♫☆★"
+_SENT_MATCHER_CACHE: dict = {}
+
+
+def get_sentence_matcher(settings: dict):
+    """1文にマッチするパターンを返す。文は終端文字までで、直後に続く
+    絵文字(演技指定)・空白を挟んだ絵文字も同じ文に含める。
+    終端文字は設定 tts_split_chars で変更できる。"""
+    chars = str(settings.get("tts_split_chars") or "") or DEFAULT_SENTENCE_TERMINATORS
+    pat = _SENT_MATCHER_CACHE.get(chars)
+    if pat is None:
+        cls = "".join(re.escape(c) for c in chars)
+        pat = re.compile(r'.*?[' + cls + r'](?:\s*' + EMOJI_PAT.pattern + r')*', re.S)
+        _SENT_MATCHER_CACHE[chars] = pat
+    return pat
+
+
+def split_text_sentences(text: str, settings: dict) -> list[str]:
+    """完成済みテキストを文リストに分割する(終端のない残りも1文として含む)。"""
+    matcher = get_sentence_matcher(settings)
+    sentences: list[str] = []
+    pos = 0
+    for m in matcher.finditer(text):
+        if m.group().strip():
+            sentences.append(m.group())
+        pos = m.end()
+    if text[pos:].strip():
+        sentences.append(text[pos:])
+    return sentences
 
 def clean_for_tts(text: str) -> str:
     """括弧内を除去するのみ。絵文字は元の位置のまま残す。
@@ -1762,6 +1797,7 @@ def stream_llm_with_tts(messages: list, tts_enabled: bool, memorize_user_text: s
     settings = load_settings()
     tts_batch_size: int = settings.get("tts_batch_size", 0)  # 0=すべて
     no_voice_mode: str  = settings.get("no_voice_mode", "off")
+    sent_matcher = get_sentence_matcher(settings)
 
     has_embedding = state.selected.get("has_embedding", False)
     # TTS使用可否: 音声/Embeddingありキャラ、またはデフォルト音声モードで音声なしキャラ
@@ -1776,8 +1812,6 @@ def stream_llm_with_tts(messages: list, tts_enabled: bool, memorize_user_text: s
 
     full_answer = ""
     llm_buffer = ""
-    # 句読点・感嘆符の後で分割。直後の絵文字は前トークンに含めるため後続絵文字をバッファへ残す
-    split_pat = re.compile(r'(?<=[。！？\?!])(?!\s*' + EMOJI_PAT.pattern + r')')
 
     # バッチ用: 確定した文のリスト
     pending_sentences: list[str] = []
@@ -1831,22 +1865,16 @@ def stream_llm_with_tts(messages: list, tts_enabled: bool, memorize_user_text: s
             yield f"data: {json.dumps({'token': delta})}\n\n"
 
             if tts_enabled and tts_available:
-                parts = split_pat.split(llm_buffer)
-                if len(parts) > 1:
-                    # 絵文字が続く場合は次のパーツの先頭絵文字を前のパーツに結合
-                    merged: list[str] = []
-                    for i, part in enumerate(parts[:-1]):
-                        # スペースを挟んだ絵文字も前の文に結合する
-                        suffix_match = re.match(r'\s*' + EMOJI_PAT.pattern, parts[i + 1]) if i + 1 < len(parts) else None
-                        if suffix_match and suffix_match.group().strip():
-                            part = part + suffix_match.group()
-                            # 次パーツから絵文字prefix を削除
-                            parts[i + 1] = parts[i + 1][suffix_match.end():]
-                        merged.append(part)
-                    for sentence in merged:
-                        if sentence.strip():
-                            pending_sentences.append(sentence)
-                    llm_buffer = parts[-1]
+                matches = list(sent_matcher.finditer(llm_buffer))
+                # バッファ末尾で終わる文は、演技指定の絵文字が次チャンクで
+                # 届く可能性があるため、非絵文字の文字が続くまで確定しない
+                if matches and not llm_buffer[matches[-1].end():].strip():
+                    matches.pop()
+                if matches:
+                    for m in matches:
+                        if m.group().strip():
+                            pending_sentences.append(m.group())
+                    llm_buffer = llm_buffer[matches[-1].end():]
                     maybe_enqueue_batch()
 
             # LLM生成中に出来上がった音声はSSEでそのまま流す
@@ -2754,21 +2782,8 @@ def tts_regen(req: TtsRegenRequest):
         finished_audios[req_id] = {"audios": [], "queued": 0, "completed": 0}
 
     # ── 文章分割 (stream_llm_with_tts と同じロジック) ──
-    split_pat = re.compile(r'(?<=[。！？\?!])(?!\s*' + EMOJI_PAT.pattern + r')')
-    parts = split_pat.split(text)
-    sentences: list[str] = []
-    if len(parts) > 1:
-        merged: list[str] = []
-        for i, part in enumerate(parts[:-1]):
-            suffix_match = re.match(r'\s*' + EMOJI_PAT.pattern, parts[i + 1]) if i + 1 < len(parts) else None
-            if suffix_match and suffix_match.group().strip():
-                part = part + suffix_match.group()
-                parts[i + 1] = parts[i + 1][suffix_match.end():]
-            merged.append(part)
-        sentences = [s for s in merged if s.strip()]
-        if parts[-1].strip():
-            sentences.append(parts[-1])
-    else:
+    sentences = split_text_sentences(text, settings)
+    if not sentences:
         sentences = [text]
 
     # ── バッチキューに積む ──
@@ -2866,22 +2881,7 @@ def make_export_filename(char_name: str, text: str, ext: str) -> str:
 
 def _split_into_batches(text: str, tts_batch_size: int) -> list[str]:
     """tts_batch_size に従ってテキストをバッチリストに分割する（tts_regen と同ロジック）"""
-    split_pat = re.compile(r'(?<=[。！？\?!])(?!\s*' + EMOJI_PAT.pattern + r')')
-    parts = split_pat.split(text)
-    sentences: list[str] = []
-    if len(parts) > 1:
-        merged: list[str] = []
-        for i, part in enumerate(parts[:-1]):
-            suffix_match = re.match(r'\s*' + EMOJI_PAT.pattern, parts[i + 1]) if i + 1 < len(parts) else None
-            if suffix_match and suffix_match.group().strip():
-                part = part + suffix_match.group()
-                parts[i + 1] = parts[i + 1][suffix_match.end():]
-            merged.append(part)
-        sentences = [s for s in merged if s.strip()]
-        if parts[-1].strip():
-            sentences.append(parts[-1])
-    else:
-        sentences = [text] if text.strip() else []
+    sentences = split_text_sentences(text, load_settings())
 
     if not sentences:
         return [text] if text.strip() else []
