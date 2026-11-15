@@ -90,6 +90,8 @@ DEFAULT_SETTINGS = {
     "memory_update_interval": 6,     # ユーザー発言N回ごとに記憶を更新 (1〜30)
     # 会話履歴設定
     "history_max_messages":   30,    # LLMに渡す履歴の最大メッセージ数 (0=無制限)
+    # アシスタントモード
+    "assistant_mode":         False, # True=キャラの人格・口調のままアシスタントとして応答する
 }
 
 def load_settings() -> dict:
@@ -168,6 +170,7 @@ CHAR_DIR_ENV     = os.getenv("CHAR_DIR")                               # None = 
 CHAR_DIR         = CHAR_DIR_ENV if CHAR_DIR_ENV else "characters"
 DEFAULT_CHAR_DIR = "characters"                                         # デフォルトフォルダ
 BASE_PROMPT_FILE = os.path.join(PROMPTS_DIR, "base_system_prompt.txt")
+ASSISTANT_PROMPT_FILE = "assistant_system_prompt.txt"                   # アシスタントモード用 (prompts/ 内)
 MAX_HISTORY     = 10
 WINDOW_WIDTH    = 300
 
@@ -842,9 +845,17 @@ def _read_file_prompt(fname: str) -> str:
 def _get_active_sys_prompt_text(settings: dict) -> str:
     """設定からアクティブなシステムプロンプトテキストを返す。
 
+    assistant_mode=True のとき: アシスタントモード用ファイルを返す（ファイル/スロットの選択より優先）
     slot_and_file=True のとき: ファイル + スロットを両方返す（改行2つで連結）
     slot_and_file=False のとき: スロットが有効ならスロットのみ、なければファイル
     """
+    if settings.get("assistant_mode"):
+        assistant_text = _read_file_prompt(ASSISTANT_PROMPT_FILE)
+        if assistant_text:
+            return assistant_text
+        # ファイルが無い/空の場合は通常のシステムプロンプトで動作を続ける
+        print(f"[Prompt] WARNING: {ASSISTANT_PROMPT_FILE} が見つかりません。通常のシステムプロンプトを使用します。")
+
     slot          = settings.get("active_user_slot", -1)
     slots         = settings.get("user_slots", ["", "", "", "", ""])
     fname         = settings.get("system_prompt_file", "")
@@ -1571,6 +1582,30 @@ def update_system_prompt(request: Request):
         state.memory.append(last_assistant)
 
     return {"status": "ok", **conversation}
+
+
+class AssistantModeRequest(BaseModel):
+    enabled: bool
+
+
+@app.post("/assistant_mode")
+def set_assistant_mode(req: AssistantModeRequest):
+    """アシスタントモードを切り替えて設定に保存する。
+    キャラクター選択中なら system メッセージだけを差し替え、会話履歴は保持する
+    （会話の途中で切り替えても文脈を引き継ぐため、/update_system_prompt と違いリセットしない）。"""
+    enabled = bool(req.enabled)
+    with _settings_lock:
+        settings = load_settings()
+        settings["assistant_mode"] = enabled
+        save_settings(settings)
+
+    if state.selected and state.memory and state.memory[0].get("role") == "system":
+        char_setting = _resolve_char_setting(state.selected)
+        state.memory[0] = {"role": "system",
+                           "content": _build_system_prompt("", char_setting, settings)}
+
+    prompt_missing = enabled and not _read_file_prompt(ASSISTANT_PROMPT_FILE)
+    return {"status": "ok", "enabled": enabled, "prompt_missing": prompt_missing}
 
 
 @app.get("/status")

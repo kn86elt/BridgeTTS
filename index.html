@@ -285,6 +285,8 @@ body { background: var(--body-gradient); }
 }
 .msg-row.user .msg-name { text-align: right; }
 .msg-text { font-size: 14px; line-height: 1.6; overflow-wrap: break-word; word-break: break-word; }
+/* アシスタントモードの応答など、段落の改行を表示する吹き出し */
+.msg-text.multiline { white-space: pre-wrap; }
 
 /* ── 吹き出しフッター (右下) ── */
 .bubble-footer {
@@ -1400,6 +1402,14 @@ body.no-bubble-blur .msg-bubble {
   border: 1px solid var(--border); border-radius: 999px; padding: 3px 7px;
 }
 #game-mode-badge.active { display: inline-flex; }
+#assistant-mode-badge {
+  display: none; flex: 0 0 auto; align-self: center;
+  color: var(--accent2); font-size: 10px; letter-spacing: .06em;
+  border: 1px solid var(--border); border-radius: 999px; padding: 3px 7px;
+}
+#assistant-mode-badge.active { display: inline-flex; }
+/* ゲームモード中はゲームモードのバッジだけを表示する */
+#game-mode-badge.active ~ #assistant-mode-badge { display: none; }
 .game-storage-dialog { width: 520px; max-width: calc(100vw - 32px); max-height: 80vh; margin: auto; padding: 0; border: 1px solid var(--border); border-radius: 14px; background: var(--body-gradient); color: var(--text); }
 .game-storage-dialog::backdrop { background: rgba(0, 0, 0, .45); }
 .game-storage-dialog .log-modal-header { display: flex; align-items: center; justify-content: space-between; color: var(--text); }
@@ -2038,6 +2048,7 @@ body.no-bubble-blur .msg-bubble {
       </label>
     </div>
     <span id="game-mode-badge" aria-hidden="true">ゲームモード</span>
+    <span id="assistant-mode-badge" aria-hidden="true">アシスタント</span>
     <textarea id="user-input" placeholder="メッセージを入力... (Enter で送信)" rows="1"></textarea>
     <button id="log-menu-btn" title="ログメニュー">&#8230;</button>
     <button id="send-btn" disabled title="送信">&#10148;</button>
@@ -2320,6 +2331,7 @@ let _sysAutoReplyPrompt = '';      // sys-modal 開閉時のプロンプトキ�
 // ── 記憶 ──
 let _syntheticSend      = false;   // true=自動応答由来の送信 (記憶に反映しない)
 let privateMode         = false;   // プライベートモード: この会話を記憶に追加しない
+let assistantMode       = false;   // アシスタントモード: キャラの人格・口調のままアシスタントとして応答
 let pageId              = (crypto.randomUUID ? crypto.randomUUID() : `page_${Date.now()}_${Math.random().toString(16).slice(2)}`);
 let conversationEpoch   = '';
 let normalRevision      = 0;
@@ -2360,6 +2372,7 @@ const $msgScrollBottom= document.getElementById('msg-scroll-bottom');
 const $input     = document.getElementById('user-input');
 const $sendBtn   = document.getElementById('send-btn');
 const $gameModeBadge = document.getElementById('game-mode-badge');
+const $assistantModeBadge = document.getElementById('assistant-mode-badge');
 const $statusDot = document.getElementById('status-dot');
 const $statusTxt = document.getElementById('status-text');
 const $ttsInd    = document.getElementById('tts-indicator');
@@ -2549,6 +2562,11 @@ function applySettings(s) {
   }
   if (s.auto_reply_user_prompt !== undefined) {
     autoReplyUserPrompt = s.auto_reply_user_prompt;
+  }
+  // アシスタントモードの反映
+  if (s.assistant_mode !== undefined) {
+    assistantMode = !!s.assistant_mode;
+    $assistantModeBadge.classList.toggle('active', assistantMode);
   }
   updateSysActiveLabel(s);
 }
@@ -3477,6 +3495,7 @@ function renderLoadedLog(data) {
       const imageUrl = selectedImageUrl;
       const { textEl, footer, bubble } = appendMessage('char', selectedName || data.char_name, imageUrl);
       textEl.textContent = msg.text;
+      if (msg.text.includes('\n')) textEl.classList.add('multiline');
       wrapEmojis(textEl);
       const row = bubble.parentElement;
       row._collectedAudio = [];
@@ -3613,6 +3632,11 @@ $logMenuBtn.addEventListener('click', e => {
       role: 'menuitemcheckbox', checked: privateMode || gameVisible(), disabled: gameVisible(),
       tooltip: gameVisible() ? 'ゲームの出来事は通常の記憶に追加しません' : 'この会話の内容をキャラクターの記憶に追加しません（既存の記憶は使われます）',
       action: togglePrivateMode },
+    { label: (assistantMode ? '✓ ' : '　') + 'アシスタントモード',
+      role: 'menuitemcheckbox', checked: assistantMode,
+      disabled: gameVisible(), disabledHint: 'ゲームモードを解除してから使用',
+      tooltip: 'キャラクターの性格・口調のまま、質問や依頼にアシスタントとして答えます（次回起動時も維持されます）',
+      action: toggleAssistantMode },
     { label: ((gameView?.status === 'active' || gameView?.status === 'suspended' || gameVisible()) ? '✓ ' : '　') + 'ゲームモード（実験的）',
       role: 'menuitemcheckbox', checked: gameView?.status === 'active' || gameView?.status === 'suspended' || gameVisible(),
       disabled: !['off', 'active'].includes(gameUiPhase),
@@ -4049,6 +4073,7 @@ async function selectCharacter(idx, name, hasImage, hasVoice) {
   appendSystemMsg(`${name} がログインしました`);
   if (selectData.embedding_warning) appendSystemMsg(selectData.embedding_warning);
   if (privateMode) appendSystemMsg('🔒 プライベートモード: この会話は記憶に追加されません');
+  if (assistantMode) appendSystemMsg('💡 アシスタントモード: キャラクターのままアシスタントとして応答します');
   setBackgroundImage(selectedImageUrl);
   logSessionId      = null;
   pendingLogChar    = name;
@@ -5136,6 +5161,7 @@ async function sendMessage() {
   }
 
   const charRefs = appendMessage('char', selectedName, selectedImageUrl);
+  if (assistantMode) charRefs.textEl.classList.add('multiline');  // 段落の改行を表示する
   const cursor = document.createElement('span');
   cursor.className = 'cursor';
   charRefs.textEl.appendChild(cursor);
@@ -5336,6 +5362,42 @@ function togglePrivateMode() {
   }
   showErrorToast(privateMode ? '🔒 プライベートモード ON' : 'プライベートモード OFF',
                  privateMode ? 'success' : 'error');
+}
+
+/* ══════════════════════════════
+   アシスタントモード トグル
+   ON の間はキャラクターの人格・口調のままアシスタントとして応答する。
+   状態はサーバーの設定 (assistant_mode) に保存され、次回起動時も維持される。
+   会話履歴は保持したままシステムプロンプトだけを差し替える。
+══════════════════════════════ */
+async function toggleAssistantMode() {
+  const next = !assistantMode;
+  let data;
+  try {
+    const res = await fetch(`${API}/assistant_mode`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: next }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    data = await res.json();
+  } catch(e) {
+    showErrorToast('アシスタントモードの切り替えに失敗しました: ' + e.message);
+    return;
+  }
+  assistantMode = next;
+  $assistantModeBadge.classList.toggle('active', assistantMode);
+  if (selectedIndex !== null) {
+    appendSystemMsg(assistantMode
+      ? '💡 アシスタントモード ON: キャラクターのままアシスタントとして応答します'
+      : 'アシスタントモード OFF: 通常の会話に戻ります');
+  }
+  if (data.prompt_missing) {
+    showErrorToast('prompts/assistant_system_prompt.txt が見つからないため、通常のプロンプトで動作します');
+    return;
+  }
+  showErrorToast(assistantMode ? '💡 アシスタントモード ON' : 'アシスタントモード OFF',
+                 assistantMode ? 'success' : 'error');
 }
 
 /* ══════════════════════════════
