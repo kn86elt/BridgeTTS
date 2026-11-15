@@ -7124,6 +7124,30 @@ function _updateLlmEnvState() {
 }
 $acLlmUseEnv.addEventListener('change', _updateLlmEnvState);
 
+// ── 接続先URLの貼り付け ──
+// 「http://127.0.0.1:47831/v1」のようなURLを接続先の欄に貼り付けると、
+// ホスト・ポート・パスの各欄に振り分ける。ホスト名だけ・数字だけの貼り付けは通常どおり。
+function _parseLlmEndpoint(text) {
+  const m = /^(?:(https?):\/\/)?(\[[^\]\s]+\]|[^\s\/:]+)(?::(\d{1,5}))?(\/\S*)?$/i.exec((text || '').trim());
+  if (!m) return null;
+  const [, scheme, host, port, path] = m;
+  if (!scheme && !port) return null;
+  return { scheme: (scheme || 'http').toLowerCase(), host, port: port || '', path: path || '' };
+}
+[$acLlmHost, $acLlmPort, $acLlmPath].forEach(el => el.addEventListener('paste', e => {
+  const ep = _parseLlmEndpoint(e.clipboardData ? e.clipboardData.getData('text') : '');
+  if (!ep) return;
+  e.preventDefault();
+  if (ep.scheme === 'https') {
+    showErrorToast('https の接続先には対応していません（http のみ）');
+    return;
+  }
+  $acLlmHost.value = ep.host;
+  $acLlmPort.value = ep.port || '80';
+  const path = ep.path.replace(/\/+$/, '');
+  if (path) $acLlmPath.value = path;
+}));
+
 // ── TTS環境変数チェック連動 ──
 function _updateTtsEnvState() {
   const checked = $acTtsUseEnv.checked;
@@ -7138,7 +7162,8 @@ const _LLM_KEEP_CURRENT_LABEL = '（現在のモデルをそのまま利用）';
 let _llmLoadBusy = false;
 
 function _setLlmModelOptions(models, current) {
-  const needsName = $acLlmPreset.value === 'ollama';
+  const preset    = _llmPresets.find(p => p.id === $acLlmPreset.value);
+  const needsName = !!(preset && preset.requires_model);
   const addOption = (value, label, disabled = false) => {
     const opt = document.createElement('option');
     opt.value = value;
@@ -7299,7 +7324,18 @@ $acLlmFetchBtn.addEventListener('click', async () => {
   $acLlmModelNote.textContent = '取得中...';
   $acLlmModelNote.className = 'ac-conn-note info';
   try {
-    const res = await fetch(`${API}/llm_models`);
+    // 画面に入力中の接続先から取得する（適用前でも、選んだプリセットのモデルを選べるように）
+    const res = await fetch(`${API}/llm_models`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        llm_use_env: $acLlmUseEnv.checked,
+        llm_host:    $acLlmHost.value.trim(),
+        llm_port:    parseInt($acLlmPort.value, 10) || null,
+        llm_path:    $acLlmPath.value.trim(),
+        llm_api_key: $acLlmKey.value.trim(),
+      }),
+    });
     const d   = await res.json();
     if (d.models && d.models.length > 0) {
       // 現在の選択を維持する（未選択のまま一覧の先頭へ勝手に切り替えない）
@@ -7491,6 +7527,11 @@ $acResetBtn.addEventListener('click', () => {
 $acApplyBtn.addEventListener('click', async () => {
   try { await saveTtsGenerationSettings(); }
   catch (error) { showErrorToast(error.message); return; }
+  // モデルIDの指定が必須のサーバ（Ollama / Strata）でモデル未選択のまま適用したら注意を出す（適用自体は行う）
+  const applyPreset = _llmPresets.find(p => p.id === $acLlmPreset.value);
+  if (applyPreset && applyPreset.requires_model && !$acLlmUseEnv.checked && !$acLlmModel.value.trim()) {
+    showErrorToast(`⚠ ${applyPreset.label} はモデルの指定が必須です。🔄 で一覧を取得してモデルを選択してください`);
+  }
   // ── LLM / TTS 接続設定の保存 ──
   try {
     const payload = {

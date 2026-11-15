@@ -129,12 +129,13 @@ _ENV_TTS_API_URL = os.getenv("TTS_API_URL", "")
 
 # LLMサーバプリセット
 LLM_PRESETS = [
-    {"id": "lm-studio",      "label": "LM Studio",            "host": "localhost", "port": 1234,  "path": "/v1", "key": "lm-studio", "supports_unload": True,  "supports_load": True},
-    {"id": "ollama",         "label": "Ollama",                "host": "localhost", "port": 11434, "path": "/v1", "key": "ollama",    "supports_unload": True,  "supports_load": True},
-    {"id": "text-gen-webui", "label": "text-generation-webui", "host": "localhost", "port": 5000,  "path": "/v1", "key": "",          "supports_unload": True,  "supports_load": True},
-    {"id": "koboldcpp",      "label": "KoboldCpp",             "host": "localhost", "port": 5001,  "path": "/v1", "key": "",          "supports_unload": False, "supports_load": False},
-    {"id": "llama-server",   "label": "llama.cpp server",      "host": "localhost", "port": 8080,  "path": "/v1", "key": "none",      "supports_unload": False, "supports_load": False},
-    {"id": "custom",         "label": "カスタム",              "host": "",          "port": None,  "path": "/v1", "key": "",          "supports_unload": False, "supports_load": False},
+    {"id": "lm-studio",      "label": "LM Studio",            "host": "localhost", "port": 1234,  "path": "/v1", "key": "lm-studio", "supports_unload": True,  "supports_load": True,  "requires_model": False},
+    {"id": "ollama",         "label": "Ollama",                "host": "localhost", "port": 11434, "path": "/v1", "key": "ollama",    "supports_unload": True,  "supports_load": True,  "requires_model": True},
+    {"id": "text-gen-webui", "label": "text-generation-webui", "host": "localhost", "port": 5000,  "path": "/v1", "key": "",          "supports_unload": True,  "supports_load": True,  "requires_model": False},
+    {"id": "koboldcpp",      "label": "KoboldCpp",             "host": "localhost", "port": 5001,  "path": "/v1", "key": "",          "supports_unload": False, "supports_load": False, "requires_model": False},
+    {"id": "llama-server",   "label": "llama.cpp server",      "host": "localhost", "port": 8080,  "path": "/v1", "key": "none",      "supports_unload": False, "supports_load": False, "requires_model": False},
+    {"id": "strata",         "label": "Strata",                "host": "127.0.0.1", "port": 47831, "path": "/v1", "key": "",          "supports_unload": False, "supports_load": False, "requires_model": True},
+    {"id": "custom",         "label": "カスタム",              "host": "",          "port": None,  "path": "/v1", "key": "",          "supports_unload": False, "supports_load": False, "requires_model": False},
 ]
 
 
@@ -3141,6 +3142,28 @@ def get_llm_models():
     """LLMサーバから利用可能なモデル一覧を取得する。サーバが落ちていても空配列を返す。"""
     try:
         models = client.models.list()
+        return JSONResponse({"models": [m.id for m in models.data], "error": None})
+    except Exception as e:
+        return JSONResponse({"models": [], "error": str(e)})
+
+
+class LlmModelsRequest(BaseModel):
+    llm_use_env: bool = False
+    llm_host:    str = ""
+    llm_port:    int | None = None
+    llm_path:    str = ""
+    llm_api_key: str = ""
+
+
+@app.post("/llm_models")
+def post_llm_models(req: LlmModelsRequest):
+    """環境設定の画面に入力中（未保存）の接続先からモデル一覧を取得する。
+    プリセットを選んだ直後でも、適用前にその接続先のモデルを選べるようにするため。"""
+    url = _build_llm_url(req.model_dump())
+    key = req.llm_api_key.strip() or "lm-studio"
+    try:
+        probe = OpenAI(base_url=url, api_key=key, timeout=10.0, max_retries=0)
+        models = probe.models.list()
         return JSONResponse({"models": [m.id for m in models.data], "error": None})
     except Exception as e:
         return JSONResponse({"models": [], "error": str(e)})
