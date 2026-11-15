@@ -3285,16 +3285,42 @@ def _llm_unload_instance(preset: str, base: str, key: str, instance_id: str) -> 
         _llm_admin_request(f"{base}/v1/internal/model/unload", post=True, key=key)
 
 
-@app.get("/llm_loaded")
-def llm_loaded():
-    """LLMサーバにロード済みのモデル一覧を返す (非対応プリセットは supported=False)"""
-    preset, base, key = _llm_admin_target(load_settings())
+class LlmAdminTarget(BaseModel):
+    """環境設定の画面に入力中（未保存）の接続先。省略した項目は保存済みの設定を使う。"""
+    llm_preset:  str | None = None
+    llm_host:    str | None = None
+    llm_port:    int | None = None
+    llm_api_key: str | None = None
+    llm_model:   str | None = None
+
+
+def _llm_admin_settings(target: LlmAdminTarget | None) -> dict:
+    settings = load_settings()
+    if target is not None:
+        settings.update(target.model_dump(exclude_none=True))
+    return settings
+
+
+def _llm_loaded_response(settings: dict):
+    preset, base, key = _llm_admin_target(settings)
     if preset not in _LLM_ADMIN_PRESETS:
         return JSONResponse({"supported": False, "loaded": [], "error": None})
     try:
         return JSONResponse({"supported": True, "loaded": _llm_loaded_models(preset, base, key), "error": None})
     except Exception as e:
         return JSONResponse({"supported": True, "loaded": [], "error": _llm_admin_error_text(e)})
+
+
+@app.get("/llm_loaded")
+def llm_loaded():
+    """LLMサーバにロード済みのモデル一覧を返す (非対応プリセットは supported=False)"""
+    return _llm_loaded_response(load_settings())
+
+
+@app.post("/llm_loaded")
+def post_llm_loaded(target: LlmAdminTarget):
+    """環境設定の画面に入力中（未保存）の接続先について、ロード済みのモデル一覧を返す"""
+    return _llm_loaded_response(_llm_admin_settings(target))
 
 
 class LlmLoadRequest(BaseModel):
@@ -3354,9 +3380,10 @@ def llm_load(req: LlmLoadRequest):
 
 
 @app.post("/llm_unload")
-def llm_unload():
-    """現在のプリセットに応じて、ロード済みのLLMモデルをすべてアンロードする。"""
-    settings = load_settings()
+def llm_unload(target: LlmAdminTarget | None = None):
+    """現在のプリセットに応じて、ロード済みのLLMモデルをすべてアンロードする。
+    target を渡すと、環境設定の画面に入力中（未保存）の接続先に対して実行する。"""
+    settings = _llm_admin_settings(target)
     preset, base, key = _llm_admin_target(settings)
     model = (settings.get("llm_model") or "").strip()
     if preset not in _LLM_ADMIN_PRESETS:

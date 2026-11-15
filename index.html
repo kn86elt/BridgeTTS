@@ -7195,8 +7195,19 @@ function _updateLoadBtn() {
   const hasModel = !!$acLlmModelSelect.value;
   $acLlmLoadBtn.disabled = _llmLoadBusy || !hasModel;
   $acLlmLoadBtn.title = hasModel
-    ? '選択中のモデルをLLMサーバへロードし、使用モデルに設定します'
+    ? '設定を適用して、選択中のモデルをLLMサーバへロードします'
     : 'ロードするモデルを選択してください';
+}
+
+// 画面に入力中（未保存）のLLM接続先。アンロードとロード済み表示はこの接続先に対して行う
+function _llmAdminTarget() {
+  return {
+    llm_preset:  $acLlmPreset.value,
+    llm_host:    $acLlmHost.value.trim(),
+    llm_port:    parseInt($acLlmPort.value, 10) || null,
+    llm_api_key: $acLlmKey.value.trim(),
+    llm_model:   $acLlmModel.value.trim(),
+  };
 }
 
 // LLMサーバにロード済みのモデルを表示する (ロード/アンロード対応プリセットのみ)
@@ -7205,7 +7216,11 @@ async function _refreshLlmLoaded() {
   $acLlmLoadedNote.className = 'ac-conn-note info';
   if (!preset || !preset.supports_load) { $acLlmLoadedNote.textContent = ''; return; }
   try {
-    const res = await fetch(`${API}/llm_loaded`);
+    const res = await fetch(`${API}/llm_loaded`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(_llmAdminTarget()),
+    });
     const d   = await res.json();
     if (!d.supported) {
       $acLlmLoadedNote.textContent = '';
@@ -7242,7 +7257,7 @@ $acLlmPreset.addEventListener('change', () => {
   if (!preset || preset.id === 'custom') {
     // 接続先は維持し、モデル選択肢の対応状態だけ現在のプリセットに合わせる
     _setLlmModelOptions(null, $acLlmModel.value.trim());
-    $acLlmLoadedNote.textContent = '';
+    _refreshLlmLoaded();
     _updateUnloadBtn();
     return;
   }
@@ -7254,7 +7269,7 @@ $acLlmPreset.addEventListener('change', () => {
   _setLlmModelOptions(null, '');
   $acLlmModelNote.textContent = '';
   $acLlmModelNote.className = 'ac-conn-note info';
-  $acLlmLoadedNote.textContent = '';
+  _refreshLlmLoaded();
   _updateUnloadBtn();
   _updateModelUI();
 });
@@ -7264,7 +7279,12 @@ $acLlmUnloadBtn.addEventListener('click', async () => {
   $acLlmUnloadBtn.disabled = true;
   $acLlmUnloadBtn.textContent = '🗑 アンロード中...';
   try {
-    const res = await fetch(`${API}/llm_unload`, { method: 'POST' });
+    // 画面に入力中の接続先に対して実行する（設定の保存は不要）
+    const res = await fetch(`${API}/llm_unload`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(_llmAdminTarget()),
+    });
     const d   = await res.json();
     if (d.ok) {
       showErrorToast('✓ ' + d.message, 'success');
@@ -7281,10 +7301,12 @@ $acLlmUnloadBtn.addEventListener('click', async () => {
 });
 
 // ── モデルロードボタン ──
-// 選択中のモデルを明示的にロードする。成功するとサーバ側で使用モデルとして保存される。
+// 選択中のモデルを明示的にロードする。ロードは保存済みの設定に対して行うため、
+// 画面の内容（プリセット・接続先・モデル）を先に適用してから実行する。
 $acLlmLoadBtn.addEventListener('click', async () => {
   const model = $acLlmModelSelect.value;
   if (!model || _llmLoadBusy) return;
+  if (!confirm('環境設定の適用を行ってモデルをロードします。よろしいですか？')) return;
   _llmLoadBusy = true;
   _updateLoadBtn();
   $acLlmUnloadBtn.disabled = true;
@@ -7292,6 +7314,11 @@ $acLlmLoadBtn.addEventListener('click', async () => {
   $acLlmLoadedNote.className = 'ac-conn-note info';
   $acLlmLoadedNote.textContent = 'モデルをロード中です（数十秒以上かかる場合があります）';
   try {
+    const applied = await applyApiConfig();
+    if (!applied || !applied.connectionSaved) {
+      showErrorToast('設定を適用できなかったため、モデルのロードを中止しました');
+      return;
+    }
     const res = await fetch(`${API}/llm_load`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -7523,10 +7550,12 @@ $acResetBtn.addEventListener('click', () => {
   $acTtsVersion.value = 'auto';
 });
 
-// 適用
-$acApplyBtn.addEventListener('click', async () => {
+// 適用: 画面の内容を保存して反映する（ダイアログは閉じない）。
+// TTS生成設定を保存できなかった場合は null、それ以外は { connectionSaved } を返す。
+async function applyApiConfig() {
+  let connectionSaved = false;
   try { await saveTtsGenerationSettings(); }
-  catch (error) { showErrorToast(error.message); return; }
+  catch (error) { showErrorToast(error.message); return null; }
   // モデルIDの指定が必須のサーバ（Ollama / Strata）でモデル未選択のまま適用したら注意を出す（適用自体は行う）
   const applyPreset = _llmPresets.find(p => p.id === $acLlmPreset.value);
   if (applyPreset && applyPreset.requires_model && !$acLlmUseEnv.checked && !$acLlmModel.value.trim()) {
@@ -7554,6 +7583,7 @@ $acApplyBtn.addEventListener('click', async () => {
       body: JSON.stringify(payload),
     });
     if (!res.ok) throw new Error('HTTP ' + res.status);
+    connectionSaved = true;
   } catch(e) {
     showErrorToast('接続設定エラー: ' + e.message);
   }
@@ -7601,7 +7631,12 @@ $acApplyBtn.addEventListener('click', async () => {
   } catch(e) {
     showErrorToast('設定保存エラー: ' + e.message);
   }
+  return { connectionSaved };
+}
 
+$acApplyBtn.addEventListener('click', async () => {
+  const applied = await applyApiConfig();
+  if (!applied) return;
   closeApiConfigModal();
 });
 
