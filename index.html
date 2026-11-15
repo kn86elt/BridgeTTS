@@ -7503,7 +7503,7 @@ document.getElementById('env-btn').addEventListener('click', () => {
 });
 $apiConfigClose.addEventListener('click', closeApiConfigModal);
 $acCancelBtn.addEventListener('click', closeApiConfigModal);
-$apiConfigBackdrop.addEventListener('click', e => { if (e.target === $apiConfigBackdrop) closeApiConfigModal(); });
+// ダイアログ外のクリックでは閉じない（入力中の設定を誤って失わないよう、✕・キャンセル・適用でのみ閉じる）
 
 // LM Studio プリセットに戻す
 $acResetBtn.addEventListener('click', () => {
