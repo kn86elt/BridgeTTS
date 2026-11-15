@@ -66,6 +66,7 @@ DEFAULT_SETTINGS = {
     "llm_model":    "",            # モデル名 (空="local-model"フォールバック)
     "llm_temperature":      "",    # 生成温度 (空=サーバ既定, 0〜2)
     "llm_presence_penalty": "",    # 反復抑制 (空=サーバ既定, -2〜2)
+    "llm_load_exclusive":   True,  # True=モデルのロード前に他のロード済みモデルをアンロードする
     # TTS接続設定（永続化）
     "tts_use_env":  False,         # True=環境変数TTS_API_URLを優先使用
     "tts_host":     "localhost",   # TTSサーバのホスト/IP
@@ -128,12 +129,12 @@ _ENV_TTS_API_URL = os.getenv("TTS_API_URL", "")
 
 # LLMサーバプリセット
 LLM_PRESETS = [
-    {"id": "lm-studio",      "label": "LM Studio",            "host": "localhost", "port": 1234,  "path": "/v1", "key": "lm-studio", "supports_unload": True},
-    {"id": "ollama",         "label": "Ollama",                "host": "localhost", "port": 11434, "path": "/v1", "key": "ollama",    "supports_unload": True},
-    {"id": "text-gen-webui", "label": "text-generation-webui", "host": "localhost", "port": 5000,  "path": "/v1", "key": "",          "supports_unload": True},
-    {"id": "koboldcpp",      "label": "KoboldCpp",             "host": "localhost", "port": 5001,  "path": "/v1", "key": "",          "supports_unload": False},
-    {"id": "llama-server",   "label": "llama.cpp server",      "host": "localhost", "port": 8080,  "path": "/v1", "key": "none",      "supports_unload": False},
-    {"id": "custom",         "label": "カスタム",              "host": "",          "port": None,  "path": "/v1", "key": "",          "supports_unload": False},
+    {"id": "lm-studio",      "label": "LM Studio",            "host": "localhost", "port": 1234,  "path": "/v1", "key": "lm-studio", "supports_unload": True,  "supports_load": True},
+    {"id": "ollama",         "label": "Ollama",                "host": "localhost", "port": 11434, "path": "/v1", "key": "ollama",    "supports_unload": True,  "supports_load": True},
+    {"id": "text-gen-webui", "label": "text-generation-webui", "host": "localhost", "port": 5000,  "path": "/v1", "key": "",          "supports_unload": True,  "supports_load": True},
+    {"id": "koboldcpp",      "label": "KoboldCpp",             "host": "localhost", "port": 5001,  "path": "/v1", "key": "",          "supports_unload": False, "supports_load": False},
+    {"id": "llama-server",   "label": "llama.cpp server",      "host": "localhost", "port": 8080,  "path": "/v1", "key": "none",      "supports_unload": False, "supports_load": False},
+    {"id": "custom",         "label": "カスタム",              "host": "",          "port": None,  "path": "/v1", "key": "",          "supports_unload": False, "supports_load": False},
 ]
 
 
@@ -3069,6 +3070,7 @@ def get_api_config():
         "llm_model":       settings.get("llm_model", ""),
         "llm_temperature":      settings.get("llm_temperature", ""),
         "llm_presence_penalty": settings.get("llm_presence_penalty", ""),
+        "llm_load_exclusive":   settings.get("llm_load_exclusive", True),
         "llm_api_url":     LLM_API_URL,   # 現在実際に使用中のURL
         # TTS設定
         "tts_use_env":     settings.get("tts_use_env", False),
@@ -3144,67 +3146,218 @@ def get_llm_models():
         return JSONResponse({"models": [], "error": str(e)})
 
 
-@app.post("/llm_unload")
-def llm_unload():
-    """現在のプリセットに応じてLLMモデルをアンロードする。"""
-    settings = load_settings()
-    preset   = settings.get("llm_preset", "lm-studio")
-    host     = (settings.get("llm_host") or "localhost").strip()
-    port     = settings.get("llm_port") or 1234
-    model    = (settings.get("llm_model") or "").strip()
-    base     = f"http://{host}:{port}"
+# ── LLMサーバの管理API (モデルのロード状態取得・ロード・アンロード) ──
+_LLM_ADMIN_PRESETS = ("lm-studio", "ollama", "text-gen-webui")
+_LLM_LOAD_TIMEOUT  = 600   # モデルのロード完了待ち (秒)
 
-    def _get_json(url, timeout=5):
-        req = _urllib_req.Request(url)
-        with _urllib_req.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read())
 
-    def _post_json(url, body=None, timeout=10):
+def _llm_admin_target(settings: dict) -> tuple[str, str, str]:
+    """(プリセットID, 管理APIのベースURL, APIキー) を返す"""
+    preset = settings.get("llm_preset", "lm-studio")
+    host   = (settings.get("llm_host") or "localhost").strip()
+    port   = settings.get("llm_port") or 1234
+    key    = (settings.get("llm_api_key") or "").strip()
+    return preset, f"http://{host}:{port}", key
+
+
+def _llm_admin_request(url: str, body=None, *, post: bool = False, key: str = "", timeout: float = 10):
+    """LLMサーバの管理APIを呼び、JSON応答を返す (空・非JSONの応答は {})"""
+    headers = {}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    data = None
+    if post or body is not None:
         data = json.dumps(body).encode() if body is not None else b""
-        req = _urllib_req.Request(url, data=data,
-                                   headers={"Content-Type": "application/json"},
-                                   method="POST")
-        with _urllib_req.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read())
+        headers["Content-Type"] = "application/json"
+    req = _urllib_req.Request(url, data=data, headers=headers,
+                              method="POST" if data is not None else "GET")
+    with _urllib_req.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read()
+    try:
+        return json.loads(raw) if raw.strip() else {}
+    except ValueError:
+        return {}
+
+
+def _llm_admin_error_text(e: Exception) -> str:
+    """管理APIのエラーを表示用の短い文字列にする (HTTPエラーは応答本文も含める)"""
+    if isinstance(e, _urllib_err.HTTPError):
+        try:
+            detail = e.read().decode("utf-8", "replace").strip()
+        except Exception:
+            detail = ""
+        return f"HTTP {e.code} {detail[:200]}".strip()
+    return str(e)
+
+
+def _llm_model_name_key(name: str) -> str:
+    """モデル名の比較用キー (Ollama のタグ省略 = :latest を同一視する)"""
+    name = (name or "").strip()
+    return name if ":" in name else name + ":latest"
+
+
+def _llm_is_same_model(entry: dict, model: str) -> bool:
+    target = _llm_model_name_key(model)
+    return any(_llm_model_name_key(entry.get(k, "")) == target for k in ("id", "model"))
+
+
+def _llm_loaded_models(preset: str, base: str, key: str) -> list[dict]:
+    """ロード済みLLMの一覧 [{"id", "model", "context_length"}] を返す。埋め込みモデルは含めない。"""
+    if preset == "lm-studio":
+        try:
+            raw = _llm_admin_request(f"{base}/api/v1/models", key=key, timeout=5)
+        except _urllib_err.HTTPError as e:
+            if e.code != 404:
+                raise
+            raw = None
+        if raw is not None:
+            loaded = []
+            for m in (raw.get("models") or []) if isinstance(raw, dict) else []:
+                if not isinstance(m, dict) or m.get("type") == "embedding":
+                    continue
+                for inst in m.get("loaded_instances") or []:
+                    if isinstance(inst, dict) and inst.get("id"):
+                        loaded.append({
+                            "id": inst["id"],
+                            "model": m.get("key") or inst["id"],
+                            "context_length": (inst.get("config") or {}).get("context_length"),
+                        })
+            return loaded
+        # 旧バージョンの LM Studio (v1 API なし)
+        raw = _llm_admin_request(f"{base}/api/v0/models", key=key, timeout=5)
+        models_list = raw.get("data", []) if isinstance(raw, dict) else raw
+        return [
+            {"id": m["id"], "model": m["id"], "context_length": m.get("loaded_context_length")}
+            for m in (models_list if isinstance(models_list, list) else [])
+            if isinstance(m, dict) and m.get("id") and m.get("state") == "loaded"
+            and m.get("type") != "embeddings"
+        ]
+
+    if preset == "ollama":
+        raw = _llm_admin_request(f"{base}/api/ps", key=key, timeout=5)
+        loaded = []
+        for m in (raw.get("models") or []) if isinstance(raw, dict) else []:
+            name = isinstance(m, dict) and (m.get("name") or m.get("model"))
+            if name:
+                loaded.append({"id": name, "model": name, "context_length": m.get("context_length")})
+        return loaded
+
+    if preset == "text-gen-webui":
+        raw = _llm_admin_request(f"{base}/v1/internal/model/info", key=key, timeout=5)
+        name = raw.get("model_name") if isinstance(raw, dict) else None
+        if name and name != "None":
+            return [{"id": name, "model": name, "context_length": None}]
+        return []
+
+    raise ValueError(f"{preset} はモデル管理に対応していません")
+
+
+def _llm_unload_instance(preset: str, base: str, key: str, instance_id: str) -> None:
+    if preset == "lm-studio":
+        _llm_admin_request(f"{base}/api/v1/models/unload", {"instance_id": instance_id}, key=key)
+    elif preset == "ollama":
+        # keep_alive: 0 でモデルをVRAMから解放
+        _llm_admin_request(f"{base}/api/generate", {"model": instance_id, "keep_alive": 0}, key=key)
+    else:
+        _llm_admin_request(f"{base}/v1/internal/model/unload", post=True, key=key)
+
+
+@app.get("/llm_loaded")
+def llm_loaded():
+    """LLMサーバにロード済みのモデル一覧を返す (非対応プリセットは supported=False)"""
+    preset, base, key = _llm_admin_target(load_settings())
+    if preset not in _LLM_ADMIN_PRESETS:
+        return JSONResponse({"supported": False, "loaded": [], "error": None})
+    try:
+        return JSONResponse({"supported": True, "loaded": _llm_loaded_models(preset, base, key), "error": None})
+    except Exception as e:
+        return JSONResponse({"supported": True, "loaded": [], "error": _llm_admin_error_text(e)})
+
+
+class LlmLoadRequest(BaseModel):
+    model: str
+    unload_others: bool = True   # True=他のロード済みモデルを先にアンロードする
+
+
+@app.post("/llm_load")
+def llm_load(req: LlmLoadRequest):
+    """選択したモデルをLLMサーバへ明示的にロードし、使用モデルとして保存する。
+    ロード完了まで応答を返さない (モデルによっては数十秒以上かかる)。"""
+    global LLM_MODEL
+    model = req.model.strip()
+    if not model:
+        return JSONResponse({"ok": False, "message": "ロードするモデルを選択してください"})
+    preset, base, key = _llm_admin_target(load_settings())
+    if preset not in _LLM_ADMIN_PRESETS:
+        return JSONResponse({"ok": False, "message": f"{preset} はモデルのロードに対応していません"})
 
     try:
-        if preset == "lm-studio":
-            # ① ロード済みモデルの instance_id を取得 (/api/v0/models)
-            raw = _get_json(f"{base}/api/v0/models", timeout=5)
-            # {"data": [...]} 形式と直接リスト形式の両方に対応
-            models_list = raw.get("data", raw) if isinstance(raw, dict) else raw
-            if not isinstance(models_list, list):
-                models_list = []
-            loaded = [m for m in models_list if isinstance(m, dict) and m.get("state") == "loaded"]
-            if not loaded:
-                loaded = [m for m in models_list if isinstance(m, dict)]  # フォールバック: 全件
-            if not loaded:
-                return JSONResponse({"ok": False, "message": "ロード済みモデルが見つかりません"})
-            # instance_id → id → path の順で探す
-            instance_id = (loaded[0].get("instance_id") or loaded[0].get("id")
-                           or loaded[0].get("path") or "")
-            if not instance_id:
-                return JSONResponse({"ok": False, "message": "モデル識別子を取得できませんでした"})
-            # ② アンロード: POST /api/v1/models/unload  body: {"instance_id": "..."}
-            _post_json(f"{base}/api/v1/models/unload", {"instance_id": instance_id}, timeout=10)
-            return JSONResponse({"ok": True, "message": f"アンロードしました: {instance_id}"})
-
-        elif preset == "ollama":
-            if not model:
-                return JSONResponse({"ok": False, "message": "モデル名が設定されていません（環境設定→モデル欄）"})
-            # keep_alive: 0 でモデルをVRAMから解放
-            _post_json(f"{base}/api/generate", {"model": model, "keep_alive": 0}, timeout=10)
-            return JSONResponse({"ok": True, "message": f"アンロードしました: {model}"})
-
-        elif preset == "text-gen-webui":
-            _post_json(f"{base}/v1/internal/model/unload", timeout=10)
-            return JSONResponse({"ok": True, "message": "モデルをアンロードしました"})
-
+        loaded  = _llm_loaded_models(preset, base, key)
+        already = any(_llm_is_same_model(m, model) for m in loaded)
+        unloaded = []
+        # text-generation-webui は1モデルのみ保持し、ロード時に自動で入れ替わる
+        if req.unload_others and preset != "text-gen-webui":
+            for m in loaded:
+                if not _llm_is_same_model(m, model):
+                    _llm_unload_instance(preset, base, key, m["id"])
+                    unloaded.append(m["id"])
+        if already:
+            message = f"すでにロード済みです: {model}"
         else:
-            return JSONResponse({"ok": False, "message": f"{preset} はアンロードに対応していません"})
-
+            if preset == "lm-studio":
+                _llm_admin_request(f"{base}/api/v1/models/load", {"model": model},
+                                   key=key, timeout=_LLM_LOAD_TIMEOUT)
+            elif preset == "ollama":
+                # プロンプトなしの generate はモデルをロードするだけで終わる
+                _llm_admin_request(f"{base}/api/generate", {"model": model, "stream": False},
+                                   key=key, timeout=_LLM_LOAD_TIMEOUT)
+            else:
+                _llm_admin_request(f"{base}/v1/internal/model/load", {"model_name": model},
+                                   key=key, timeout=_LLM_LOAD_TIMEOUT)
+            message = f"ロードしました: {model}"
+        if unloaded:
+            message += f"（アンロード: {', '.join(unloaded)}）"
     except Exception as e:
-        return JSONResponse({"ok": False, "message": f"エラー: {e}"})
+        return JSONResponse({"ok": False, "message": f"エラー: {_llm_admin_error_text(e)}"})
+
+    # ロードしたモデルを使用モデルにする (別のモデル名を送って自動ロードが起きるのを防ぐ)
+    with _settings_lock:
+        settings = load_settings()
+        settings["llm_model"] = model
+        save_settings(settings)
+    LLM_MODEL = model
+    print(f"[LLM] loaded model={model!r} unloaded={unloaded}")
+    return JSONResponse({"ok": True, "message": message, "model": model})
+
+
+@app.post("/llm_unload")
+def llm_unload():
+    """現在のプリセットに応じて、ロード済みのLLMモデルをすべてアンロードする。"""
+    settings = load_settings()
+    preset, base, key = _llm_admin_target(settings)
+    model = (settings.get("llm_model") or "").strip()
+    if preset not in _LLM_ADMIN_PRESETS:
+        return JSONResponse({"ok": False, "message": f"{preset} はアンロードに対応していません"})
+
+    try:
+        if preset == "text-gen-webui":
+            _llm_unload_instance(preset, base, key, "")
+            return JSONResponse({"ok": True, "message": "モデルをアンロードしました"})
+        try:
+            loaded = _llm_loaded_models(preset, base, key)
+        except Exception:
+            # ロード状態を取得できない Ollama では、設定中のモデル名でアンロードを試みる
+            if preset != "ollama" or not model:
+                raise
+            loaded = [{"id": model}]
+        if not loaded:
+            return JSONResponse({"ok": False, "message": "ロード済みモデルが見つかりません"})
+        for m in loaded:
+            _llm_unload_instance(preset, base, key, m["id"])
+        names = ", ".join(m["id"] for m in loaded)
+        return JSONResponse({"ok": True, "message": f"アンロードしました: {names}"})
+    except Exception as e:
+        return JSONResponse({"ok": False, "message": f"エラー: {_llm_admin_error_text(e)}"})
 
 
 # ══════════════════════════════════════════════════════
