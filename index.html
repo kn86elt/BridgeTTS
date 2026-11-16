@@ -1058,6 +1058,8 @@ body { background: var(--body-gradient); }
 .vd-candidate-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .vd-candidate-actions a { text-decoration: none; }
 #vd-candidates { display: flex; flex-direction: column; gap: 10px; }
+.vd-batch { display: flex; flex-direction: column; gap: 10px; }
+.vd-row audio { flex: 1; min-width: 200px; height: 34px; }
 #vd-modal details > summary { cursor: pointer; font-size: 12px; color: var(--muted); }
 #vd-modal select.ce-input { padding: 6px 8px; }
 
@@ -2007,11 +2009,16 @@ body.no-bubble-blur .msg-bubble {
         <label class="ce-label">レシピ</label>
         <div class="vd-row">
           <select class="ce-input" id="vd-recipe-select"></select>
+          <button type="button" class="ce-file-btn" id="vd-recipe-preview" title="読み込まずに、このレシピで1本だけ生成して試聴します">プレビュー</button>
           <button type="button" class="ce-file-btn" id="vd-recipe-load">読み込む</button>
           <button type="button" class="ce-file-btn" id="vd-recipe-delete">削除</button>
         </div>
+        <div class="vd-row" id="vd-recipe-preview-row" style="display:none">
+          <audio id="vd-recipe-preview-audio" controls preload="metadata"></audio>
+          <span class="vd-note" id="vd-recipe-preview-note"></span>
+        </div>
         <div class="vd-row">
-          <input type="text" class="ce-input" id="vd-recipe-name" maxlength="60" placeholder="レシピ名（例: 落ち着いた低めの女性）">
+          <input type="text" class="ce-input" id="vd-recipe-name" maxlength="60" placeholder="レシピ名（空欄なら自動で付けます）">
           <button type="button" class="ce-file-btn" id="vd-recipe-save">今の内容を保存</button>
         </div>
       </div>
@@ -2054,7 +2061,15 @@ body.no-bubble-blur .msg-bubble {
       <div class="ce-field">
         <label class="ce-label">セリフ（この音声がそのまま参照音声になります）</label>
         <textarea class="ce-textarea" id="vd-text" maxlength="400" placeholder="声の特徴に合った長めのセリフを入力します（目安: 読み上げて20〜30秒、100〜130文字程度）。"></textarea>
-        <div class="vd-note" id="vd-text-count"></div>
+        <div class="vd-row">
+          <button type="button" class="ce-file-btn" id="vd-test" title="今の内容で1本だけ生成して試聴します">▶ テスト</button>
+          <button type="button" class="ce-file-btn" id="vd-suggest" title="接続中のLLMに、captionに合うセリフを作らせます">✨ セリフ自動生成</button>
+          <span class="vd-note" id="vd-text-count" style="flex:1; text-align:right"></span>
+        </div>
+        <div class="vd-row" id="vd-test-row" style="display:none">
+          <audio id="vd-test-audio" controls preload="metadata"></audio>
+          <span class="vd-note" id="vd-test-note"></span>
+        </div>
         <details>
           <summary>絵文字パレット（話し方や効果音を指定）</summary>
           <div class="vd-emoji-grid" id="vd-emoji-grid"></div>
@@ -2115,6 +2130,7 @@ body.no-bubble-blur .msg-bubble {
       </div>
     </div>
     <div id="vd-footer">
+      <button type="button" class="modal-btn secondary" id="vd-reset" title="声の特徴・caption・セリフを既定値に戻します">クリア</button>
       <button type="button" class="modal-btn secondary" id="vd-cancel">閉じる</button>
     </div>
   </div>
@@ -8248,35 +8264,90 @@ const $vdStop         = document.getElementById('vd-stop');
 const $vdProgress     = document.getElementById('vd-progress');
 const $vdCandidates   = document.getElementById('vd-candidates');
 
-let vdParams = { gender: '', age: '', pitch: 3, speed: 3, quality: [], tone: [], distance: '' };
+const $vdRecipePreview      = document.getElementById('vd-recipe-preview');
+const $vdRecipePreviewRow   = document.getElementById('vd-recipe-preview-row');
+const $vdRecipePreviewAudio = document.getElementById('vd-recipe-preview-audio');
+const $vdRecipePreviewNote  = document.getElementById('vd-recipe-preview-note');
+const $vdTest      = document.getElementById('vd-test');
+const $vdSuggest   = document.getElementById('vd-suggest');
+const $vdTestRow   = document.getElementById('vd-test-row');
+const $vdTestAudio = document.getElementById('vd-test-audio');
+const $vdTestNote  = document.getElementById('vd-test-note');
+
+function vdDefaultParams() {
+  return { gender: '', age: '', pitch: 3, speed: 3, quality: [], tone: [], distance: '' };
+}
+
+let vdParams = vdDefaultParams();
 let vdCaptionEdited = false;   // true=captionを手で編集済み（声の特徴を変えても上書きしない）
 let vdAvailable = false;
 let vdModel = '';
 let vdSessionId = '';
 let vdRecipes = [];
-let vdBusy = false;
+let vdBusy = false;            // VoiceDesignサーバーで生成中
+let vdSuggesting = false;      // LLMでセリフを生成中
 let vdAbort = false;
 let vdUsedServer = false;      // この画面を開いてから生成したか（閉じるときのアンロード要否）
 let vdCandidateSeq = 0;
 let vdInitialized = false;
+let vdLastTest = null;         // { key, result }: 直前のテスト。入力が同じなら候補1として使う
 
 function vdOptionWord(group, value) {
   const found = VD_OPTIONS[group].find(o => o[0] === value);
   return found ? found[2] : '';
 }
 
+function vdOptionLabel(group, value) {
+  const found = VD_OPTIONS[group].find(o => o[0] === value);
+  return found ? found[1] : '';
+}
+
 // 声の特徴からcaptionを組み立てる（例: 落ち着いた、やや低めの声の若い女性が、近い距離感で、やさしく話している。）
+// 何も選ばれていなければ空文字を返す。
 function vdBuildCaption(p) {
   const qualities = (p.quality || []).map(v => vdOptionWord('quality', v)).filter(Boolean);
   const pitch = (VD_PITCH[p.pitch] || VD_PITCH[3])[1];
   let voice = '';
   if (qualities.length || pitch) voice = qualities.join('、') + (qualities.length && pitch ? '、' : '') + (pitch || '声');
-  const person = vdOptionWord('age', p.age) + (vdOptionWord('gender', p.gender) || '話者');
+  const ageWord = vdOptionWord('age', p.age);
+  const genderWord = vdOptionWord('gender', p.gender);
   const manner = [vdOptionWord('distance', p.distance)]
     .concat((p.tone || []).map(v => vdOptionWord('tone', v)))
     .concat([(VD_SPEED[p.speed] || VD_SPEED[3])[1]])
     .filter(Boolean);
+  if (!voice && !ageWord && !genderWord && !manner.length) return '';
+  const person = ageWord + (genderWord || '話者');
   return `${voice ? voice + 'の' : ''}${person}が${manner.length ? '、' + manner.join('、') : ''}話している。`;
+}
+
+// レシピ名を声の特徴から作る（例: 若い女性・やや低め・落ち着いた）
+function vdAutoRecipeName() {
+  const p = vdParams;
+  const parts = [];
+  if (p.gender) parts.push(vdOptionWord('age', p.age) + vdOptionLabel('gender', p.gender));
+  else if (p.age) parts.push(vdOptionLabel('age', p.age));
+  if (p.pitch !== 3) parts.push((VD_PITCH[p.pitch] || VD_PITCH[3])[0]);
+  p.quality.slice(0, 2).forEach(v => parts.push(vdOptionLabel('quality', v)));
+  p.tone.slice(0, 2).forEach(v => parts.push(vdOptionLabel('tone', v)));
+  if (p.distance) parts.push(vdOptionLabel('distance', p.distance));
+  let name = parts.filter(Boolean).join('・');
+  if (!name) name = $vdCaption.value.trim().slice(0, 24);
+  return (name || 'レシピ').slice(0, 54);
+}
+
+function vdUniqueRecipeName(base) {
+  let name = base;
+  for (let n = 2; vdRecipes.some(r => r.name === name); n++) name = `${base} (${n})`;
+  return name;
+}
+
+function vdUpdateRecipeNameHint() {
+  $vdRecipeName.placeholder = `レシピ名（空欄なら自動: ${vdUniqueRecipeName(vdAutoRecipeName())}）`;
+}
+
+function vdUpdateRecipeTitle() {
+  const recipe = vdRecipes.find(r => r.id === $vdRecipeSelect.value);
+  $vdRecipeSelect.title = recipe ? (recipe.caption || '（captionなし）') : '';
 }
 
 function vdRenderParams() {
@@ -8304,6 +8375,7 @@ function vdParamsChanged() {
   vdRenderParams();
   if (!vdCaptionEdited) $vdCaption.value = vdBuildCaption(vdParams);
   vdUpdateCaptionNote();
+  vdUpdateRecipeNameHint();
 }
 
 function vdUpdateTextCount() {
@@ -8336,6 +8408,20 @@ function vdGetGeneration() {
 function vdGetSeed() {
   const n = parseInt($vdSeed.value, 10);
   return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+function vdUpdateButtons() {
+  const blocked = vdBusy || !vdAvailable;
+  $vdGenerate.disabled = blocked;
+  $vdTest.disabled = blocked;
+  $vdRecipePreview.disabled = blocked;
+  $vdSuggest.disabled = vdSuggesting;
+}
+
+function vdSetBusy(busy, stoppable = false) {
+  vdBusy = busy;
+  $vdStop.style.display = busy && stoppable ? '' : 'none';
+  vdUpdateButtons();
 }
 
 function vdInit() {
@@ -8392,7 +8478,7 @@ async function vdCheckStatus() {
   vdAvailable = false;
   $vdStatus.className = 'vd-status';
   $vdStatus.textContent = '接続を確認中...';
-  $vdGenerate.disabled = true;
+  vdUpdateButtons();
   try {
     const res = await fetch(`${API}/voice_design/status`);
     const d = await res.json().catch(() => ({}));
@@ -8410,7 +8496,7 @@ async function vdCheckStatus() {
     $vdStatus.className = 'vd-status ng';
     $vdStatus.textContent = '✕ 接続を確認できませんでした: ' + error.message;
   }
-  $vdGenerate.disabled = !vdAvailable || vdBusy;
+  vdUpdateButtons();
 }
 
 async function vdLoadRecipes(selectId) {
@@ -8432,9 +8518,12 @@ async function vdLoadRecipes(selectId) {
     const opt = document.createElement('option');
     opt.value = r.id;
     opt.textContent = r.name;
+    opt.title = r.caption || '（captionなし）';
     $vdRecipeSelect.appendChild(opt);
   });
-  if (selectId) $vdRecipeSelect.value = selectId;
+  if (selectId && vdRecipes.some(r => r.id === selectId)) $vdRecipeSelect.value = selectId;
+  vdUpdateRecipeTitle();
+  vdUpdateRecipeNameHint();
 }
 
 function vdApplyRecipe(r) {
@@ -8457,12 +8546,14 @@ function vdApplyRecipe(r) {
   vdRenderParams();
   vdUpdateCaptionNote();
   vdUpdateTextCount();
+  vdUpdateRecipeNameHint();
 }
 
 async function vdSaveRecipe() {
-  const name = $vdRecipeName.value.trim();
-  if (!name) { showErrorToast('レシピ名を入力してください'); $vdRecipeName.focus(); return; }
-  const same = vdRecipes.find(r => r.name === name);
+  // 名前が空欄なら声の特徴から自動で付ける（既存の名前と重ならないよう番号を足す）
+  const typed = $vdRecipeName.value.trim();
+  const name = typed || vdUniqueRecipeName(vdAutoRecipeName());
+  const same = typed ? vdRecipes.find(r => r.name === name) : null;
   if (same && !confirm(`レシピ「${name}」を上書きします。よろしいですか？`)) return;
   try {
     const res = await fetch(`${API}/voice_design/recipes`, {
@@ -8483,7 +8574,7 @@ async function vdSaveRecipe() {
     const d = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(d.detail || `通信エラー（HTTP ${res.status}）`);
     await vdLoadRecipes(d.recipe && d.recipe.id);
-    showErrorToast('✓ レシピを保存しました', 'success');
+    showErrorToast(`✓ レシピ「${name}」を保存しました`, 'success');
   } catch (error) {
     showErrorToast('レシピを保存できませんでした: ' + error.message);
   }
@@ -8504,7 +8595,85 @@ async function vdDeleteRecipe() {
   }
 }
 
-function vdAddCandidate(d) {
+// 候補を1本生成する。失敗したら例外を投げる。
+async function vdRequestGenerate(text, caption, generation, seed) {
+  const res = await fetch(`${API}/voice_design/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(Object.assign({ session_id: vdSessionId, text, caption, seed }, generation)),
+  });
+  const d = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(d.detail || `通信エラー（HTTP ${res.status}）`);
+  vdSessionId = d.session_id || vdSessionId;
+  vdUsedServer = true;
+  return d;
+}
+
+function vdInputKey(text, caption, generation) {
+  return JSON.stringify([text, caption, generation]);
+}
+
+function vdResultSummary(d) {
+  const seconds = Number(d.seconds || 0);
+  return `seed ${d.seed} / ${seconds.toFixed(1)}秒` + (seconds > VD_MAX_REF_SECONDS ? ` ⚠ ${VD_MAX_REF_SECONDS}秒超` : '');
+}
+
+function vdShowPlayer(row, audio, note, d) {
+  audio.src = `${API}${d.url}`;
+  note.textContent = vdResultSummary(d);
+  row.style.display = '';
+  audio.play().catch(() => {});
+}
+
+// テスト: 今の内容で1本だけ生成して試聴する。入力を変えずに候補を生成すると、この音声が候補1になる。
+async function vdTest() {
+  if (vdBusy) return;
+  if (!vdAvailable) { showErrorToast('VoiceDesignを利用できません。接続を確認してください'); return; }
+  const text = $vdText.value.trim();
+  if (!text) { showErrorToast('セリフを入力してください'); $vdText.focus(); return; }
+  const caption = $vdCaption.value.trim();
+  const generation = vdGetGeneration();
+  vdSetBusy(true);
+  $vdTestRow.style.display = '';
+  $vdTestNote.textContent = 'テスト音声を生成中...';
+  try {
+    const d = await vdRequestGenerate(text, caption, generation, vdGetSeed());
+    vdLastTest = { key: vdInputKey(text, caption, generation), result: d };
+    vdShowPlayer($vdTestRow, $vdTestAudio, $vdTestNote, d);
+  } catch (error) {
+    $vdTestNote.textContent = '';
+    if (!$vdTestAudio.getAttribute('src')) $vdTestRow.style.display = 'none';
+    showErrorToast('テスト生成に失敗しました: ' + error.message);
+  } finally {
+    vdSetBusy(false);
+  }
+}
+
+// プレビュー: 選択中のレシピを読み込まずに、その内容で1本だけ生成して試聴する。
+async function vdPreviewRecipe() {
+  if (vdBusy) return;
+  const recipe = vdRecipes.find(r => r.id === $vdRecipeSelect.value);
+  if (!recipe) { showErrorToast('プレビューするレシピを選択してください'); return; }
+  if (!vdAvailable) { showErrorToast('VoiceDesignを利用できません。接続を確認してください'); return; }
+  if (!(recipe.text || '').trim()) { showErrorToast('このレシピにはセリフが保存されていません'); return; }
+  const generation = Object.assign({}, VD_GEN_DEFAULTS, recipe.generation || {});
+  vdSetBusy(true);
+  $vdRecipePreviewRow.style.display = '';
+  $vdRecipePreviewNote.textContent = `「${recipe.name}」を生成中...`;
+  try {
+    const d = await vdRequestGenerate(recipe.text, recipe.caption || '', generation, recipe.seed == null ? null : recipe.seed);
+    vdShowPlayer($vdRecipePreviewRow, $vdRecipePreviewAudio, $vdRecipePreviewNote, d);
+    $vdRecipePreviewNote.textContent = `「${recipe.name}」 ${vdResultSummary(d)}`;
+  } catch (error) {
+    $vdRecipePreviewNote.textContent = '';
+    if (!$vdRecipePreviewAudio.getAttribute('src')) $vdRecipePreviewRow.style.display = 'none';
+    showErrorToast('プレビュー生成に失敗しました: ' + error.message);
+  } finally {
+    vdSetBusy(false);
+  }
+}
+
+function vdAddCandidate(d, container, fromTest) {
   vdCandidateSeq += 1;
   const card = document.createElement('div');
   card.className = 'vd-candidate';
@@ -8518,6 +8687,11 @@ function vdAddCandidate(d) {
   meta.textContent = `seed ${d.seed} / ${Number(d.seconds || 0).toFixed(1)}秒 / ${steps}`;
   head.appendChild(title);
   head.appendChild(meta);
+  if (fromTest) {
+    const same = document.createElement('span');
+    same.textContent = '（テストと同じ音声）';
+    head.appendChild(same);
+  }
   if (Number(d.seconds || 0) > VD_MAX_REF_SECONDS) {
     const warn = document.createElement('span');
     warn.className = 'vd-warn';
@@ -8546,6 +8720,7 @@ function vdAddCandidate(d) {
     vdSetGeneration(d.generation);
     vdUpdateCaptionNote();
     vdUpdateTextCount();
+    vdUpdateRecipeNameHint();
     showErrorToast('✓ この候補の設定を入力欄に戻しました', 'success');
   });
   const save = document.createElement('a');
@@ -8559,13 +8734,7 @@ function vdAddCandidate(d) {
   card.appendChild(head);
   card.appendChild(audio);
   card.appendChild(actions);
-  $vdCandidates.prepend(card);
-}
-
-function vdSetBusy(busy) {
-  vdBusy = busy;
-  $vdGenerate.disabled = busy || !vdAvailable;
-  $vdStop.style.display = busy ? '' : 'none';
+  container.appendChild(card);
 }
 
 async function vdGenerateCandidates() {
@@ -8575,41 +8744,83 @@ async function vdGenerateCandidates() {
   if (!text) { showErrorToast('セリフを入力してください'); $vdText.focus(); return; }
   const caption = $vdCaption.value.trim();
   const generation = vdGetGeneration();
-  const baseSeed = vdGetSeed();
+  const fieldSeed = vdGetSeed();
   const count = Math.max(1, Math.min(6, parseInt($vdCount.value, 10) || 1));
+  // 直前のテストと入力が同じなら、テストの音声をそのまま候補1にする（同じseedなら同じ音声になるため作り直さない）
+  const key = vdInputKey(text, caption, generation);
+  const test = vdLastTest && vdLastTest.key === key && (fieldSeed === null || fieldSeed === vdLastTest.result.seed)
+    ? vdLastTest.result : null;
+  const baseSeed = test ? test.seed : fieldSeed;
+  if (test && fieldSeed === null) vdLastTest = null;   // seed未指定のテストは1回だけ使う（次は別の候補を作る）
+  // 生成順に上から並べる。新しい組は前の組の上に置く。
+  const batch = document.createElement('div');
+  batch.className = 'vd-batch';
+  $vdCandidates.prepend(batch);
   vdAbort = false;
-  vdSetBusy(true);
+  vdSetBusy(true, true);
   let made = 0;
   try {
     for (let i = 0; i < count; i++) {
       if (vdAbort) break;
+      if (i === 0 && test) {
+        vdAddCandidate(test, batch, true);
+        made += 1;
+        continue;
+      }
       $vdProgress.textContent = `生成中... (${i + 1}/${count})`;
-      const res = await fetch(`${API}/voice_design/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(Object.assign({
-          session_id: vdSessionId, text, caption,
-          seed: baseSeed === null ? null : baseSeed + i,
-        }, generation)),
-      });
-      const d = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(d.detail || `通信エラー（HTTP ${res.status}）`);
-      vdSessionId = d.session_id || vdSessionId;
-      vdUsedServer = true;
-      vdAddCandidate(d);
+      const seed = baseSeed === null ? null : (baseSeed + i) % 2147483648;
+      vdAddCandidate(await vdRequestGenerate(text, caption, generation, seed), batch, false);
       made += 1;
     }
-    $vdProgress.textContent = vdAbort ? `中止しました（${made}本生成）` : `${made}本生成しました`;
+    $vdProgress.textContent = vdAbort ? `中止しました（${made}本）` : `${made}本の候補を用意しました`;
   } catch (error) {
     $vdProgress.textContent = '';
     showErrorToast('生成に失敗しました: ' + error.message);
   } finally {
+    if (!batch.children.length) batch.remove();
     vdSetBusy(false);
   }
 }
 
+// セリフ自動生成: 接続中のLLMに、captionに合うセリフを作らせる。
+async function vdSuggestText() {
+  if (vdSuggesting) return;
+  if ($vdText.value.trim() && !confirm('今のセリフを、自動生成したセリフで上書きします。よろしいですか？')) return;
+  const label = $vdSuggest.textContent;
+  vdSuggesting = true;
+  $vdSuggest.textContent = '生成中...';
+  vdUpdateButtons();
+  try {
+    const res = await fetch(`${API}/voice_design/suggest_text`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ caption: $vdCaption.value.trim() }),
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.detail || `通信エラー（HTTP ${res.status}）`);
+    $vdText.value = (d.text || '').slice(0, $vdText.maxLength);
+    vdUpdateTextCount();
+  } catch (error) {
+    showErrorToast('セリフを自動生成できませんでした: ' + error.message);
+  } finally {
+    vdSuggesting = false;
+    $vdSuggest.textContent = label;
+    vdUpdateButtons();
+  }
+}
+
+// クリア: 声の特徴・caption・セリフを既定値に戻す（生成設定・seed・候補・レシピは残す）
+function vdResetInputs() {
+  if (!confirm('声の特徴・caption・セリフを既定値に戻します。よろしいですか？')) return;
+  vdParams = vdDefaultParams();
+  vdCaptionEdited = false;
+  $vdText.value = '';
+  vdParamsChanged();
+  vdUpdateTextCount();
+}
+
 function vdStopAudio() {
-  $vdCandidates.querySelectorAll('audio').forEach(a => a.pause());
+  document.querySelectorAll('#vd-modal audio').forEach(a => a.pause());
 }
 
 function openVoiceDesignModal() {
@@ -8635,6 +8846,7 @@ function closeVoiceDesignModal() {
 document.getElementById('voice-design-btn').addEventListener('click', openVoiceDesignModal);
 document.getElementById('vd-close').addEventListener('click', closeVoiceDesignModal);
 document.getElementById('vd-cancel').addEventListener('click', closeVoiceDesignModal);
+document.getElementById('vd-reset').addEventListener('click', vdResetInputs);
 document.getElementById('vd-status-retry').addEventListener('click', vdCheckStatus);
 document.getElementById('vd-recipe-save').addEventListener('click', vdSaveRecipe);
 document.getElementById('vd-recipe-delete').addEventListener('click', vdDeleteRecipe);
@@ -8644,20 +8856,24 @@ document.getElementById('vd-recipe-load').addEventListener('click', () => {
   vdApplyRecipe(recipe);
   showErrorToast('✓ レシピを読み込みました', 'success');
 });
+$vdRecipePreview.addEventListener('click', vdPreviewRecipe);
+$vdRecipeSelect.addEventListener('change', vdUpdateRecipeTitle);
 document.getElementById('vd-caption-rebuild').addEventListener('click', () => {
   vdCaptionEdited = false;
   vdParamsChanged();
 });
 document.getElementById('vd-gen-reset').addEventListener('click', () => vdSetGeneration(null));
 document.getElementById('vd-clear').addEventListener('click', () => {
-  vdStopAudio();
+  $vdCandidates.querySelectorAll('audio').forEach(a => a.pause());
   $vdCandidates.innerHTML = '';
   $vdProgress.textContent = '';
 });
 $vdPitch.addEventListener('input', () => { vdParams.pitch = parseInt($vdPitch.value, 10) || 3; vdParamsChanged(); });
 $vdSpeed.addEventListener('input', () => { vdParams.speed = parseInt($vdSpeed.value, 10) || 3; vdParamsChanged(); });
-$vdCaption.addEventListener('input', () => { vdCaptionEdited = true; vdUpdateCaptionNote(); });
+$vdCaption.addEventListener('input', () => { vdCaptionEdited = true; vdUpdateCaptionNote(); vdUpdateRecipeNameHint(); });
 $vdText.addEventListener('input', vdUpdateTextCount);
+$vdTest.addEventListener('click', vdTest);
+$vdSuggest.addEventListener('click', vdSuggestText);
 $vdGenerate.addEventListener('click', vdGenerateCandidates);
 $vdStop.addEventListener('click', () => { vdAbort = true; $vdProgress.textContent = '中止しています（生成中の1本が終わるまでお待ちください）...'; });
 </script>

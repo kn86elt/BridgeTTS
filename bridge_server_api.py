@@ -3678,6 +3678,74 @@ def voice_design_unload():
         return {"ok": False, "message": "VoiceDesign側のモデルを解放できませんでした"}
 
 
+# ── セリフの自動生成（接続中のLLMを使う）────────────────────────────────
+
+VD_SUGGEST_SCENES = (
+    "朝、目を覚ました相手に声をかける", "夜、眠る前に一日を振り返る", "雨の日に窓の外を眺めている",
+    "久しぶりに会った相手と近況を話す", "買い物の帰り道に寄り道を提案する", "子どものころの思い出を語る",
+    "落ち込んでいる相手を励ます", "小さな失敗を打ち明ける", "好きな食べ物について語る",
+    "旅行の計画を立てている", "待ち合わせに遅れた相手を迎える", "季節の移り変わりを感じている",
+    "最近はまっていることを紹介する", "大事な約束を確かめる", "散歩の途中で見つけたものを報告する",
+    "明日の予定を相談する",
+)
+
+_VD_SUGGEST_SYSTEM_PROMPT = (
+    "あなたは音声合成の声をテストするためのセリフを書くライターです。"
+    "指定された「声の説明」の人物が実際に言いそうなセリフを1つ書いてください。\n"
+    "条件:\n"
+    "- 日本語の話し言葉で、その声の雰囲気・感情・話し方がよく表れる内容にする\n"
+    "- 長さは100〜130文字程度。3〜5文で、ひと続きの独白にする\n"
+    "- 「場面のヒント」を参考に、毎回違う場面・話題にする\n"
+    "- 絵文字・記号・括弧・ト書き・話者名は使わない。読みが難しい漢字や英数字は避ける\n"
+    "- セリフの本文だけを出力し、前置きや説明、かぎ括弧は付けない"
+)
+
+
+def _vd_clean_suggested_text(raw) -> str:
+    """LLMの出力からセリフ本文だけを取り出す。"""
+    text = re.sub(r"<think>.*?</think>", "", str(raw or ""), flags=re.S | re.I)
+    text = re.sub(r"^.*?</think>", "", text, flags=re.S | re.I)   # 閉じタグだけ出すモデル向け
+    text = "".join(line.strip() for line in text.splitlines())
+    text = re.sub(r"^(セリフ|台詞|せりふ)\s*[:：]\s*", "", text)
+    text = text.strip().strip("「」『』\"'“”").strip()
+    if len(text) > VD_TEXT_MAX_CHARS:
+        cut = text[:VD_TEXT_MAX_CHARS]
+        end = max(cut.rfind(ch) for ch in "。！？!?")
+        text = cut[:end + 1] if end >= 0 else cut
+    return text
+
+
+@app.post("/voice_design/suggest_text")
+def voice_design_suggest_text(data: dict = Body(...)):
+    """captionに合うテスト用のセリフを、接続中のLLMに作らせる。
+    context（キャラクター設定）は任意。キャラクター編集と接続したときに使う。"""
+    caption = str(data.get("caption") or "").strip()[:VD_CAPTION_MAX_CHARS]
+    context = str(data.get("context") or "").strip()[:4000]
+    scene = VD_SUGGEST_SCENES[int.from_bytes(os.urandom(2), "big") % len(VD_SUGGEST_SCENES)]
+    parts = [f"声の説明:\n{caption or '指定なし（自然で聞き取りやすい声）'}"]
+    if context:
+        parts.append(f"キャラクター設定（口調や性格、セリフ集があれば参考にする）:\n{context}")
+    parts.append(f"場面のヒント: {scene}")
+    parts.append("セリフ:")
+    try:
+        resp = client.chat.completions.create(
+            model=LLM_MODEL or "local-model",
+            messages=[
+                {"role": "system", "content": _VD_SUGGEST_SYSTEM_PROMPT},
+                {"role": "user",   "content": "\n\n".join(parts)},
+            ],
+            temperature=1.0,
+            stream=False,
+        )
+        text = _vd_clean_suggested_text(resp.choices[0].message.content)
+    except Exception as e:
+        print(f"[VoiceDesign] セリフの自動生成に失敗しました: {e}")
+        raise HTTPException(502, "LLMでセリフを生成できませんでした。LLMサーバに接続でき、モデルがロードされているか確認してください")
+    if not text:
+        raise HTTPException(502, "LLMから使えるセリフが返ってきませんでした。もう一度お試しください")
+    return {"text": text, "scene": scene}
+
+
 # ── レシピ（パラメータ・caption・セリフ・生成設定・seed の組）────────────────
 
 def _vd_load_recipes() -> list:
