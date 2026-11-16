@@ -1697,7 +1697,7 @@ def _tts_reference_paths(voice_path, *, multiple: bool) -> list[str]:
     return paths if multiple else paths[:1]
 
 
-def generate_and_encode_tts(text, voice_path, embedding_path=None):
+def generate_and_encode_tts(text, voice_path, embedding_path=None, seed_override=None):
     """TTSを生成してBase64文字列で返す。
     embedding_path が指定されAPIが対応している場合はSpeaker Embeddingを使用する。
     tts_client はスレッドセーフでないため tts_generate_lock で排他制御する。"""
@@ -1766,6 +1766,9 @@ def generate_and_encode_tts(text, voice_path, embedding_path=None):
                               "uploaded_audio": uploaded_audio}
             if tts_supports_embedding:
                 predict_kwargs["uploaded_speaker_embedding"] = uploaded_embedding
+            if seed_override is not None:
+                # 声づくりの会話テスト用。聞き比べのためseedだけ固定する（通常の会話では使わない）
+                predict_kwargs["seed_raw"] = str(seed_override)
             result = tts.predict(**predict_kwargs)
 
             res_data = result[0]
@@ -2077,6 +2080,7 @@ def audio_poll(req_id: str):
 def on_startup():
     threading.Thread(target=open_browser, daemon=True).start()
     threading.Thread(target=_game_lease_reaper, daemon=True).start()
+    threading.Thread(target=_vd_cleanup_work_dir, daemon=True).start()
 
 
 # --- 自動応答: ユーザー役返答生成 ---
@@ -3678,7 +3682,7 @@ def voice_design_unload():
         return {"ok": False, "message": "VoiceDesign側のモデルを解放できませんでした"}
 
 
-# ── セリフの自動生成（接続中のLLMを使う）────────────────────────────────
+# ── セリフのカテゴリと自動生成（接続中のLLMを使う）────────────────────────
 
 VD_SUGGEST_SCENES = (
     "朝、目を覚ました相手に声をかける", "夜、眠る前に一日を振り返る", "雨の日に窓の外を眺めている",
@@ -3688,13 +3692,31 @@ VD_SUGGEST_SCENES = (
     "最近はまっていることを紹介する", "大事な約束を確かめる", "散歩の途中で見つけたものを報告する",
     "明日の予定を相談する",
 )
+VD_SUGGEST_GREETING_SCENES = (
+    "朝の挨拶", "昼に出会ったときの挨拶", "夜の挨拶", "久しぶりに会った相手への挨拶",
+    "初対面の自己紹介", "帰ってきた相手を迎える", "出かける相手を見送る", "眠る前の挨拶",
+)
+VD_SUGGEST_EMOTION_SCENES = (
+    "嬉しい知らせを聞いて喜ぶ", "思いがけないことに驚く", "褒められて照れる", "約束を忘れられて少し怒る",
+    "ひとりで寂しがる", "無事を知って安心する", "あと一歩で失敗して悔しがる", "楽しみな予定にわくわくする",
+)
+
+# カテゴリ → (長さと形の指示, 場面のヒント)。画面のタブ（index.html の VD_TEXT_CATEGORIES）と同じキーにする。
+VD_TEXT_CATEGORIES = {
+    "greeting": ("長さは10〜25文字程度。1〜2文の短い挨拶にする", VD_SUGGEST_GREETING_SCENES),
+    "daily":    ("長さは50〜70文字程度。2〜3文で、相手に話しかける日常会話にする", VD_SUGGEST_SCENES),
+    "emotion":  ("長さは40〜60文字程度。1〜3文で、感情がはっきり表れる一言にする", VD_SUGGEST_EMOTION_SCENES),
+    "story":    ("長さは100〜130文字程度。3〜5文で、ひと続きの独白にする", VD_SUGGEST_SCENES),
+    "free":     ("長さは100〜130文字程度。3〜5文で、ひと続きの独白にする", VD_SUGGEST_SCENES),
+}
+VD_TEXT_DEFAULT_CATEGORY = "story"
 
 _VD_SUGGEST_SYSTEM_PROMPT = (
     "あなたは音声合成の声をテストするためのセリフを書くライターです。"
     "指定された「声の説明」の人物が実際に言いそうなセリフを1つ書いてください。\n"
     "条件:\n"
     "- 日本語の話し言葉で、その声の雰囲気・感情・話し方がよく表れる内容にする\n"
-    "- 長さは100〜130文字程度。3〜5文で、ひと続きの独白にする\n"
+    "- {length}\n"
     "- 「場面のヒント」を参考に、毎回違う場面・話題にする\n"
     "- 絵文字・記号・括弧・ト書き・話者名は使わない。読みが難しい漢字や英数字は避ける\n"
     "- セリフの本文だけを出力し、前置きや説明、かぎ括弧は付けない"
@@ -3717,11 +3739,15 @@ def _vd_clean_suggested_text(raw) -> str:
 
 @app.post("/voice_design/suggest_text")
 def voice_design_suggest_text(data: dict = Body(...)):
-    """captionに合うテスト用のセリフを、接続中のLLMに作らせる。
+    """captionに合うテスト用のセリフを、接続中のLLMに作らせる。category でセリフの長さと内容を変える。
     context（キャラクター設定）は任意。キャラクター編集と接続したときに使う。"""
     caption = str(data.get("caption") or "").strip()[:VD_CAPTION_MAX_CHARS]
     context = str(data.get("context") or "").strip()[:4000]
-    scene = VD_SUGGEST_SCENES[int.from_bytes(os.urandom(2), "big") % len(VD_SUGGEST_SCENES)]
+    category = str(data.get("category") or "")
+    if category not in VD_TEXT_CATEGORIES:
+        category = VD_TEXT_DEFAULT_CATEGORY
+    length, scenes = VD_TEXT_CATEGORIES[category]
+    scene = scenes[int.from_bytes(os.urandom(2), "big") % len(scenes)]
     parts = [f"声の説明:\n{caption or '指定なし（自然で聞き取りやすい声）'}"]
     if context:
         parts.append(f"キャラクター設定（口調や性格、セリフ集があれば参考にする）:\n{context}")
@@ -3731,7 +3757,7 @@ def voice_design_suggest_text(data: dict = Body(...)):
         resp = client.chat.completions.create(
             model=LLM_MODEL or "local-model",
             messages=[
-                {"role": "system", "content": _VD_SUGGEST_SYSTEM_PROMPT},
+                {"role": "system", "content": _VD_SUGGEST_SYSTEM_PROMPT.format(length=length)},
                 {"role": "user",   "content": "\n\n".join(parts)},
             ],
             temperature=1.0,
@@ -3743,7 +3769,90 @@ def voice_design_suggest_text(data: dict = Body(...)):
         raise HTTPException(502, "LLMでセリフを生成できませんでした。LLMサーバに接続でき、モデルがロードされているか確認してください")
     if not text:
         raise HTTPException(502, "LLMから使えるセリフが返ってきませんでした。もう一度お試しください")
-    return {"text": text, "scene": scene}
+    return {"text": text, "scene": scene, "category": category}
+
+
+# ── 会話用サーバーでの確認（候補を参照音声にして、会話と同じ設定で喋らせる）──────
+
+VD_CONV_TEST_SEED      = 3001   # 候補どうしを聞き比べやすいよう、会話テストのseedは固定する
+VD_CONV_TEXT_MAX_CHARS = 200
+
+
+def _vd_candidate_path(session_id, candidate_id) -> str:
+    """一時フォルダ内の候補音声のパスを返す。見つからなければ 404。"""
+    session_id = str(session_id or "")
+    filename = f"{candidate_id}.wav"
+    if not _VD_SESSION_RE.fullmatch(session_id) or not _VD_FILE_RE.fullmatch(filename):
+        raise HTTPException(404, "候補の音声が見つかりません")
+    path = os.path.join(VD_WORK_DIR, session_id, filename)
+    if not os.path.isfile(path):
+        raise HTTPException(404, "候補の音声が見つかりません（一時ファイルが削除された可能性があります）")
+    return os.path.abspath(path)
+
+
+@app.get("/voice_design/conversation_status")
+def voice_design_conversation_status():
+    """会話用TTSサーバーが使えるかと、会話テストで使われる設定を返す。"""
+    if get_tts_client() is None:
+        return {"available": False, "url": TTS_API_URL,
+                "reason": f"会話用のTTSサーバーに接続できません（{TTS_API_URL}）"}
+    version = tts_api_version if tts_api_version in DEFAULT_TTS_CONFIG else "v2"
+    config = TTS_CONFIG.get(version, {})
+    steps = config.get("num_steps", "")
+    return {
+        "available":   True,
+        "url":         TTS_API_URL,
+        "api_version": version,
+        "num_steps":   "" if steps is None else str(steps),
+        "checkpoint":  str(config.get(f"checkpoint_{version}") or ""),
+        "seed":        VD_CONV_TEST_SEED,
+    }
+
+
+@app.post("/voice_design/conversation_test")
+def voice_design_conversation_test(data: dict = Body(...)):
+    """候補の音声を参照音声にして、会話と同じ生成処理でセリフを喋らせる。"""
+    reference = _vd_candidate_path(data.get("session_id"), data.get("candidate_id"))
+    text = clean_for_tts(str(data.get("text") or "").strip())
+    if not text:
+        raise HTTPException(400, "セリフを入力してください")
+    if len(text) > VD_CONV_TEXT_MAX_CHARS:
+        raise HTTPException(400, f"セリフは{VD_CONV_TEXT_MAX_CHARS}文字以内にしてください")
+    if get_tts_client() is None:
+        raise HTTPException(503, f"会話用のTTSサーバーに接続できません（{TTS_API_URL}）")
+    audio_b64 = generate_and_encode_tts(text, reference, None, seed_override=VD_CONV_TEST_SEED)
+    if audio_b64 is None:
+        raise HTTPException(502, "会話用サーバーでの生成に失敗しました")
+    return {"audio": audio_b64, "text": text, "seed": VD_CONV_TEST_SEED}
+
+
+# ── 一時フォルダの掃除 ──────────────────────────────────────────────
+
+VD_WORK_KEEP_DAYS = 7
+
+
+def _vd_cleanup_work_dir() -> int:
+    """一時フォルダのうち、最後の更新から VD_WORK_KEEP_DAYS 日を過ぎたセッションを削除する。
+    対象は VD_WORK_DIR 直下の、セッションIDの形をした実フォルダだけ。削除した数を返す。"""
+    removed = 0
+    try:
+        if not os.path.isdir(VD_WORK_DIR):
+            return 0
+        limit = time.time() - VD_WORK_KEEP_DAYS * 86400
+        for entry in os.listdir(VD_WORK_DIR):
+            path = os.path.join(VD_WORK_DIR, entry)
+            if not _VD_SESSION_RE.fullmatch(entry) or os.path.islink(path) or not os.path.isdir(path):
+                continue
+            stamps = [os.path.getmtime(path)]
+            stamps += [os.path.getmtime(os.path.join(path, name)) for name in os.listdir(path)]
+            if max(stamps) < limit:
+                shutil.rmtree(path, ignore_errors=True)
+                removed += 1
+    except Exception as e:
+        print(f"[VoiceDesign] 一時フォルダの掃除に失敗しました: {e}")
+    if removed:
+        print(f"[VoiceDesign] 古い候補音声のフォルダを{removed}件削除しました")
+    return removed
 
 
 # ── レシピ（パラメータ・caption・セリフ・生成設定・seed の組）────────────────
@@ -3791,6 +3900,9 @@ def _vd_clean_recipe(data: dict) -> dict:
     params = data.get("params")
     if not isinstance(params, dict) or len(json.dumps(params, ensure_ascii=False)) > 4000:
         raise HTTPException(400, "パラメータの形式が不正です")
+    texts_raw = data.get("texts") if isinstance(data.get("texts"), dict) else {}
+    texts = {key: str(texts_raw.get(key) or "").strip()[:VD_TEXT_MAX_CHARS] for key in VD_TEXT_CATEGORIES}
+    category = str(data.get("text_category") or "")
     seed_raw = data.get("seed")
     return {
         "name":           name,
@@ -3798,6 +3910,8 @@ def _vd_clean_recipe(data: dict) -> dict:
         "caption":        caption,
         "caption_edited": bool(data.get("caption_edited")),
         "text":           text,
+        "texts":          texts,
+        "text_category":  category if category in VD_TEXT_CATEGORIES else VD_TEXT_DEFAULT_CATEGORY,
         "generation":     _vd_generation_settings(data.get("generation") or {}),
         "seed":           None if seed_raw in (None, "") else _vd_seed(seed_raw),
         "model":          str(data.get("model") or "")[:200],

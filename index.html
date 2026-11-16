@@ -1060,6 +1060,20 @@ body { background: var(--body-gradient); }
 #vd-candidates { display: flex; flex-direction: column; gap: 10px; }
 .vd-batch { display: flex; flex-direction: column; gap: 10px; }
 .vd-row audio { flex: 1; min-width: 200px; height: 34px; }
+.vd-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--border); }
+.vd-tab {
+  padding: 5px 12px; font-size: 12px; font-family: 'Noto Sans JP', sans-serif;
+  background: transparent; color: var(--muted);
+  border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0; cursor: pointer;
+}
+.vd-tab:hover { color: var(--text); }
+.vd-tab.active { color: var(--text); border-color: var(--border); background: var(--input-bg); }
+.vd-tab.filled::after { content: '●'; font-size: 7px; margin-left: 4px; color: var(--accent); vertical-align: middle; }
+.vd-conv { display: none; flex-direction: column; gap: 8px; padding-top: 8px; border-top: 1px dashed var(--border); }
+.vd-conv.open { display: flex; }
+.vd-conv-results { display: flex; flex-direction: column; gap: 8px; }
+.vd-conv-result { display: flex; flex-direction: column; gap: 4px; }
+.vd-conv-result audio { width: 100%; height: 34px; }
 #vd-modal details > summary { cursor: pointer; font-size: 12px; color: var(--muted); }
 #vd-modal select.ce-input { padding: 6px 8px; }
 
@@ -2059,7 +2073,9 @@ body.no-bubble-blur .msg-bubble {
       </div>
 
       <div class="ce-field">
-        <label class="ce-label">セリフ（この音声がそのまま参照音声になります）</label>
+        <label class="ce-label">セリフ</label>
+        <div class="vd-tabs" id="vd-text-tabs" role="tablist"></div>
+        <div class="vd-note" id="vd-text-hint"></div>
         <textarea class="ce-textarea" id="vd-text" maxlength="400" placeholder="声の特徴に合った長めのセリフを入力します（目安: 読み上げて20〜30秒、100〜130文字程度）。"></textarea>
         <div class="vd-row">
           <button type="button" class="ce-file-btn" id="vd-test" title="今の内容で1本だけ生成して試聴します">▶ テスト</button>
@@ -2126,7 +2142,7 @@ body.no-bubble-blur .msg-bubble {
           <button type="button" class="ce-file-btn" id="vd-clear">候補をクリア</button>
         </div>
         <div id="vd-candidates"></div>
-        <div class="vd-note">気に入った候補は「WAVを保存」で保存し、キャラクターの編集画面で音声ファイルとして選択してください。</div>
+        <div class="vd-note">「参照音声としてテスト」で、会話用サーバーでの聞こえ方を確かめられます。気に入った候補は「WAVを保存」で保存し、キャラクターの編集画面で音声ファイルとして選択してください。</div>
       </div>
     </div>
     <div id="vd-footer">
@@ -8274,6 +8290,193 @@ const $vdTestRow   = document.getElementById('vd-test-row');
 const $vdTestAudio = document.getElementById('vd-test-audio');
 const $vdTestNote  = document.getElementById('vd-test-note');
 
+// セリフのカテゴリ: [キー, タブ名, 入力欄の案内, タブの説明]。キーはサーバー側の VD_TEXT_CATEGORIES と同じにする。
+const VD_TEXT_CATEGORIES = [
+  ['greeting', '挨拶', '短い挨拶のセリフ（目安: 約5秒、10〜25文字）',
+   '短い挨拶で声の第一印象を確かめます。参照音声にするなら「語り」の長めのセリフが向いています。'],
+  ['daily', '日常会話', '相手に話しかける日常会話のセリフ（目安: 10〜15秒、50〜70文字）',
+   '普段の話し方を確かめます。参照音声にするなら「語り」の長めのセリフが向いています。'],
+  ['emotion', '感情', '感情がはっきり表れるセリフ（目安: 約10秒、40〜60文字）',
+   '喜びや驚きなどの表現を確かめます。参照音声にするなら「語り」の長めのセリフが向いています。'],
+  ['story', '語り', '声の特徴に合った長めのセリフ（目安: 20〜30秒、100〜130文字）',
+   '参照音声向けの長めのセリフです。生成した音声がそのまま参照音声になります。'],
+  ['free', '自由入力', '好きなセリフを入力します',
+   '手持ちのセリフを自由に試せます。セリフの長さが変わると、同じcaptionとseedでも声色が変わることがあります。'],
+];
+const VD_TEXT_DEFAULT_CATEGORY = 'story';
+// 会話用サーバーでの「まとめてテスト」に使うセリフ（セリフ欄の同じカテゴリに入力があればそちらを使う）
+const VD_CONV_PRESETS = [
+  ['greeting', '挨拶', 'おはようございます。今日もよろしくお願いします。'],
+  ['daily', '日常会話', 'そういえば、駅前に新しいお店ができたみたいですよ。今度、一緒に行ってみませんか。'],
+  ['emotion', '感情', 'えっ、本当ですか！それはすごいですね。わたしまで嬉しくなっちゃいます。'],
+];
+const VD_CONV_TEXT_MAX = 200;
+const $vdTextTabs = document.getElementById('vd-text-tabs');
+const $vdTextHint = document.getElementById('vd-text-hint');
+
+function vdEmptyTexts() {
+  const texts = {};
+  VD_TEXT_CATEGORIES.forEach(([key]) => { texts[key] = ''; });
+  return texts;
+}
+
+let vdTexts = vdEmptyTexts();          // カテゴリごとのセリフ
+let vdTextCategory = VD_TEXT_DEFAULT_CATEGORY;
+let vdTextTabsReady = false;
+let vdConvBusy = false;                // 会話用サーバーで生成中
+
+function vdRenderTextTabs() {
+  const current = VD_TEXT_CATEGORIES.find(([key]) => key === vdTextCategory) || VD_TEXT_CATEGORIES[0];
+  $vdTextTabs.querySelectorAll('.vd-tab').forEach(tab => {
+    const key = tab.dataset.category;
+    tab.classList.toggle('active', key === vdTextCategory);
+    tab.classList.toggle('filled', !!(vdTexts[key] || '').trim());
+    tab.setAttribute('aria-selected', key === vdTextCategory ? 'true' : 'false');
+  });
+  $vdText.placeholder = current[2];
+  $vdTextHint.textContent = current[3];
+}
+
+function vdSelectTextCategory(key) {
+  vdTexts[vdTextCategory] = $vdText.value;
+  vdTextCategory = key;
+  $vdText.value = vdTexts[key] || '';
+  vdUpdateTextCount();
+}
+
+function vdInitTextTabs() {
+  if (vdTextTabsReady) return;
+  vdTextTabsReady = true;
+  VD_TEXT_CATEGORIES.forEach(([key, label]) => {
+    const tab = document.createElement('button');
+    tab.type = 'button';
+    tab.className = 'vd-tab';
+    tab.dataset.category = key;
+    tab.setAttribute('role', 'tab');
+    tab.textContent = label;
+    tab.addEventListener('click', () => vdSelectTextCategory(key));
+    $vdTextTabs.appendChild(tab);
+  });
+  vdRenderTextTabs();
+}
+
+// ── 会話用サーバーでの確認（候補カードの中に開く）──
+async function vdConvLoadStatus() {
+  try {
+    const res = await fetch(`${API}/voice_design/conversation_status`);
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.detail || `通信エラー（HTTP ${res.status}）`);
+    return d;
+  } catch (error) {
+    return { available: false, reason: '会話用サーバーの状態を確認できませんでした: ' + error.message };
+  }
+}
+
+function vdConvShowInfo(panel, status) {
+  const info = panel.querySelector('.vd-conv-info');
+  if (!status.available) {
+    info.textContent = '✕ ' + (status.reason || '会話用サーバーを利用できません');
+    return;
+  }
+  const steps = status.num_steps ? `${status.num_steps}ステップ` : 'ステップ数はモデル既定';
+  info.textContent = `会話用サーバー（${status.url}）で、この候補を参照音声にして喋らせます。`
+    + `設定は会話と同じ（${status.api_version} / ${steps}）で、聞き比べのためseedだけ${status.seed}に固定しています。`;
+}
+
+async function vdConvRun(d, panel, items, autoplay) {
+  if (vdConvBusy) { showErrorToast('会話用サーバーで生成中です。終わるまでお待ちください'); return; }
+  vdConvBusy = true;
+  const group = document.createElement('div');
+  group.className = 'vd-conv-results';
+  panel.querySelector('.vd-conv-list').prepend(group);
+  try {
+    const status = await vdConvLoadStatus();
+    vdConvShowInfo(panel, status);
+    if (!status.available) throw new Error(status.reason || '会話用サーバーを利用できません');
+    for (const [label, rawText] of items) {
+      const text = rawText.slice(0, VD_CONV_TEXT_MAX);
+      const row = document.createElement('div');
+      row.className = 'vd-conv-result';
+      const caption = document.createElement('div');
+      caption.className = 'vd-note';
+      caption.textContent = `【${label}】${text}（生成中...）`;
+      row.appendChild(caption);
+      group.appendChild(row);
+      const res = await fetch(`${API}/voice_design/conversation_test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: d.session_id, candidate_id: d.id, text }),
+      });
+      const r = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        caption.textContent = `【${label}】${text}（失敗）`;
+        throw new Error(r.detail || `通信エラー（HTTP ${res.status}）`);
+      }
+      caption.textContent = `【${label}】${r.text || text}`;
+      const audio = document.createElement('audio');
+      audio.controls = true;
+      audio.src = `data:audio/wav;base64,${r.audio}`;
+      row.appendChild(audio);
+      if (autoplay) audio.play().catch(() => {});
+    }
+  } catch (error) {
+    showErrorToast('会話用サーバーでのテストに失敗しました: ' + error.message);
+  } finally {
+    if (!group.children.length) group.remove();
+    vdConvBusy = false;
+  }
+}
+
+function vdBuildConvPanel(d) {
+  const panel = document.createElement('div');
+  panel.className = 'vd-conv';
+
+  const info = document.createElement('div');
+  info.className = 'vd-note vd-conv-info';
+
+  const presetRow = document.createElement('div');
+  presetRow.className = 'vd-row';
+  const batch = document.createElement('button');
+  batch.type = 'button';
+  batch.className = 'ce-file-btn';
+  batch.textContent = 'まとめてテスト（挨拶・日常会話・感情）';
+  batch.title = 'セリフ欄の同じタブに入力があればそのセリフを、なければ内蔵のセリフを使います';
+  batch.addEventListener('click', () => {
+    const items = VD_CONV_PRESETS.map(([key, label, fallback]) => [label, (vdTexts[key] || '').trim() || fallback]);
+    vdConvRun(d, panel, items, false);
+  });
+  presetRow.appendChild(batch);
+
+  const inputRow = document.createElement('div');
+  inputRow.className = 'vd-row';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'ce-input';
+  input.maxLength = VD_CONV_TEXT_MAX;
+  input.placeholder = '喋らせたいセリフを入力';
+  const single = document.createElement('button');
+  single.type = 'button';
+  single.className = 'ce-file-btn';
+  single.textContent = 'このセリフでテスト';
+  single.addEventListener('click', () => {
+    const text = input.value.trim();
+    if (!text) { showErrorToast('セリフを入力してください'); input.focus(); return; }
+    vdConvRun(d, panel, [['入力', text]], true);
+  });
+  input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); single.click(); } });
+  inputRow.appendChild(input);
+  inputRow.appendChild(single);
+
+  const list = document.createElement('div');
+  list.className = 'vd-conv-results vd-conv-list';
+
+  panel.appendChild(info);
+  panel.appendChild(presetRow);
+  panel.appendChild(inputRow);
+  panel.appendChild(list);
+  return panel;
+}
+
 function vdDefaultParams() {
   return { gender: '', age: '', pitch: 3, speed: 3, quality: [], tone: [], distance: '' };
 }
@@ -8379,7 +8582,10 @@ function vdParamsChanged() {
 }
 
 function vdUpdateTextCount() {
+  // セリフ欄の内容を、選択中のカテゴリのセリフとして覚える
+  vdTexts[vdTextCategory] = $vdText.value;
   $vdTextCount.textContent = `${$vdText.value.length}文字`;
+  vdRenderTextTabs();
 }
 
 function vdSetGeneration(g) {
@@ -8539,7 +8745,15 @@ function vdApplyRecipe(r) {
   };
   vdCaptionEdited = !!r.caption_edited;
   $vdCaption.value = r.caption || vdBuildCaption(vdParams);
-  $vdText.value = r.text || '';
+  // セリフ: 新しいレシピはタブごとに保存されている。古いレシピは1本だけなので「語り」に入れる。
+  vdTexts = vdEmptyTexts();
+  if (r.texts && typeof r.texts === 'object') {
+    VD_TEXT_CATEGORIES.forEach(([key]) => { vdTexts[key] = String(r.texts[key] || ''); });
+  } else {
+    vdTexts[VD_TEXT_DEFAULT_CATEGORY] = r.text || '';
+  }
+  vdTextCategory = VD_TEXT_CATEGORIES.some(([key]) => key === r.text_category) ? r.text_category : VD_TEXT_DEFAULT_CATEGORY;
+  $vdText.value = vdTexts[vdTextCategory];
   $vdSeed.value = r.seed == null ? '' : String(r.seed);
   vdSetGeneration(r.generation);
   $vdRecipeName.value = r.name || '';
@@ -8555,6 +8769,9 @@ async function vdSaveRecipe() {
   const name = typed || vdUniqueRecipeName(vdAutoRecipeName());
   const same = typed ? vdRecipes.find(r => r.name === name) : null;
   if (same && !confirm(`レシピ「${name}」を上書きします。よろしいですか？`)) return;
+  vdTexts[vdTextCategory] = $vdText.value;
+  const texts = {};
+  VD_TEXT_CATEGORIES.forEach(([key]) => { texts[key] = (vdTexts[key] || '').trim(); });
   try {
     const res = await fetch(`${API}/voice_design/recipes`, {
       method: 'POST',
@@ -8566,6 +8783,8 @@ async function vdSaveRecipe() {
         caption: $vdCaption.value.trim(),
         caption_edited: vdCaptionEdited,
         text: $vdText.value.trim(),
+        texts,
+        text_category: vdTextCategory,
         generation: vdGetGeneration(),
         seed: vdGetSeed(),
         model: vdModel,
@@ -8597,6 +8816,7 @@ async function vdDeleteRecipe() {
 
 // 候補を1本生成する。失敗したら例外を投げる。
 async function vdRequestGenerate(text, caption, generation, seed) {
+  const category = vdTextCategory;   // 生成を頼んだ時点のタブ（「この設定に戻す」で同じタブに戻すため）
   const res = await fetch(`${API}/voice_design/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -8606,6 +8826,7 @@ async function vdRequestGenerate(text, caption, generation, seed) {
   if (!res.ok) throw new Error(d.detail || `通信エラー（HTTP ${res.status}）`);
   vdSessionId = d.session_id || vdSessionId;
   vdUsedServer = true;
+  d.category = category;
   return d;
 }
 
@@ -8714,6 +8935,8 @@ function vdAddCandidate(d, container, fromTest) {
   reuse.addEventListener('click', () => {
     $vdCaption.value = d.caption || '';
     vdCaptionEdited = true;
+    vdTexts[vdTextCategory] = $vdText.value;
+    if (VD_TEXT_CATEGORIES.some(([key]) => key === d.category)) vdTextCategory = d.category;
     $vdText.value = d.text || '';
     $vdSeed.value = String(d.seed);
     $vdCount.value = '1';
@@ -8723,17 +8946,29 @@ function vdAddCandidate(d, container, fromTest) {
     vdUpdateRecipeNameHint();
     showErrorToast('✓ この候補の設定を入力欄に戻しました', 'success');
   });
+  const panel = vdBuildConvPanel(d);
+  const conv = document.createElement('button');
+  conv.type = 'button';
+  conv.className = 'ce-file-btn';
+  conv.textContent = '参照音声としてテスト';
+  conv.title = '会話用サーバーで、この候補を参照音声にして喋らせます';
+  conv.addEventListener('click', async () => {
+    if (!panel.classList.toggle('open')) return;
+    vdConvShowInfo(panel, await vdConvLoadStatus());
+  });
   const save = document.createElement('a');
   save.className = 'ce-file-btn';
   save.href = `${API}${d.url}`;
   save.download = `voice_design_seed${d.seed}.wav`;
   save.textContent = 'WAVを保存';
   actions.appendChild(reuse);
+  actions.appendChild(conv);
   actions.appendChild(save);
 
   card.appendChild(head);
   card.appendChild(audio);
   card.appendChild(actions);
+  card.appendChild(panel);
   container.appendChild(card);
 }
 
@@ -8787,6 +9022,7 @@ async function vdSuggestText() {
   if (vdSuggesting) return;
   if ($vdText.value.trim() && !confirm('今のセリフを、自動生成したセリフで上書きします。よろしいですか？')) return;
   const label = $vdSuggest.textContent;
+  const category = vdTextCategory;
   vdSuggesting = true;
   $vdSuggest.textContent = '生成中...';
   vdUpdateButtons();
@@ -8794,11 +9030,13 @@ async function vdSuggestText() {
     const res = await fetch(`${API}/voice_design/suggest_text`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ caption: $vdCaption.value.trim() }),
+      body: JSON.stringify({ caption: $vdCaption.value.trim(), category }),
     });
     const d = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(d.detail || `通信エラー（HTTP ${res.status}）`);
-    $vdText.value = (d.text || '').slice(0, $vdText.maxLength);
+    // 生成中にタブを切り替えていても、頼んだタブのセリフとして入れる
+    vdTexts[category] = (d.text || '').slice(0, $vdText.maxLength);
+    if (category === vdTextCategory) $vdText.value = vdTexts[category];
     vdUpdateTextCount();
   } catch (error) {
     showErrorToast('セリフを自動生成できませんでした: ' + error.message);
@@ -8811,9 +9049,11 @@ async function vdSuggestText() {
 
 // クリア: 声の特徴・caption・セリフを既定値に戻す（生成設定・seed・候補・レシピは残す）
 function vdResetInputs() {
-  if (!confirm('声の特徴・caption・セリフを既定値に戻します。よろしいですか？')) return;
+  if (!confirm('声の特徴・caption・セリフ（すべてのタブ）を既定値に戻します。よろしいですか？')) return;
   vdParams = vdDefaultParams();
   vdCaptionEdited = false;
+  vdTexts = vdEmptyTexts();
+  vdTextCategory = VD_TEXT_DEFAULT_CATEGORY;
   $vdText.value = '';
   vdParamsChanged();
   vdUpdateTextCount();
@@ -8825,6 +9065,7 @@ function vdStopAudio() {
 
 function openVoiceDesignModal() {
   vdInit();
+  vdInitTextTabs();
   vdUsedServer = false;
   $vdProgress.textContent = '';
   $vdBackdrop.classList.add('open');
