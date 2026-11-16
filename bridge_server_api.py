@@ -24,6 +24,7 @@ import io
 import math
 import webbrowser
 import base64
+import wave
 import urllib.request as _urllib_req
 import urllib.error as _urllib_err
 
@@ -71,6 +72,9 @@ DEFAULT_SETTINGS = {
     "tts_use_env":  False,         # True=環境変数TTS_API_URLを優先使用
     "tts_host":     "localhost",   # TTSサーバのホスト/IP
     "tts_port":     7860,          # TTSサーバのポート
+    # 声をデザイン（VoiceDesign）接続設定（永続化）
+    "vd_host":      "localhost",   # VoiceDesign用Gradioアプリのホスト/IP
+    "vd_port":      7861,          # VoiceDesign用Gradioアプリのポート（Irodori-TTSの推奨値）
     # 参照音声なしキャラのTTS動作
     "no_voice_mode": "off",        # "off"=音声オフで使用 / "default_voice"=デフォルト音声で使用
     "tts_api_version": "auto",     # "auto"=自動検出 / "v2" / "v3" / "v4"
@@ -160,12 +164,20 @@ def _build_tts_url(settings: dict) -> str:
     return f"http://{host}:{port}/"
 
 
+def _build_vd_url(settings: dict) -> str:
+    """設定から VoiceDesign 用 Gradio アプリの URL を構築する。"""
+    host = (settings.get("vd_host") or "localhost").strip()
+    port = settings.get("vd_port") or 7861
+    return f"http://{host}:{port}/"
+
+
 # ── 起動時に設定ファイルから接続情報を読み込む ──────────────────────────────
 _startup_settings = load_settings()
 LLM_API_URL = _build_llm_url(_startup_settings)
 LLM_API_KEY = (_startup_settings.get("llm_api_key") or "lm-studio")
 LLM_MODEL   = (_startup_settings.get("llm_model") or "")
 TTS_API_URL = _build_tts_url(_startup_settings)
+VD_API_URL  = _build_vd_url(_startup_settings)
 
 # その他の設定
 CHAR_DIR_ENV     = os.getenv("CHAR_DIR")                               # None = 未設定
@@ -3078,6 +3090,10 @@ def get_api_config():
         "tts_host":        settings.get("tts_host", "localhost"),
         "tts_port":        settings.get("tts_port", 7860),
         "tts_api_url":     TTS_API_URL,   # 現在実際に使用中のURL
+        # 声をデザイン（VoiceDesign）設定
+        "vd_host":         settings.get("vd_host", "localhost"),
+        "vd_port":         settings.get("vd_port", 7861),
+        "vd_api_url":      VD_API_URL,
         # 環境変数の現在値
         "env_llm_api_url": _ENV_LLM_API_URL,
         "env_tts_api_url": _ENV_TTS_API_URL,
@@ -3090,7 +3106,7 @@ def get_api_config():
 @app.post("/api_config")
 def post_api_config(data: dict = Body(...)):
     """接続設定を変更してファイルに永続化する。"""
-    global LLM_API_URL, TTS_API_URL, LLM_API_KEY, LLM_MODEL, client, tts_client
+    global LLM_API_URL, TTS_API_URL, VD_API_URL, LLM_API_KEY, LLM_MODEL, client, tts_client, vd_client
 
     settings = load_settings()
     changed  = []
@@ -3126,6 +3142,17 @@ def post_api_config(data: dict = Body(...)):
         tts_client  = None   # 次回 get_tts_client() 呼び出しで再接続
         changed.append("tts")
         print(f"[API Config] TTS -> {TTS_API_URL}")
+
+    # ── 声をデザイン（VoiceDesign）設定 ──
+    vd_fields = ["vd_host", "vd_port"]
+    if any(f in data for f in vd_fields):
+        for f in vd_fields:
+            if f in data:
+                settings[f] = data[f]
+        VD_API_URL = _build_vd_url(settings)
+        vd_client  = None   # 次回 get_vd_client() 呼び出しで再接続
+        changed.append("vd")
+        print(f"[API Config] VoiceDesign -> {VD_API_URL}")
 
     save_settings(settings)
     return JSONResponse({"status": "ok", "changed": changed})
@@ -3408,6 +3435,348 @@ def llm_unload(target: LlmAdminTarget | None = None):
         return JSONResponse({"ok": True, "message": f"アンロードしました: {names}"})
     except Exception as e:
         return JSONResponse({"ok": False, "message": f"エラー: {_llm_admin_error_text(e)}"})
+
+
+# ══════════════════════════════════════════════════════
+#  声をデザイン (VoiceDesign) API
+#  Irodori-TTS の gradio_app_voicedesign.py（caption入力あり）に接続する。
+#  会話用TTS (tts_client) とは別のクライアント・別のロックで動かす。
+#  参照音声 (ref_wavs) は常に空で送る: 生成音声を参照にした再生成は品質が落ちるため。
+# ══════════════════════════════════════════════════════
+
+VD_WORK_DIR     = "voice_design_work"    # 候補音声の一時置き場
+VD_RECIPES_FILE = "voice_designs.json"   # 保存したレシピ（共通ライブラリ）
+VD_ENDPOINT     = "/_run_generation"
+VD_TEXT_MAX_CHARS    = 400
+VD_CAPTION_MAX_CHARS = 400
+VD_RECIPE_MAX        = 200
+_VD_SESSION_RE = re.compile(r"[0-9a-f]{32}")
+_VD_FILE_RE    = re.compile(r"[0-9a-z_]{1,48}\.wav")
+
+vd_client = None
+vd_client_url = ""
+vd_generate_lock = threading.Lock()   # Gradio Client はスレッドセーフでないため排他制御
+_vd_recipes_lock = threading.Lock()
+
+
+def get_vd_client(refresh: bool = False):
+    """VoiceDesign用 Gradio Client を取得する。接続先が変わった場合と refresh 指定時は作り直す。
+    接続できない場合は例外を送出する。"""
+    global vd_client, vd_client_url
+    if refresh or vd_client is None or vd_client_url != VD_API_URL:
+        vd_client = None
+        print(f"[VoiceDesign] Connecting to {VD_API_URL}...")
+        vd_client = Client(VD_API_URL)
+        vd_client_url = VD_API_URL
+    return vd_client
+
+
+def _vd_endpoint_params(client) -> dict:
+    """/_run_generation の 引数名 → 定義 の辞書を返す。"""
+    info = getattr(client, "_info", {})
+    endpoint = info.get("named_endpoints", {}).get(VD_ENDPOINT, {}) if isinstance(info, dict) else {}
+    params = endpoint.get("parameters", []) if isinstance(endpoint, dict) else []
+    return {p.get("parameter_name"): p for p in params if isinstance(p, dict) and p.get("parameter_name")}
+
+
+def _vd_unavailable_reason(params: dict) -> str:
+    """接続先が声づくりに使えない場合はその理由、使える場合は空文字を返す。"""
+    if not params:
+        return "接続先に音声生成のAPIが見つかりません。"
+    if "caption" not in params:
+        return ("接続先はcaption入力のないIrodori-TTSです。"
+                "gradio_app_voicedesign.py を起動し、環境設定でそのポートを指定してください。")
+    return ""
+
+
+def _vd_generation_settings(src: dict) -> dict:
+    """生成設定を検証して正規化する。不正な値は 400。"""
+    if not isinstance(src, dict):
+        raise HTTPException(400, "生成設定の形式が不正です")
+
+    def number(key: str, default: float, low: float, high: float, cast=float):
+        raw = src.get(key)
+        if raw is None or raw == "":
+            raw = default
+        if isinstance(raw, bool):
+            raise HTTPException(400, f"{key} の値が不正です")
+        try:
+            value = cast(raw)
+        except (TypeError, ValueError):
+            raise HTTPException(400, f"{key} の値が不正です")
+        if not (low <= value <= high):
+            raise HTTPException(400, f"{key} は {low}〜{high} の範囲で指定してください")
+        return value
+
+    steps_raw = src.get("num_steps")
+    schedule = str(src.get("t_schedule_mode") or "linear")
+    if schedule not in ("linear", "sway"):
+        raise HTTPException(400, "サンプリング方式は linear か sway を指定してください")
+    return {
+        "num_steps":         None if steps_raw in (None, "") else number("num_steps", 40, 1, 200, int),
+        "t_schedule_mode":   schedule,
+        "sway_coeff":        number("sway_coeff", -1.0, -1.0, 1.5),
+        "cfg_scale_text":    number("cfg_scale_text", 3.0, 0.0, 10.0),
+        "cfg_scale_caption": number("cfg_scale_caption", 4.0, 0.0, 10.0),
+        "duration_scale":    number("duration_scale", 1.0, 0.5, 1.5),
+    }
+
+
+def _vd_seed(raw) -> int:
+    """seed を検証する。未指定なら乱数で決める（JavaScriptで安全に扱える 31bit の範囲）。"""
+    if raw is None or raw == "":
+        return int.from_bytes(os.urandom(4), "big") & 0x7FFFFFFF
+    if isinstance(raw, bool):
+        raise HTTPException(400, "seed の値が不正です")
+    try:
+        seed = int(raw)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "seed の値が不正です")
+    if not (0 <= seed <= 0x7FFFFFFF):
+        raise HTTPException(400, "seed は 0〜2147483647 の範囲で指定してください")
+    return seed
+
+
+def _vd_wav_seconds(path: str) -> float:
+    """WAVの長さ（秒）を返す。読めない場合は 0.0。"""
+    try:
+        with wave.open(path, "rb") as w:
+            rate = w.getframerate()
+            return round(w.getnframes() / rate, 2) if rate else 0.0
+    except Exception:
+        return 0.0
+
+
+@app.get("/voice_design/status")
+def voice_design_status():
+    """VoiceDesign API が使えるかを返す。画面を開くたびに接続先の定義を取り直す。"""
+    global vd_client
+    with vd_generate_lock:
+        try:
+            params = _vd_endpoint_params(get_vd_client(refresh=True))
+        except Exception as e:
+            vd_client = None
+            print(f"[VoiceDesign] 接続に失敗しました: {e}")
+            return {"available": False, "url": VD_API_URL,
+                    "reason": f"VoiceDesign用サーバーに接続できません（{VD_API_URL}）。"
+                              "gradio_app_voicedesign.py が起動しているか、環境設定の接続先を確認してください。"}
+    reason = _vd_unavailable_reason(params)
+    if reason:
+        return {"available": False, "url": VD_API_URL, "reason": reason}
+    default_keys = ("checkpoint", "num_steps", "t_schedule_mode", "sway_coeff",
+                    "cfg_scale_text", "cfg_scale_caption", "duration_scale")
+    return {
+        "available": True,
+        "url":       VD_API_URL,
+        "model":     str(params.get("checkpoint", {}).get("parameter_default") or ""),
+        "defaults":  {k: params[k].get("parameter_default") for k in default_keys if k in params},
+        "supports":  sorted(k for k in default_keys if k in params),
+    }
+
+
+@app.post("/voice_design/generate")
+def voice_design_generate(data: dict = Body(...)):
+    """captionとセリフから候補を1本だけ生成し、一時フォルダに保存して返す。"""
+    global vd_client
+    text    = str(data.get("text") or "").strip()
+    caption = str(data.get("caption") or "").strip()
+    if not text:
+        raise HTTPException(400, "セリフを入力してください")
+    if len(text) > VD_TEXT_MAX_CHARS:
+        raise HTTPException(400, f"セリフは{VD_TEXT_MAX_CHARS}文字以内にしてください")
+    if len(caption) > VD_CAPTION_MAX_CHARS:
+        raise HTTPException(400, f"captionは{VD_CAPTION_MAX_CHARS}文字以内にしてください")
+    generation = _vd_generation_settings(data)
+    seed = _vd_seed(data.get("seed"))
+    session_id = str(data.get("session_id") or "")
+    if not _VD_SESSION_RE.fullmatch(session_id):
+        session_id = uuid.uuid4().hex
+
+    with vd_generate_lock:
+        try:
+            vd = get_vd_client()
+            params = _vd_endpoint_params(vd)
+        except Exception as e:
+            vd_client = None
+            print(f"[VoiceDesign] 接続に失敗しました: {e}")
+            raise HTTPException(503, f"VoiceDesign用サーバーに接続できません（{VD_API_URL}）")
+        reason = _vd_unavailable_reason(params)
+        if reason:
+            raise HTTPException(503, reason)
+
+        steps = generation["num_steps"]
+        kwargs = {
+            "text":              text,
+            "caption":           caption,
+            "ref_wavs":          [],          # 参照音声は使わない（直接生成のみ）
+            "num_candidates":    1,
+            "seed_raw":          str(seed),
+            "num_steps":         "" if steps is None else str(steps),
+            "t_schedule_mode":   generation["t_schedule_mode"],
+            "sway_coeff":        generation["sway_coeff"],
+            "cfg_scale_text":    generation["cfg_scale_text"],
+            "cfg_scale_caption": generation["cfg_scale_caption"],
+            "duration_scale":    generation["duration_scale"],
+        }
+        kwargs = {k: v for k, v in kwargs.items() if k in params}
+        print(f"[VoiceDesign] generate start: seed={seed} steps={steps} "
+              f"schedule={generation['t_schedule_mode']} text={text[:20]!r}")
+        try:
+            result = vd.predict(**kwargs, api_name=VD_ENDPOINT)
+        except Exception as e:
+            print(f"[VoiceDesign] 生成に失敗しました: {e}")
+            raise HTTPException(502, f"音声の生成に失敗しました: {str(e)[:300]}")
+
+    res_data = result[0] if isinstance(result, (list, tuple)) and result else result
+    gen_path = res_data["value"] if isinstance(res_data, dict) and "value" in res_data else res_data
+    if not gen_path or not isinstance(gen_path, str) or not os.path.exists(gen_path):
+        raise HTTPException(502, "音声の生成結果を受け取れませんでした")
+
+    session_dir = os.path.join(VD_WORK_DIR, session_id)
+    os.makedirs(session_dir, exist_ok=True)
+    filename = f"cand_{seed}_{uuid.uuid4().hex[:8]}.wav"
+    dest = os.path.join(session_dir, filename)
+    shutil.copyfile(gen_path, dest)
+    try:
+        os.unlink(gen_path)
+    except OSError:
+        pass
+
+    return {
+        "session_id": session_id,
+        "id":         filename[:-4],
+        "seed":       seed,
+        "seconds":    _vd_wav_seconds(dest),
+        "url":        f"/voice_design/audio/{session_id}/{filename}",
+        "text":       text,
+        "caption":    caption,
+        "generation": generation,
+    }
+
+
+@app.get("/voice_design/audio/{session_id}/{filename}")
+def voice_design_audio(session_id: str, filename: str):
+    """一時フォルダの候補音声を返す。"""
+    if not _VD_SESSION_RE.fullmatch(session_id) or not _VD_FILE_RE.fullmatch(filename):
+        raise HTTPException(404)
+    path = os.path.join(VD_WORK_DIR, session_id, filename)
+    if not os.path.isfile(path):
+        raise HTTPException(404)
+    return FileResponse(path, media_type="audio/wav")
+
+
+@app.post("/voice_design/unload")
+def voice_design_unload():
+    """VoiceDesign側のモデルをメモリから解放する（声づくり画面を閉じたときに呼ぶ）。"""
+    try:
+        with vd_generate_lock:
+            get_vd_client().predict(api_name="/_clear_runtime_cache")
+        print("[VoiceDesign] モデルをアンロードしました")
+        return {"ok": True}
+    except Exception as e:
+        print(f"[VoiceDesign] アンロードに失敗しました: {e}")
+        return {"ok": False, "message": "VoiceDesign側のモデルを解放できませんでした"}
+
+
+# ── レシピ（パラメータ・caption・セリフ・生成設定・seed の組）────────────────
+
+def _vd_load_recipes() -> list:
+    if not os.path.exists(VD_RECIPES_FILE):
+        return []
+    try:
+        with open(VD_RECIPES_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        recipes = data.get("recipes", []) if isinstance(data, dict) else []
+        return [r for r in recipes if isinstance(r, dict) and r.get("id")]
+    except Exception as e:
+        print(f"[VoiceDesign] レシピの読み込みに失敗しました: {e}")
+        raise HTTPException(500, "レシピファイルを読み込めませんでした（voice_designs.json を確認してください）")
+
+
+def _vd_save_recipes(recipes: list) -> None:
+    """アトミック書き込み（一時ファイルに書いてからリネーム）。"""
+    dir_name = os.path.dirname(os.path.abspath(VD_RECIPES_FILE))
+    fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp", prefix="voice_designs_")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump({"recipes": recipes}, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, VD_RECIPES_FILE)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _vd_clean_recipe(data: dict) -> dict:
+    """保存するレシピを検証して正規化する。"""
+    if not isinstance(data, dict):
+        raise HTTPException(400, "レシピの形式が不正です")
+    name = str(data.get("name") or "").strip()
+    if not 1 <= len(name) <= 60:
+        raise HTTPException(400, "レシピ名は1〜60文字で入力してください")
+    caption = str(data.get("caption") or "").strip()
+    text    = str(data.get("text") or "").strip()
+    if len(caption) > VD_CAPTION_MAX_CHARS or len(text) > VD_TEXT_MAX_CHARS:
+        raise HTTPException(400, "captionまたはセリフが長すぎます")
+    params = data.get("params")
+    if not isinstance(params, dict) or len(json.dumps(params, ensure_ascii=False)) > 4000:
+        raise HTTPException(400, "パラメータの形式が不正です")
+    seed_raw = data.get("seed")
+    return {
+        "name":           name,
+        "params":         params,
+        "caption":        caption,
+        "caption_edited": bool(data.get("caption_edited")),
+        "text":           text,
+        "generation":     _vd_generation_settings(data.get("generation") or {}),
+        "seed":           None if seed_raw in (None, "") else _vd_seed(seed_raw),
+        "model":          str(data.get("model") or "")[:200],
+    }
+
+
+@app.get("/voice_design/recipes")
+def voice_design_recipes():
+    with _vd_recipes_lock:
+        recipes = _vd_load_recipes()
+    recipes.sort(key=lambda r: str(r.get("updated_at") or ""), reverse=True)
+    return {"recipes": recipes}
+
+
+@app.post("/voice_design/recipes")
+def voice_design_save_recipe(data: dict = Body(...)):
+    """レシピを保存する。id が既存のものと一致すれば上書き、なければ新規作成。"""
+    recipe = _vd_clean_recipe(data)
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    recipe_id = str(data.get("id") or "")
+    with _vd_recipes_lock:
+        recipes = _vd_load_recipes()
+        existing = next((r for r in recipes if r.get("id") == recipe_id), None) if recipe_id else None
+        if any(r.get("name") == recipe["name"] and r is not existing for r in recipes):
+            raise HTTPException(409, "同じ名前のレシピがあります")
+        if existing is not None:
+            existing.update(recipe)
+            existing["updated_at"] = now
+            saved = existing
+        else:
+            if len(recipes) >= VD_RECIPE_MAX:
+                raise HTTPException(400, f"レシピは{VD_RECIPE_MAX}件まで保存できます")
+            saved = {"id": uuid.uuid4().hex, **recipe, "created_at": now, "updated_at": now}
+            recipes.append(saved)
+        _vd_save_recipes(recipes)
+    return {"recipe": saved}
+
+
+@app.delete("/voice_design/recipes/{recipe_id}")
+def voice_design_delete_recipe(recipe_id: str):
+    with _vd_recipes_lock:
+        recipes = _vd_load_recipes()
+        remaining = [r for r in recipes if r.get("id") != recipe_id]
+        if len(remaining) == len(recipes):
+            raise HTTPException(404, "レシピが見つかりません")
+        _vd_save_recipes(remaining)
+    return {"ok": True}
 
 
 # ══════════════════════════════════════════════════════

@@ -970,6 +970,98 @@ body { background: var(--body-gradient); }
 #tuneup-footer button { min-width: 96px; }
 
 /* ══════════════════════════════
+   声をデザイン モーダル
+══════════════════════════════ */
+#vd-backdrop {
+  display: none;
+  position: fixed; inset: 0; z-index: 320;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(4px);
+  align-items: center; justify-content: center;
+}
+#vd-backdrop.open { display: flex; }
+#vd-modal {
+  width: min(760px, 95vw);
+  max-height: 92vh;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.5);
+}
+#vd-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--header-bg);
+  flex-shrink: 0;
+}
+#vd-header .modal-title {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 13px; color: var(--accent); letter-spacing: .1em;
+}
+#vd-close {
+  background: none; border: none; cursor: pointer;
+  color: var(--muted); font-size: 18px; line-height: 1;
+  padding: 2px 6px; border-radius: 4px;
+}
+#vd-close:hover { color: var(--text); }
+#vd-body {
+  flex: 1; overflow-y: auto; padding: 18px;
+  display: flex; flex-direction: column; gap: 16px;
+}
+#vd-footer {
+  display: flex; justify-content: flex-end; gap: 8px;
+  padding: 12px 18px; border-top: 1px solid var(--border); flex-shrink: 0;
+}
+.vd-status { font-size: 12px; line-height: 1.6; color: var(--muted); }
+.vd-status.ok { color: #16a34a; }
+.vd-status.ng { color: #f87171; }
+.vd-note { font-size: 11px; line-height: 1.6; color: var(--muted); }
+.vd-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.vd-row .ce-input { width: auto; flex: 1; min-width: 120px; }
+.vd-param { display: grid; grid-template-columns: 96px 1fr; align-items: center; gap: 6px 10px; }
+.vd-param-name { font-size: 12px; color: var(--text); }
+.vd-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.vd-chip {
+  padding: 4px 10px; border-radius: 999px;
+  font-family: 'Noto Sans JP', sans-serif; font-size: 12px;
+  background: transparent; color: var(--muted);
+  border: 1px solid var(--border); cursor: pointer; transition: all .15s;
+}
+.vd-chip:hover { border-color: var(--accent); color: var(--text); }
+.vd-chip.active { background: var(--accent); border-color: var(--accent); color: #000; }
+.vd-slider { display: flex; align-items: center; gap: 10px; }
+.vd-slider input[type=range] { flex: 1; accent-color: var(--accent); }
+.vd-slider-value { width: 84px; font-size: 12px; color: var(--text); text-align: right; }
+#vd-caption { min-height: 64px; font-family: 'Noto Sans JP', sans-serif; font-size: 13px; }
+#vd-text { min-height: 110px; font-family: 'Noto Sans JP', sans-serif; font-size: 13px; }
+.vd-emoji-grid { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.vd-emoji-btn {
+  padding: 3px 7px; border-radius: 5px; font-size: 12px;
+  font-family: 'Noto Sans JP', sans-serif;
+  background: transparent; color: var(--text);
+  border: 1px solid var(--border); cursor: pointer;
+}
+.vd-emoji-btn:hover { border-color: var(--accent); }
+.vd-gen-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 10px; }
+.vd-gen-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--muted); }
+.vd-gen-grid .ce-input { padding: 6px 8px; font-size: 12px; }
+.vd-candidate {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
+}
+.vd-candidate-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px; color: var(--text); }
+.vd-candidate-head .vd-warn { color: #f59e0b; }
+.vd-candidate audio { width: 100%; height: 34px; }
+.vd-candidate-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.vd-candidate-actions a { text-decoration: none; }
+#vd-candidates { display: flex; flex-direction: column; gap: 10px; }
+#vd-modal details > summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+#vd-modal select.ce-input { padding: 6px 8px; }
+
+/* ══════════════════════════════
    記憶 モーダル
 ══════════════════════════════ */
 #memory-backdrop {
@@ -1069,6 +1161,19 @@ body { background: var(--body-gradient); }
   margin-top: 4px;
 }
 #new-char-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--card-hover); }
+#voice-design-btn {
+  width: 100%; padding: 8px 10px;
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px; letter-spacing: .08em;
+  cursor: pointer; text-align: center;
+  transition: all .2s;
+  margin-top: 4px;
+}
+#voice-design-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--card-hover); }
 
 /* ══════════════════════════════
    モバイル対応 (600px 以下)
@@ -1533,6 +1638,16 @@ body.no-bubble-blur .msg-bubble {
           <span id="ac-tts-env-text">環境変数 TTS_API_URL を使用</span>
         </label>
         <div style="margin-top:10px">
+          <div class="api-field-label">声をデザイン（VoiceDesign）用の接続先</div>
+          <div class="api-field-row">
+            <span class="api-prefix-label">http://</span>
+            <input class="api-field-input" id="ac-vd-host" type="text" placeholder="localhost" style="flex:3">
+            <span class="api-sep-label">:</span>
+            <input class="api-field-input api-port-input" id="ac-vd-port" type="number" min="1" max="65535" placeholder="7861">
+          </div>
+          <div style="font-size:12px; color:var(--muted); margin-top:4px">Irodori-TTS の gradio_app_voicedesign.py を起動したポートを指定します。会話用のTTSサーバとは別に起動が必要です。</div>
+        </div>
+        <div style="margin-top:10px">
           <div class="api-field-label">Irodori-TTS API形式</div>
           <select class="api-field-select" id="ac-tts-version" style="margin-top:4px">
             <option value="auto">自動検出</option>
@@ -1872,6 +1987,140 @@ body.no-bubble-blur .msg-bubble {
 </div>
 
 <!-- ══════════════════════════════
+     声をデザイン モーダル
+══════════════════════════════ -->
+<div id="vd-backdrop">
+  <div id="vd-modal">
+    <div id="vd-header">
+      <span class="modal-title">🎨 VOICE DESIGN</span>
+      <button type="button" id="vd-close">✕</button>
+    </div>
+    <div id="vd-body">
+      <div class="ce-field">
+        <div class="vd-row">
+          <span class="vd-status" id="vd-status" role="status" style="flex:1">接続を確認中...</span>
+          <button type="button" class="ce-file-btn" id="vd-status-retry">再確認</button>
+        </div>
+      </div>
+
+      <div class="ce-field">
+        <label class="ce-label">レシピ</label>
+        <div class="vd-row">
+          <select class="ce-input" id="vd-recipe-select"></select>
+          <button type="button" class="ce-file-btn" id="vd-recipe-load">読み込む</button>
+          <button type="button" class="ce-file-btn" id="vd-recipe-delete">削除</button>
+        </div>
+        <div class="vd-row">
+          <input type="text" class="ce-input" id="vd-recipe-name" maxlength="60" placeholder="レシピ名（例: 落ち着いた低めの女性）">
+          <button type="button" class="ce-file-btn" id="vd-recipe-save">今の内容を保存</button>
+        </div>
+      </div>
+
+      <div class="ce-field">
+        <label class="ce-label">声の特徴</label>
+        <div class="vd-param">
+          <span class="vd-param-name">性別</span>
+          <div class="vd-chips" data-vd-group="gender" data-vd-mode="single"></div>
+          <span class="vd-param-name">年齢</span>
+          <div class="vd-chips" data-vd-group="age" data-vd-mode="single"></div>
+          <span class="vd-param-name">声の高さ</span>
+          <div class="vd-slider">
+            <input type="range" id="vd-pitch" min="1" max="5" step="1" value="3">
+            <span class="vd-slider-value" id="vd-pitch-value"></span>
+          </div>
+          <span class="vd-param-name">話す速さ</span>
+          <div class="vd-slider">
+            <input type="range" id="vd-speed" min="1" max="5" step="1" value="3">
+            <span class="vd-slider-value" id="vd-speed-value"></span>
+          </div>
+          <span class="vd-param-name">声質</span>
+          <div class="vd-chips" data-vd-group="quality" data-vd-mode="multi"></div>
+          <span class="vd-param-name">感情・トーン</span>
+          <div class="vd-chips" data-vd-group="tone" data-vd-mode="multi"></div>
+          <span class="vd-param-name">距離感・声量</span>
+          <div class="vd-chips" data-vd-group="distance" data-vd-mode="single"></div>
+        </div>
+      </div>
+
+      <div class="ce-field">
+        <label class="ce-label">caption（声の説明文）</label>
+        <textarea class="ce-textarea" id="vd-caption" maxlength="400" placeholder="声の特徴を選ぶと自動で作られます。手で書き換えることもできます。"></textarea>
+        <div class="vd-row">
+          <span class="vd-note" id="vd-caption-note" style="flex:1"></span>
+          <button type="button" class="ce-file-btn" id="vd-caption-rebuild">声の特徴から作り直す</button>
+        </div>
+      </div>
+
+      <div class="ce-field">
+        <label class="ce-label">セリフ（この音声がそのまま参照音声になります）</label>
+        <textarea class="ce-textarea" id="vd-text" maxlength="400" placeholder="声の特徴に合った長めのセリフを入力します（目安: 読み上げて20〜30秒、100〜130文字程度）。"></textarea>
+        <div class="vd-note" id="vd-text-count"></div>
+        <details>
+          <summary>絵文字パレット（話し方や効果音を指定）</summary>
+          <div class="vd-emoji-grid" id="vd-emoji-grid"></div>
+          <div class="vd-note" style="margin-top:6px">セリフのカーソル位置に挿入します。効果は文脈によって変わり、常に同じとは限りません。</div>
+        </details>
+      </div>
+
+      <div class="ce-field">
+        <label class="ce-label">生成設定</label>
+        <div class="vd-row">
+          <label class="vd-note" for="vd-count">候補数</label>
+          <select class="ce-input" id="vd-count" style="flex:0 0 72px">
+            <option value="1">1</option><option value="2">2</option><option value="3" selected>3</option>
+            <option value="4">4</option><option value="5">5</option><option value="6">6</option>
+          </select>
+          <label class="vd-note" for="vd-seed">seed</label>
+          <input type="number" class="ce-input" id="vd-seed" min="0" max="2147483647" step="1" placeholder="空欄: 毎回ランダム">
+        </div>
+        <div class="vd-note">seedを指定すると同じ音声を再現できます。候補数が2以上のときは seed, seed+1, ... の順に作ります。</div>
+        <details>
+          <summary>詳細設定（品質と生成時間の調整）</summary>
+          <div class="vd-gen-grid">
+            <label>生成ステップ数
+              <input type="number" class="ce-input" id="vd-steps" min="1" max="200" step="1" placeholder="空欄: モデル既定値">
+            </label>
+            <label>サンプリング方式
+              <select class="ce-input" id="vd-schedule"><option value="linear">Linear</option><option value="sway">Sway</option></select>
+            </label>
+            <label>Sway係数
+              <input type="number" class="ce-input" id="vd-sway" min="-1" max="1.5" step="0.1">
+            </label>
+            <label>captionの効き具合
+              <input type="number" class="ce-input" id="vd-cfg-caption" min="0" max="10" step="0.1">
+            </label>
+            <label>セリフの効き具合
+              <input type="number" class="ce-input" id="vd-cfg-text" min="0" max="10" step="0.1">
+            </label>
+            <label>長さの倍率
+              <input type="number" class="ce-input" id="vd-duration" min="0.5" max="1.5" step="0.05">
+            </label>
+          </div>
+          <div class="vd-row" style="margin-top:8px">
+            <span class="vd-note" style="flex:1">既定は品質重視（40ステップ・Linear）です。Sway係数はSwayを選んだときだけ使われます。</span>
+            <button type="button" class="ce-file-btn" id="vd-gen-reset">既定値に戻す</button>
+          </div>
+        </details>
+      </div>
+
+      <div class="ce-field">
+        <div class="vd-row">
+          <button type="button" class="modal-btn primary" id="vd-generate">候補を生成</button>
+          <button type="button" class="modal-btn secondary" id="vd-stop" style="display:none">中止</button>
+          <span class="vd-note" id="vd-progress" role="status" style="flex:1"></span>
+          <button type="button" class="ce-file-btn" id="vd-clear">候補をクリア</button>
+        </div>
+        <div id="vd-candidates"></div>
+        <div class="vd-note">気に入った候補は「WAVを保存」で保存し、キャラクターの編集画面で音声ファイルとして選択してください。</div>
+      </div>
+    </div>
+    <div id="vd-footer">
+      <button type="button" class="modal-btn secondary" id="vd-cancel">閉じる</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════
      記憶 モーダル
 ══════════════════════════════ -->
 <div id="memory-backdrop">
@@ -2027,6 +2276,7 @@ body.no-bubble-blur .msg-bubble {
       <div class="sidebar-label">キャラクター</div>
       <div id="char-list"></div>
       <button id="new-char-btn">＋ 新規キャラクター...</button>
+      <button id="voice-design-btn">🎨 声をデザイン...</button>
     </div>
     <div id="char-image-area">
       <img id="char-big-img" alt="character">
@@ -6955,6 +7205,8 @@ const $acTtsSchedule = document.getElementById('ac-tts-schedule');
 const $acTtsSway = document.getElementById('ac-tts-sway');
 const $acTtsSamplingHint = document.getElementById('ac-tts-sampling-hint');
 const $acTtsGenerationError = document.getElementById('ac-tts-generation-error');
+const $acVdHost = document.getElementById('ac-vd-host');
+const $acVdPort = document.getElementById('ac-vd-port');
 let ttsConfigDrafts = null;
 let ttsEditingProfile = 'v4';
 let ttsConfigDirty = new Set();
@@ -7460,6 +7712,9 @@ async function openApiConfigModal() {
         $acTtsUseEnv.disabled = true;
       }
       _updateTtsEnvState();
+      // 声をデザイン（VoiceDesign）
+      $acVdHost.value = d.vd_host || 'localhost';
+      $acVdPort.value = d.vd_port != null ? String(d.vd_port) : '7861';
       // CHAR_DIR 状態の表示
       if (d.char_dir_active) {
         $acCharDirStatus.textContent = `CHAR_DIR = ${d.char_dir_value}`;
@@ -7547,6 +7802,8 @@ $acResetBtn.addEventListener('click', () => {
   }
   $acTtsHost.value = 'localhost';
   $acTtsPort.value = '7860';
+  $acVdHost.value = 'localhost';
+  $acVdPort.value = '7861';
   $acTtsVersion.value = 'auto';
 });
 
@@ -7576,6 +7833,8 @@ async function applyApiConfig() {
       tts_use_env: $acTtsUseEnv.checked,
       tts_host:    $acTtsHost.value.trim(),
       tts_port:    parseInt($acTtsPort.value, 10) || 7860,
+      vd_host:     $acVdHost.value.trim(),
+      vd_port:     parseInt($acVdPort.value, 10) || 7861,
     };
     const res = await fetch(`${API}/api_config`, {
       method: 'POST',
@@ -7926,6 +8185,481 @@ $twSaveBtn.addEventListener('click', async () => {
 });
 document.getElementById('tw-cancel').addEventListener('click', closeTuneupWizard);
 document.getElementById('tuneup-close').addEventListener('click', closeTuneupWizard);
+
+// ── 声をデザイン（VoiceDesign）──
+// 絵文字一覧は Irodori-TTS (MIT License) の irodori_tts/gradio_emoji_palette.py と同じ内容。
+const VD_EMOJIS = [
+  ['👂','囁き','耳元の音'], ['😮‍💨','吐息','溜息、寝息'], ['⏸️','間','沈黙'], ['🤭','笑い','くすくす、含み笑い'],
+  ['🥵','喘ぎ','うめき声、唸り声'], ['📢','エコー','リバーブ'], ['😏','からかう','甘えるように'], ['🥺','震え声','自信なさげに'],
+  ['🌬️','息切れ','荒い息遣い、呼吸音'], ['😮','息をのむ','Gasp'], ['👅','舐める音','咀嚼音、水音'], ['💋','リップノイズ','Lip smack'],
+  ['🫶','優しく','Tenderly'], ['😭','泣き声','嗚咽、悲しみ'], ['😱','悲鳴','叫び、絶叫'], ['😪','眠そう','気だるげに'],
+  ['😴','寝言','いびき'], ['⏩','早口','一気に、急いで'], ['📞','電話越し','スピーカー越し'], ['🐢','ゆっくり','Slowly'],
+  ['🥤','飲み込む','唾を飲む音'], ['🤧','咳・鼻','咳き込み、鼻すすり'], ['😒','舌打ち','Tutting'], ['😰','慌てる','動揺、緊張、どもり'],
+  ['😆','喜び','嬉しそうに'], ['💥','勢いよく','力強い勢い'], ['😠','怒り','不満げ、拗ねる'], ['😲','驚き','感嘆'],
+  ['🥱','あくび','Yawn'], ['😖','苦しげ','Agonizingly'], ['😟','心配','不安そうに'], ['🫣','照れ','恥ずかしそうに'],
+  ['🙄','呆れ','Exasperatedly'], ['😊','楽しげ','嬉しそうに'], ['😎','得意げ','自信ありげに'], ['👌','相槌','頷く音'],
+  ['🙏','懇願','お願いするように'], ['🥴','酔う','Drunkenly'], ['🎵','鼻歌','Humming'], ['🤐','口を塞ぐ','Muffled'],
+  ['😌','安堵','満足げに'], ['🤔','疑問','Questioning'], ['💪','力強く','力を込めて'], ['👃','嗅ぐ音','匂いを嗅ぐ音'],
+  ['📖','朗読','ナレーション'],
+];
+
+// 選択肢: [保存用の値, 画面の表示, captionに入れる語]
+const VD_OPTIONS = {
+  gender:   [['', '指定なし', ''], ['female', '女性', '女性'], ['male', '男性', '男性']],
+  age:      [['', '指定なし', ''], ['child', '子ども', '子どもの'], ['teen', '10代', '10代の'],
+             ['young', '若い', '若い'], ['adult', '大人', '大人の'], ['senior', '年配', '年配の']],
+  quality:  [['soft', 'やわらかい', 'やわらかい'], ['clear', '澄んだ', '澄んだ'], ['husky', 'ハスキー', 'ハスキーな'],
+             ['sweet', '甘い', '甘い'], ['dignified', '凛とした', '凛とした'], ['calm', '落ち着いた', '落ち着いた'],
+             ['bright', '明るい', '明るい'], ['cute', 'かわいらしい', 'かわいらしい']],
+  tone:     [['gentle', 'やさしく', 'やさしく'], ['mild', '穏やかに', '穏やかに'], ['energetic', '元気に', '元気に'],
+             ['joyful', '楽しそうに', '楽しそうに'], ['cool', '冷静に', '冷静に'], ['shy', '照れながら', '照れながら'],
+             ['languid', '気だるげに', '気だるげに'], ['serious', '真剣に', '真剣に'], ['sad', '悲しげに', '悲しげに'],
+             ['angry', '怒り気味に', '怒り気味に']],
+  distance: [['', '指定なし', ''], ['whisper', '囁くように', '囁くように'], ['close', '近い距離感で', '近い距離感で'],
+             ['loud', 'はっきり大きな声で', 'はっきりと大きな声で']],
+};
+const VD_PITCH = { 1: ['低い', '低い声'], 2: ['やや低め', 'やや低めの声'], 3: ['ふつう', ''], 4: ['やや高め', 'やや高めの声'], 5: ['高い', '高い声'] };
+const VD_SPEED = { 1: ['とてもゆっくり', 'とてもゆっくりと'], 2: ['ゆっくり', 'ゆっくりと'], 3: ['ふつう', ''], 4: ['やや早口', 'やや早口で'], 5: ['早口', '早口で'] };
+const VD_GEN_DEFAULTS = { num_steps: 40, t_schedule_mode: 'linear', sway_coeff: -1, cfg_scale_text: 3, cfg_scale_caption: 4, duration_scale: 1 };
+const VD_MAX_REF_SECONDS = 30;
+
+const $vdBackdrop     = document.getElementById('vd-backdrop');
+const $vdStatus       = document.getElementById('vd-status');
+const $vdRecipeSelect = document.getElementById('vd-recipe-select');
+const $vdRecipeName   = document.getElementById('vd-recipe-name');
+const $vdPitch        = document.getElementById('vd-pitch');
+const $vdPitchValue   = document.getElementById('vd-pitch-value');
+const $vdSpeed        = document.getElementById('vd-speed');
+const $vdSpeedValue   = document.getElementById('vd-speed-value');
+const $vdCaption      = document.getElementById('vd-caption');
+const $vdCaptionNote  = document.getElementById('vd-caption-note');
+const $vdText         = document.getElementById('vd-text');
+const $vdTextCount    = document.getElementById('vd-text-count');
+const $vdCount        = document.getElementById('vd-count');
+const $vdSeed         = document.getElementById('vd-seed');
+const $vdSteps        = document.getElementById('vd-steps');
+const $vdSchedule     = document.getElementById('vd-schedule');
+const $vdSway         = document.getElementById('vd-sway');
+const $vdCfgCaption   = document.getElementById('vd-cfg-caption');
+const $vdCfgText      = document.getElementById('vd-cfg-text');
+const $vdDuration     = document.getElementById('vd-duration');
+const $vdGenerate     = document.getElementById('vd-generate');
+const $vdStop         = document.getElementById('vd-stop');
+const $vdProgress     = document.getElementById('vd-progress');
+const $vdCandidates   = document.getElementById('vd-candidates');
+
+let vdParams = { gender: '', age: '', pitch: 3, speed: 3, quality: [], tone: [], distance: '' };
+let vdCaptionEdited = false;   // true=captionを手で編集済み（声の特徴を変えても上書きしない）
+let vdAvailable = false;
+let vdModel = '';
+let vdSessionId = '';
+let vdRecipes = [];
+let vdBusy = false;
+let vdAbort = false;
+let vdUsedServer = false;      // この画面を開いてから生成したか（閉じるときのアンロード要否）
+let vdCandidateSeq = 0;
+let vdInitialized = false;
+
+function vdOptionWord(group, value) {
+  const found = VD_OPTIONS[group].find(o => o[0] === value);
+  return found ? found[2] : '';
+}
+
+// 声の特徴からcaptionを組み立てる（例: 落ち着いた、やや低めの声の若い女性が、近い距離感で、やさしく話している。）
+function vdBuildCaption(p) {
+  const qualities = (p.quality || []).map(v => vdOptionWord('quality', v)).filter(Boolean);
+  const pitch = (VD_PITCH[p.pitch] || VD_PITCH[3])[1];
+  let voice = '';
+  if (qualities.length || pitch) voice = qualities.join('、') + (qualities.length && pitch ? '、' : '') + (pitch || '声');
+  const person = vdOptionWord('age', p.age) + (vdOptionWord('gender', p.gender) || '話者');
+  const manner = [vdOptionWord('distance', p.distance)]
+    .concat((p.tone || []).map(v => vdOptionWord('tone', v)))
+    .concat([(VD_SPEED[p.speed] || VD_SPEED[3])[1]])
+    .filter(Boolean);
+  return `${voice ? voice + 'の' : ''}${person}が${manner.length ? '、' + manner.join('、') : ''}話している。`;
+}
+
+function vdRenderParams() {
+  document.querySelectorAll('#vd-modal .vd-chips').forEach(box => {
+    const group = box.dataset.vdGroup;
+    const multi = box.dataset.vdMode === 'multi';
+    box.querySelectorAll('.vd-chip').forEach(chip => {
+      const value = chip.dataset.value;
+      chip.classList.toggle('active', multi ? vdParams[group].includes(value) : vdParams[group] === value);
+    });
+  });
+  $vdPitch.value = String(vdParams.pitch);
+  $vdSpeed.value = String(vdParams.speed);
+  $vdPitchValue.textContent = (VD_PITCH[vdParams.pitch] || VD_PITCH[3])[0];
+  $vdSpeedValue.textContent = (VD_SPEED[vdParams.speed] || VD_SPEED[3])[0];
+}
+
+function vdUpdateCaptionNote() {
+  $vdCaptionNote.textContent = vdCaptionEdited
+    ? 'captionを手で編集済みです。声の特徴を変えても自動では書き換わりません。'
+    : '声の特徴を変えると自動で書き換わります。';
+}
+
+function vdParamsChanged() {
+  vdRenderParams();
+  if (!vdCaptionEdited) $vdCaption.value = vdBuildCaption(vdParams);
+  vdUpdateCaptionNote();
+}
+
+function vdUpdateTextCount() {
+  $vdTextCount.textContent = `${$vdText.value.length}文字`;
+}
+
+function vdSetGeneration(g) {
+  const v = Object.assign({}, VD_GEN_DEFAULTS, g || {});
+  $vdSteps.value      = v.num_steps == null ? '' : String(v.num_steps);
+  $vdSchedule.value   = v.t_schedule_mode === 'sway' ? 'sway' : 'linear';
+  $vdSway.value       = String(v.sway_coeff);
+  $vdCfgCaption.value = String(v.cfg_scale_caption);
+  $vdCfgText.value    = String(v.cfg_scale_text);
+  $vdDuration.value   = String(v.duration_scale);
+}
+
+function vdGetGeneration() {
+  const num = (el, fallback) => { const n = parseFloat(el.value); return Number.isFinite(n) ? n : fallback; };
+  const steps = parseInt($vdSteps.value, 10);
+  return {
+    num_steps:         Number.isFinite(steps) ? steps : null,
+    t_schedule_mode:   $vdSchedule.value,
+    sway_coeff:        num($vdSway, VD_GEN_DEFAULTS.sway_coeff),
+    cfg_scale_text:    num($vdCfgText, VD_GEN_DEFAULTS.cfg_scale_text),
+    cfg_scale_caption: num($vdCfgCaption, VD_GEN_DEFAULTS.cfg_scale_caption),
+    duration_scale:    num($vdDuration, VD_GEN_DEFAULTS.duration_scale),
+  };
+}
+
+function vdGetSeed() {
+  const n = parseInt($vdSeed.value, 10);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+function vdInit() {
+  if (vdInitialized) return;
+  vdInitialized = true;
+  document.querySelectorAll('#vd-modal .vd-chips').forEach(box => {
+    const group = box.dataset.vdGroup;
+    const multi = box.dataset.vdMode === 'multi';
+    VD_OPTIONS[group].forEach(([value, label]) => {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'vd-chip';
+      chip.dataset.value = value;
+      chip.textContent = label;
+      chip.addEventListener('click', () => {
+        if (multi) {
+          const list = vdParams[group];
+          vdParams[group] = list.includes(value) ? list.filter(v => v !== value) : list.concat([value]);
+        } else {
+          vdParams[group] = value;
+        }
+        vdParamsChanged();
+      });
+      box.appendChild(chip);
+    });
+  });
+  const grid = document.getElementById('vd-emoji-grid');
+  VD_EMOJIS.forEach(([emoji, label, hint]) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'vd-emoji-btn';
+    btn.textContent = `${emoji} ${label}`;
+    btn.title = hint;
+    // pointerdown で既定動作を止め、セリフ欄のカーソル位置を保ったまま挿入する
+    btn.addEventListener('pointerdown', e => e.preventDefault());
+    btn.addEventListener('click', () => {
+      const start = $vdText.selectionStart ?? $vdText.value.length;
+      const end   = $vdText.selectionEnd ?? start;
+      const next  = $vdText.value.slice(0, start) + emoji + $vdText.value.slice(end);
+      if (next.length > $vdText.maxLength) return;
+      $vdText.value = next;
+      $vdText.focus();
+      $vdText.setSelectionRange(start + emoji.length, start + emoji.length);
+      vdUpdateTextCount();
+    });
+    grid.appendChild(btn);
+  });
+  vdSetGeneration(null);
+  vdParamsChanged();
+  vdUpdateTextCount();
+}
+
+async function vdCheckStatus() {
+  vdAvailable = false;
+  $vdStatus.className = 'vd-status';
+  $vdStatus.textContent = '接続を確認中...';
+  $vdGenerate.disabled = true;
+  try {
+    const res = await fetch(`${API}/voice_design/status`);
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.detail || `通信エラー（HTTP ${res.status}）`);
+    vdAvailable = !!d.available;
+    vdModel = d.model || '';
+    if (vdAvailable) {
+      $vdStatus.className = 'vd-status ok';
+      $vdStatus.textContent = `✓ VoiceDesignを利用できます（${d.url}${vdModel ? ' / モデル: ' + vdModel : ''}）`;
+    } else {
+      $vdStatus.className = 'vd-status ng';
+      $vdStatus.textContent = '✕ ' + (d.reason || 'VoiceDesignを利用できません');
+    }
+  } catch (error) {
+    $vdStatus.className = 'vd-status ng';
+    $vdStatus.textContent = '✕ 接続を確認できませんでした: ' + error.message;
+  }
+  $vdGenerate.disabled = !vdAvailable || vdBusy;
+}
+
+async function vdLoadRecipes(selectId) {
+  try {
+    const res = await fetch(`${API}/voice_design/recipes`);
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.detail || `通信エラー（HTTP ${res.status}）`);
+    vdRecipes = d.recipes || [];
+  } catch (error) {
+    vdRecipes = [];
+    showErrorToast('レシピを読み込めませんでした: ' + error.message);
+  }
+  $vdRecipeSelect.innerHTML = '';
+  const empty = document.createElement('option');
+  empty.value = '';
+  empty.textContent = vdRecipes.length ? '（保存したレシピを選択）' : '（保存したレシピはありません）';
+  $vdRecipeSelect.appendChild(empty);
+  vdRecipes.forEach(r => {
+    const opt = document.createElement('option');
+    opt.value = r.id;
+    opt.textContent = r.name;
+    $vdRecipeSelect.appendChild(opt);
+  });
+  if (selectId) $vdRecipeSelect.value = selectId;
+}
+
+function vdApplyRecipe(r) {
+  const p = r.params || {};
+  const pick = (group, value) => VD_OPTIONS[group].some(o => o[0] === value) ? value : '';
+  const level = n => { const v = parseInt(n, 10); return v >= 1 && v <= 5 ? v : 3; };
+  const many = (group, list) => (Array.isArray(list) ? list : []).filter(v => VD_OPTIONS[group].some(o => o[0] === v));
+  vdParams = {
+    gender: pick('gender', p.gender), age: pick('age', p.age),
+    pitch: level(p.pitch), speed: level(p.speed),
+    quality: many('quality', p.quality), tone: many('tone', p.tone),
+    distance: pick('distance', p.distance),
+  };
+  vdCaptionEdited = !!r.caption_edited;
+  $vdCaption.value = r.caption || vdBuildCaption(vdParams);
+  $vdText.value = r.text || '';
+  $vdSeed.value = r.seed == null ? '' : String(r.seed);
+  vdSetGeneration(r.generation);
+  $vdRecipeName.value = r.name || '';
+  vdRenderParams();
+  vdUpdateCaptionNote();
+  vdUpdateTextCount();
+}
+
+async function vdSaveRecipe() {
+  const name = $vdRecipeName.value.trim();
+  if (!name) { showErrorToast('レシピ名を入力してください'); $vdRecipeName.focus(); return; }
+  const same = vdRecipes.find(r => r.name === name);
+  if (same && !confirm(`レシピ「${name}」を上書きします。よろしいですか？`)) return;
+  try {
+    const res = await fetch(`${API}/voice_design/recipes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: same ? same.id : '',
+        name,
+        params: vdParams,
+        caption: $vdCaption.value.trim(),
+        caption_edited: vdCaptionEdited,
+        text: $vdText.value.trim(),
+        generation: vdGetGeneration(),
+        seed: vdGetSeed(),
+        model: vdModel,
+      }),
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.detail || `通信エラー（HTTP ${res.status}）`);
+    await vdLoadRecipes(d.recipe && d.recipe.id);
+    showErrorToast('✓ レシピを保存しました', 'success');
+  } catch (error) {
+    showErrorToast('レシピを保存できませんでした: ' + error.message);
+  }
+}
+
+async function vdDeleteRecipe() {
+  const recipe = vdRecipes.find(r => r.id === $vdRecipeSelect.value);
+  if (!recipe) { showErrorToast('削除するレシピを選択してください'); return; }
+  if (!confirm(`レシピ「${recipe.name}」を削除します。よろしいですか？`)) return;
+  try {
+    const res = await fetch(`${API}/voice_design/recipes/${encodeURIComponent(recipe.id)}`, { method: 'DELETE' });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.detail || `通信エラー（HTTP ${res.status}）`);
+    await vdLoadRecipes();
+    showErrorToast('✓ レシピを削除しました', 'success');
+  } catch (error) {
+    showErrorToast('レシピを削除できませんでした: ' + error.message);
+  }
+}
+
+function vdAddCandidate(d) {
+  vdCandidateSeq += 1;
+  const card = document.createElement('div');
+  card.className = 'vd-candidate';
+
+  const head = document.createElement('div');
+  head.className = 'vd-candidate-head';
+  const title = document.createElement('strong');
+  title.textContent = `候補${vdCandidateSeq}`;
+  const meta = document.createElement('span');
+  const steps = d.generation && d.generation.num_steps != null ? `${d.generation.num_steps}ステップ` : 'ステップ既定';
+  meta.textContent = `seed ${d.seed} / ${Number(d.seconds || 0).toFixed(1)}秒 / ${steps}`;
+  head.appendChild(title);
+  head.appendChild(meta);
+  if (Number(d.seconds || 0) > VD_MAX_REF_SECONDS) {
+    const warn = document.createElement('span');
+    warn.className = 'vd-warn';
+    warn.textContent = `⚠ ${VD_MAX_REF_SECONDS}秒を超えています（v2/v3のモデルでは${VD_MAX_REF_SECONDS}秒までしか使われません）`;
+    head.appendChild(warn);
+  }
+
+  const audio = document.createElement('audio');
+  audio.controls = true;
+  audio.preload = 'metadata';
+  audio.src = `${API}${d.url}`;
+
+  const actions = document.createElement('div');
+  actions.className = 'vd-candidate-actions';
+  const reuse = document.createElement('button');
+  reuse.type = 'button';
+  reuse.className = 'ce-file-btn';
+  reuse.textContent = 'この設定に戻す';
+  reuse.title = 'この候補を作ったときのcaption・セリフ・生成設定・seedを入力欄に戻します';
+  reuse.addEventListener('click', () => {
+    $vdCaption.value = d.caption || '';
+    vdCaptionEdited = true;
+    $vdText.value = d.text || '';
+    $vdSeed.value = String(d.seed);
+    $vdCount.value = '1';
+    vdSetGeneration(d.generation);
+    vdUpdateCaptionNote();
+    vdUpdateTextCount();
+    showErrorToast('✓ この候補の設定を入力欄に戻しました', 'success');
+  });
+  const save = document.createElement('a');
+  save.className = 'ce-file-btn';
+  save.href = `${API}${d.url}`;
+  save.download = `voice_design_seed${d.seed}.wav`;
+  save.textContent = 'WAVを保存';
+  actions.appendChild(reuse);
+  actions.appendChild(save);
+
+  card.appendChild(head);
+  card.appendChild(audio);
+  card.appendChild(actions);
+  $vdCandidates.prepend(card);
+}
+
+function vdSetBusy(busy) {
+  vdBusy = busy;
+  $vdGenerate.disabled = busy || !vdAvailable;
+  $vdStop.style.display = busy ? '' : 'none';
+}
+
+async function vdGenerateCandidates() {
+  if (vdBusy) return;
+  if (!vdAvailable) { showErrorToast('VoiceDesignを利用できません。接続を確認してください'); return; }
+  const text = $vdText.value.trim();
+  if (!text) { showErrorToast('セリフを入力してください'); $vdText.focus(); return; }
+  const caption = $vdCaption.value.trim();
+  const generation = vdGetGeneration();
+  const baseSeed = vdGetSeed();
+  const count = Math.max(1, Math.min(6, parseInt($vdCount.value, 10) || 1));
+  vdAbort = false;
+  vdSetBusy(true);
+  let made = 0;
+  try {
+    for (let i = 0; i < count; i++) {
+      if (vdAbort) break;
+      $vdProgress.textContent = `生成中... (${i + 1}/${count})`;
+      const res = await fetch(`${API}/voice_design/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(Object.assign({
+          session_id: vdSessionId, text, caption,
+          seed: baseSeed === null ? null : baseSeed + i,
+        }, generation)),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.detail || `通信エラー（HTTP ${res.status}）`);
+      vdSessionId = d.session_id || vdSessionId;
+      vdUsedServer = true;
+      vdAddCandidate(d);
+      made += 1;
+    }
+    $vdProgress.textContent = vdAbort ? `中止しました（${made}本生成）` : `${made}本生成しました`;
+  } catch (error) {
+    $vdProgress.textContent = '';
+    showErrorToast('生成に失敗しました: ' + error.message);
+  } finally {
+    vdSetBusy(false);
+  }
+}
+
+function vdStopAudio() {
+  $vdCandidates.querySelectorAll('audio').forEach(a => a.pause());
+}
+
+function openVoiceDesignModal() {
+  vdInit();
+  vdUsedServer = false;
+  $vdProgress.textContent = '';
+  $vdBackdrop.classList.add('open');
+  vdCheckStatus();
+  vdLoadRecipes($vdRecipeSelect.value);
+}
+
+function closeVoiceDesignModal() {
+  vdAbort = true;
+  vdStopAudio();
+  $vdBackdrop.classList.remove('open');
+  if (vdUsedServer) {
+    // 使い終わったVoiceDesign側のモデルをVRAMから解放する
+    vdUsedServer = false;
+    fetch(`${API}/voice_design/unload`, { method: 'POST', keepalive: true }).catch(() => {});
+  }
+}
+
+document.getElementById('voice-design-btn').addEventListener('click', openVoiceDesignModal);
+document.getElementById('vd-close').addEventListener('click', closeVoiceDesignModal);
+document.getElementById('vd-cancel').addEventListener('click', closeVoiceDesignModal);
+document.getElementById('vd-status-retry').addEventListener('click', vdCheckStatus);
+document.getElementById('vd-recipe-save').addEventListener('click', vdSaveRecipe);
+document.getElementById('vd-recipe-delete').addEventListener('click', vdDeleteRecipe);
+document.getElementById('vd-recipe-load').addEventListener('click', () => {
+  const recipe = vdRecipes.find(r => r.id === $vdRecipeSelect.value);
+  if (!recipe) { showErrorToast('読み込むレシピを選択してください'); return; }
+  vdApplyRecipe(recipe);
+  showErrorToast('✓ レシピを読み込みました', 'success');
+});
+document.getElementById('vd-caption-rebuild').addEventListener('click', () => {
+  vdCaptionEdited = false;
+  vdParamsChanged();
+});
+document.getElementById('vd-gen-reset').addEventListener('click', () => vdSetGeneration(null));
+document.getElementById('vd-clear').addEventListener('click', () => {
+  vdStopAudio();
+  $vdCandidates.innerHTML = '';
+  $vdProgress.textContent = '';
+});
+$vdPitch.addEventListener('input', () => { vdParams.pitch = parseInt($vdPitch.value, 10) || 3; vdParamsChanged(); });
+$vdSpeed.addEventListener('input', () => { vdParams.speed = parseInt($vdSpeed.value, 10) || 3; vdParamsChanged(); });
+$vdCaption.addEventListener('input', () => { vdCaptionEdited = true; vdUpdateCaptionNote(); });
+$vdText.addEventListener('input', vdUpdateTextCount);
+$vdGenerate.addEventListener('click', vdGenerateCandidates);
+$vdStop.addEventListener('click', () => { vdAbort = true; $vdProgress.textContent = '中止しています（生成中の1本が終わるまでお待ちください）...'; });
 </script>
 </body>
 </html>
