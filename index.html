@@ -8290,37 +8290,51 @@ const $vdTestRow   = document.getElementById('vd-test-row');
 const $vdTestAudio = document.getElementById('vd-test-audio');
 const $vdTestNote  = document.getElementById('vd-test-note');
 
-// セリフのカテゴリ: [キー, タブ名, 入力欄の案内, タブの説明]。キーはサーバー側の VD_TEXT_CATEGORIES と同じにする。
+// セリフのカテゴリ: [キー, タブ名, 入力欄の案内, タブの説明, 既定のセリフ]。キーはサーバー側の VD_TEXT_CATEGORIES と同じにする。
 const VD_TEXT_CATEGORIES = [
   ['greeting', '挨拶', '短い挨拶のセリフ（目安: 約5秒、10〜25文字）',
-   '短い挨拶で声の第一印象を確かめます。参照音声にするなら「語り」の長めのセリフが向いています。'],
+   '短い挨拶で声の第一印象を確かめます。参照音声にするなら「語り」の長めのセリフが向いています。',
+   'こんにちは。今日もよろしくお願いします。'],
   ['daily', '日常会話', '相手に話しかける日常会話のセリフ（目安: 10〜15秒、50〜70文字）',
-   '普段の話し方を確かめます。参照音声にするなら「語り」の長めのセリフが向いています。'],
+   '普段の話し方を確かめます。参照音声にするなら「語り」の長めのセリフが向いています。',
+   'そういえば、駅前に新しいお店ができたみたいですよ。今度、一緒に行ってみませんか。'],
   ['emotion', '感情', '感情がはっきり表れるセリフ（目安: 約10秒、40〜60文字）',
-   '喜びや驚きなどの表現を確かめます。参照音声にするなら「語り」の長めのセリフが向いています。'],
+   '喜びや驚きなどの表現を確かめます。参照音声にするなら「語り」の長めのセリフが向いています。',
+   'えっ、本当ですか！それはすごいですね。わたしまで嬉しくなっちゃいます。'],
   ['story', '語り', '声の特徴に合った長めのセリフ（目安: 20〜30秒、100〜130文字）',
-   '参照音声向けの長めのセリフです。生成した音声がそのまま参照音声になります。'],
+   '参照音声向けの長めのセリフです。生成した音声がそのまま参照音声になります。',
+   '今日は朝からよく晴れていて、気持ちのいい一日でしたね。少し散歩をしてから、近くのお店でお茶を飲んできました。'
+   + '帰り道には夕焼けがとてもきれいで、しばらく立ち止まって眺めていたんです。明日もいい日になるといいですね。'],
   ['free', '自由入力', '好きなセリフを入力します',
-   '手持ちのセリフを自由に試せます。セリフの長さが変わると、同じcaptionとseedでも声色が変わることがあります。'],
+   '手持ちのセリフを自由に試せます。セリフの長さが変わると、同じcaptionとseedでも声色が変わることがあります。',
+   ''],
 ];
 const VD_TEXT_DEFAULT_CATEGORY = 'story';
-// 会話用サーバーでの「まとめてテスト」に使うセリフ（セリフ欄の同じカテゴリに入力があればそちらを使う）
-const VD_CONV_PRESETS = [
-  ['greeting', '挨拶', 'おはようございます。今日もよろしくお願いします。'],
-  ['daily', '日常会話', 'そういえば、駅前に新しいお店ができたみたいですよ。今度、一緒に行ってみませんか。'],
-  ['emotion', '感情', 'えっ、本当ですか！それはすごいですね。わたしまで嬉しくなっちゃいます。'],
-];
+// 会話用サーバーでの「まとめてテスト」の対象。セリフ欄の同じタブのセリフを使い、空なら既定のセリフを使う。
+const VD_CONV_PRESET_KEYS = ['greeting', 'daily', 'emotion'];
+const VD_CONV_FALLBACK_TEXT = 'こんにちは。';   // 「このセリフでテスト」が空欄のときに喋らせるセリフ
 const VD_CONV_TEXT_MAX = 200;
 const $vdTextTabs = document.getElementById('vd-text-tabs');
 const $vdTextHint = document.getElementById('vd-text-hint');
 
-function vdEmptyTexts() {
+function vdCategoryLabel(key) {
+  const found = VD_TEXT_CATEGORIES.find(c => c[0] === key);
+  return found ? found[1] : key;
+}
+
+function vdDefaultText(key) {
+  const found = VD_TEXT_CATEGORIES.find(c => c[0] === key);
+  return found ? found[4] : '';
+}
+
+// 各タブの既定のセリフ（未入力・未生成のときの無難なサンプル）
+function vdDefaultTexts() {
   const texts = {};
-  VD_TEXT_CATEGORIES.forEach(([key]) => { texts[key] = ''; });
+  VD_TEXT_CATEGORIES.forEach(([key]) => { texts[key] = vdDefaultText(key); });
   return texts;
 }
 
-let vdTexts = vdEmptyTexts();          // カテゴリごとのセリフ
+let vdTexts = vdDefaultTexts();        // カテゴリごとのセリフ（最初は既定のセリフ）
 let vdTextCategory = VD_TEXT_DEFAULT_CATEGORY;
 let vdTextTabsReady = false;
 let vdConvBusy = false;                // 会話用サーバーで生成中
@@ -8329,8 +8343,11 @@ function vdRenderTextTabs() {
   const current = VD_TEXT_CATEGORIES.find(([key]) => key === vdTextCategory) || VD_TEXT_CATEGORIES[0];
   $vdTextTabs.querySelectorAll('.vd-tab').forEach(tab => {
     const key = tab.dataset.category;
+    // 印は「既定のセリフから変更済み」のタブに付ける
+    const changed = (vdTexts[key] || '').trim() !== vdDefaultText(key);
     tab.classList.toggle('active', key === vdTextCategory);
-    tab.classList.toggle('filled', !!(vdTexts[key] || '').trim());
+    tab.classList.toggle('filled', changed);
+    tab.title = changed ? '既定のセリフから変更されています' : '';
     tab.setAttribute('aria-selected', key === vdTextCategory ? 'true' : 'false');
   });
   $vdText.placeholder = current[2];
@@ -8357,7 +8374,10 @@ function vdInitTextTabs() {
     tab.addEventListener('click', () => vdSelectTextCategory(key));
     $vdTextTabs.appendChild(tab);
   });
-  vdRenderTextTabs();
+  // 初回は各タブに既定のセリフを入れ、選択中のタブのセリフを入力欄に出す
+  vdTexts = vdDefaultTexts();
+  $vdText.value = vdTexts[vdTextCategory];
+  vdUpdateTextCount();
 }
 
 // ── 会話用サーバーでの確認（候補カードの中に開く）──
@@ -8434,34 +8454,53 @@ function vdBuildConvPanel(d) {
   const info = document.createElement('div');
   info.className = 'vd-note vd-conv-info';
 
+  // まとめてテスト: チェックしたカテゴリだけ生成する
   const presetRow = document.createElement('div');
   presetRow.className = 'vd-row';
+  const checks = VD_CONV_PRESET_KEYS.map(key => {
+    const label = document.createElement('label');
+    label.className = 'ce-copy-label';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = true;
+    box.dataset.category = key;
+    const name = document.createElement('span');
+    name.textContent = vdCategoryLabel(key);
+    label.appendChild(box);
+    label.appendChild(name);
+    presetRow.appendChild(label);
+    return box;
+  });
   const batch = document.createElement('button');
   batch.type = 'button';
   batch.className = 'ce-file-btn';
-  batch.textContent = 'まとめてテスト（挨拶・日常会話・感情）';
-  batch.title = 'セリフ欄の同じタブに入力があればそのセリフを、なければ内蔵のセリフを使います';
+  batch.textContent = 'まとめてテスト';
+  batch.title = 'チェックしたカテゴリを、セリフ欄の同じタブのセリフで続けて生成します';
   batch.addEventListener('click', () => {
-    const items = VD_CONV_PRESETS.map(([key, label, fallback]) => [label, (vdTexts[key] || '').trim() || fallback]);
+    const items = checks.filter(box => box.checked).map(box => {
+      const key = box.dataset.category;
+      return [vdCategoryLabel(key), (vdTexts[key] || '').trim() || vdDefaultText(key)];
+    });
+    if (!items.length) { showErrorToast('テストするカテゴリにチェックを入れてください'); return; }
     vdConvRun(d, panel, items, false);
   });
   presetRow.appendChild(batch);
 
+  // 任意のセリフ: 空欄なら無難な挨拶でテストする
   const inputRow = document.createElement('div');
   inputRow.className = 'vd-row';
   const input = document.createElement('input');
   input.type = 'text';
   input.className = 'ce-input';
   input.maxLength = VD_CONV_TEXT_MAX;
-  input.placeholder = '喋らせたいセリフを入力';
+  input.placeholder = `喋らせたいセリフを入力（空欄なら「${VD_CONV_FALLBACK_TEXT}」）`;
   const single = document.createElement('button');
   single.type = 'button';
   single.className = 'ce-file-btn';
   single.textContent = 'このセリフでテスト';
   single.addEventListener('click', () => {
     const text = input.value.trim();
-    if (!text) { showErrorToast('セリフを入力してください'); input.focus(); return; }
-    vdConvRun(d, panel, [['入力', text]], true);
+    vdConvRun(d, panel, [[text ? '入力' : '既定の挨拶', text || VD_CONV_FALLBACK_TEXT]], true);
   });
   input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); single.click(); } });
   inputRow.appendChild(input);
@@ -8745,11 +8784,13 @@ function vdApplyRecipe(r) {
   };
   vdCaptionEdited = !!r.caption_edited;
   $vdCaption.value = r.caption || vdBuildCaption(vdParams);
-  // セリフ: 新しいレシピはタブごとに保存されている。古いレシピは1本だけなので「語り」に入れる。
-  vdTexts = vdEmptyTexts();
+  // セリフ: 新しいレシピはタブごとに保存されている（保存されたとおりに戻す）。
+  // 古いレシピは1本だけなので「語り」に入れ、他のタブは既定のセリフにする。
   if (r.texts && typeof r.texts === 'object') {
+    vdTexts = {};
     VD_TEXT_CATEGORIES.forEach(([key]) => { vdTexts[key] = String(r.texts[key] || ''); });
   } else {
+    vdTexts = vdDefaultTexts();
     vdTexts[VD_TEXT_DEFAULT_CATEGORY] = r.text || '';
   }
   vdTextCategory = VD_TEXT_CATEGORIES.some(([key]) => key === r.text_category) ? r.text_category : VD_TEXT_DEFAULT_CATEGORY;
@@ -9020,9 +9061,12 @@ async function vdGenerateCandidates() {
 // セリフ自動生成: 接続中のLLMに、captionに合うセリフを作らせる。
 async function vdSuggestText() {
   if (vdSuggesting) return;
-  if ($vdText.value.trim() && !confirm('今のセリフを、自動生成したセリフで上書きします。よろしいですか？')) return;
-  const label = $vdSuggest.textContent;
   const category = vdTextCategory;
+  // 既定のセリフのままなら確認なしで置き換える。手を入れたセリフは上書き前に確認する。
+  const current = $vdText.value.trim();
+  if (current && current !== vdDefaultText(category)
+      && !confirm('今のセリフを、自動生成したセリフで上書きします。よろしいですか？')) return;
+  const label = $vdSuggest.textContent;
   vdSuggesting = true;
   $vdSuggest.textContent = '生成中...';
   vdUpdateButtons();
@@ -9052,9 +9096,9 @@ function vdResetInputs() {
   if (!confirm('声の特徴・caption・セリフ（すべてのタブ）を既定値に戻します。よろしいですか？')) return;
   vdParams = vdDefaultParams();
   vdCaptionEdited = false;
-  vdTexts = vdEmptyTexts();
+  vdTexts = vdDefaultTexts();
   vdTextCategory = VD_TEXT_DEFAULT_CATEGORY;
-  $vdText.value = '';
+  $vdText.value = vdTexts[vdTextCategory];
   vdParamsChanged();
   vdUpdateTextCount();
 }
