@@ -93,10 +93,14 @@ uv run python gradio_app.py --server-name 0.0.0.0 --server-port 7860
 ```bash
 uv run python gradio_app_voicedesign.py --server-name 0.0.0.0 --server-port 7861
 ```
+> **`--extra cu128` などを付けて会話用を起動している場合：** VoiceDesign 用アプリにも必ず同じ指定を付けてください。指定が食い違うと、uv が PyTorch を入れ替えようとして、Irodori-TTS の環境が壊れることがあります。
+
+```bash
+uv run --extra cu128 python gradio_app_voicedesign.py --server-name 0.0.0.0 --server-port 7861
+```
 
 会話用の `gradio_app.py` と同時に起動するので、ポートが重ならないようにしてください。起動したポートは、環境設定の「声をデザイン（VoiceDesign）用の接続先」に指定します。
 
-> **`--extra cu128` などを付けて会話用を起動している場合：** VoiceDesign 用アプリにも同じ指定を付けてください。指定が食い違うと、uv が PyTorch を入れ替えようとして、Irodori-TTS の環境が壊れることがあります。
 
 詳しいセットアップ方法は [Irodori-TTS の README](https://github.com/Aratako/Irodori-TTS) を参照してください。
 
