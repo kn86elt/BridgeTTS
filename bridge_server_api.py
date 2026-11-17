@@ -75,6 +75,8 @@ DEFAULT_SETTINGS = {
     # 声をデザイン（VoiceDesign）接続設定（永続化）
     "vd_host":      "localhost",   # VoiceDesign用Gradioアプリのホスト/IP
     "vd_port":      7861,          # VoiceDesign用Gradioアプリのポート（Irodori-TTSの推奨値）
+    # 接続の共通設定
+    "localhost_as_ipv4": True,     # True=接続先の localhost を 127.0.0.1 に読み替える（IPv6解決による接続の遅れを避ける）
     # 参照音声なしキャラのTTS動作
     "no_voice_mode": "off",        # "off"=音声オフで使用 / "default_voice"=デフォルト音声で使用
     "tts_api_version": "auto",     # "auto"=自動検出 / "v2" / "v3" / "v4"
@@ -134,6 +136,7 @@ _ENV_TTS_API_URL = os.getenv("TTS_API_URL", "")
 # LLMサーバプリセット
 LLM_PRESETS = [
     {"id": "lm-studio",      "label": "LM Studio",            "host": "localhost", "port": 1234,  "path": "/v1", "key": "lm-studio", "supports_unload": True,  "supports_load": True,  "requires_model": False},
+    {"id": "lm-studio-bionic", "label": "LM Studio Bionic",      "host": "localhost", "port": 1234,  "path": "/v1", "key": "lm-studio", "supports_unload": True,  "supports_load": True,  "requires_model": False, "note": "従来の LM Studio と同時に起動している場合、ポートが 1235 などに変わることがあります。接続できないときは Bionic 側のサーバー設定でポートを確認してください。"},
     {"id": "ollama",         "label": "Ollama",                "host": "localhost", "port": 11434, "path": "/v1", "key": "ollama",    "supports_unload": True,  "supports_load": True,  "requires_model": True},
     {"id": "text-gen-webui", "label": "text-generation-webui", "host": "localhost", "port": 5000,  "path": "/v1", "key": "",          "supports_unload": True,  "supports_load": True,  "requires_model": False},
     {"id": "koboldcpp",      "label": "KoboldCpp",             "host": "localhost", "port": 5001,  "path": "/v1", "key": "",          "supports_unload": False, "supports_load": False, "requires_model": False},
@@ -143,11 +146,41 @@ LLM_PRESETS = [
 ]
 
 
+def _localhost_as_ipv4(settings: dict) -> bool:
+    """localhost を 127.0.0.1 に読み替える設定が有効か。settings に無ければ保存済みの設定を見る。"""
+    flag = settings.get("localhost_as_ipv4") if isinstance(settings, dict) else None
+    if flag is None:
+        flag = load_settings().get("localhost_as_ipv4", True)
+    return bool(flag)
+
+
+def _connect_host(host, settings: dict) -> str:
+    """接続に使うホスト名を返す。設定が有効なら localhost を 127.0.0.1 に読み替える。
+    Windows では localhost が先にIPv6(::1)へ解決され、IPv4だけで待ち受けるサーバーへの
+    接続が1回ごとに約2秒遅れることがあるため。"""
+    host = str(host or "").strip() or "localhost"
+    if host.lower() == "localhost" and _localhost_as_ipv4(settings):
+        return "127.0.0.1"
+    return host
+
+
+def _connect_url(url: str, settings: dict) -> str:
+    """URL のホストが localhost なら、設定に応じて 127.0.0.1 に読み替える（環境変数で指定したURL用）。"""
+    try:
+        parts = urllib.parse.urlsplit(url)
+        if (parts.hostname or "").lower() != "localhost" or not _localhost_as_ipv4(settings):
+            return url
+        userinfo, at, host_port = parts.netloc.rpartition("@")
+        return urllib.parse.urlunsplit(parts._replace(netloc=f"{userinfo}{at}127.0.0.1{host_port[len('localhost'):]}"))
+    except ValueError:
+        return url
+
+
 def _build_llm_url(settings: dict) -> str:
     """設定からLLM API URLを構築する。llm_use_env=True かつ env var があれば環境変数を優先。"""
     if settings.get("llm_use_env") and _ENV_LLM_API_URL:
-        return _ENV_LLM_API_URL
-    host = (settings.get("llm_host") or "localhost").strip()
+        return _connect_url(_ENV_LLM_API_URL, settings)
+    host = _connect_host(settings.get("llm_host"), settings)
     port = settings.get("llm_port") or 1234
     path = (settings.get("llm_path") or "/v1").strip()
     if not path.startswith("/"):
@@ -158,15 +191,15 @@ def _build_llm_url(settings: dict) -> str:
 def _build_tts_url(settings: dict) -> str:
     """設定からTTS API URLを構築する。tts_use_env=True かつ env var があれば環境変数を優先。"""
     if settings.get("tts_use_env") and _ENV_TTS_API_URL:
-        return _ENV_TTS_API_URL
-    host = (settings.get("tts_host") or "localhost").strip()
+        return _connect_url(_ENV_TTS_API_URL, settings)
+    host = _connect_host(settings.get("tts_host"), settings)
     port = settings.get("tts_port") or 7860
     return f"http://{host}:{port}/"
 
 
 def _build_vd_url(settings: dict) -> str:
     """設定から VoiceDesign 用 Gradio アプリの URL を構築する。"""
-    host = (settings.get("vd_host") or "localhost").strip()
+    host = _connect_host(settings.get("vd_host"), settings)
     port = settings.get("vd_port") or 7861
     return f"http://{host}:{port}/"
 
@@ -3098,6 +3131,8 @@ def get_api_config():
         "vd_host":         settings.get("vd_host", "localhost"),
         "vd_port":         settings.get("vd_port", 7861),
         "vd_api_url":      VD_API_URL,
+        # 接続の共通設定
+        "localhost_as_ipv4": settings.get("localhost_as_ipv4", True),
         # 環境変数の現在値
         "env_llm_api_url": _ENV_LLM_API_URL,
         "env_tts_api_url": _ENV_TTS_API_URL,
@@ -3115,11 +3150,17 @@ def post_api_config(data: dict = Body(...)):
     settings = load_settings()
     changed  = []
 
+    # ── 接続の共通設定（変わったら LLM / TTS / 声をデザイン のURLをすべて作り直す）──
+    conn_changed = "localhost_as_ipv4" in data
+    if conn_changed:
+        settings["localhost_as_ipv4"] = bool(data["localhost_as_ipv4"])
+        changed.append("connection")
+
     # ── LLM設定 ──
     llm_fields = ["llm_use_env", "llm_preset", "llm_host", "llm_port",
                   "llm_path", "llm_api_key", "llm_model",
                   "llm_temperature", "llm_presence_penalty"]
-    llm_changed = any(f in data for f in llm_fields)
+    llm_changed = any(f in data for f in llm_fields) or conn_changed
     if llm_changed:
         for f in llm_fields:
             if f in data:
@@ -3136,7 +3177,7 @@ def post_api_config(data: dict = Body(...)):
 
     # ── TTS設定 ──
     tts_fields = ["tts_use_env", "tts_host", "tts_port"]
-    tts_changed = any(f in data for f in tts_fields)
+    tts_changed = any(f in data for f in tts_fields) or conn_changed
     if tts_changed:
         for f in tts_fields:
             if f in data:
@@ -3149,7 +3190,7 @@ def post_api_config(data: dict = Body(...)):
 
     # ── 声をデザイン（VoiceDesign）設定 ──
     vd_fields = ["vd_host", "vd_port"]
-    if any(f in data for f in vd_fields):
+    if any(f in data for f in vd_fields) or conn_changed:
         for f in vd_fields:
             if f in data:
                 settings[f] = data[f]
@@ -3184,6 +3225,7 @@ class LlmModelsRequest(BaseModel):
     llm_port:    int | None = None
     llm_path:    str = ""
     llm_api_key: str = ""
+    localhost_as_ipv4: bool | None = None   # None=保存済みの設定に従う
 
 
 @app.post("/llm_models")
@@ -3202,13 +3244,16 @@ def post_llm_models(req: LlmModelsRequest):
 
 # ── LLMサーバの管理API (モデルのロード状態取得・ロード・アンロード) ──
 _LLM_ADMIN_PRESETS = ("lm-studio", "ollama", "text-gen-webui")
+_LLM_PRESET_ALIASES = {"lm-studio-bionic": "lm-studio"}   # 管理APIが同じ形のプリセット
 _LLM_LOAD_TIMEOUT  = 600   # モデルのロード完了待ち (秒)
 
 
 def _llm_admin_target(settings: dict) -> tuple[str, str, str]:
-    """(プリセットID, 管理APIのベースURL, APIキー) を返す"""
+    """(プリセットID, 管理APIのベースURL, APIキー) を返す。
+    管理APIが同じ形のプリセット（LM Studio Bionic など）は、元のプリセットIDに読み替えて返す。"""
     preset = settings.get("llm_preset", "lm-studio")
-    host   = (settings.get("llm_host") or "localhost").strip()
+    preset = _LLM_PRESET_ALIASES.get(preset, preset)
+    host   = _connect_host(settings.get("llm_host"), settings)
     port   = settings.get("llm_port") or 1234
     key    = (settings.get("llm_api_key") or "").strip()
     return preset, f"http://{host}:{port}", key
@@ -3323,6 +3368,7 @@ class LlmAdminTarget(BaseModel):
     llm_port:    int | None = None
     llm_api_key: str | None = None
     llm_model:   str | None = None
+    localhost_as_ipv4: bool | None = None
 
 
 def _llm_admin_settings(target: LlmAdminTarget | None) -> dict:

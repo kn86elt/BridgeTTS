@@ -1576,12 +1576,23 @@ body.no-bubble-blur .msg-bubble {
     </div>
     <div id="api-config-body">
 
+      <!-- ── 接続の共通設定 ── -->
+      <div class="api-section-divider" style="border-top:none; padding-top:0; margin-top:0;">接続の共通設定</div>
+      <div class="api-settings-group">
+        <label class="api-check-label">
+          <input type="checkbox" id="ac-localhost-ipv4" checked>
+          <span>接続先の localhost を 127.0.0.1 に読み替える</span>
+        </label>
+        <div style="font-size:12px; color:var(--muted)">LLM・TTS・声をデザインの接続先に共通です。Windows では localhost への接続が1回ごとに約2秒遅れることがあり、ONにすると解消します。サーバーが IPv6 だけで待ち受けていて接続できない場合は OFF にしてください。</div>
+      </div>
+
       <!-- ── LLM サーバ設定 ── -->
-      <div class="api-section-divider" style="border-top:none; padding-top:0; margin-top:0;">LLM サーバ設定</div>
+      <div class="api-section-divider">LLM サーバ設定</div>
       <div class="api-settings-group">
         <div>
           <div class="api-field-label">プリセット</div>
           <select class="api-field-select" id="ac-llm-preset"></select>
+          <div class="ac-conn-note info" id="ac-llm-preset-note"></div>
         </div>
         <div id="ac-llm-fields">
           <div class="api-field-label">接続先</div>
@@ -7197,6 +7208,8 @@ const $acMemoryInterval      = document.getElementById('ac-memory-interval');
 const $acHistoryMax          = document.getElementById('ac-history-max');
 // LLM接続設定
 const $acLlmPreset   = document.getElementById('ac-llm-preset');
+const $acLlmPresetNote  = document.getElementById('ac-llm-preset-note');
+const $acLocalhostIpv4  = document.getElementById('ac-localhost-ipv4');
 const $acLlmFields   = document.getElementById('ac-llm-fields');
 const $acLlmHost     = document.getElementById('ac-llm-host');
 const $acLlmPort     = document.getElementById('ac-llm-port');
@@ -7491,6 +7504,7 @@ function _llmAdminTarget() {
     llm_port:    parseInt($acLlmPort.value, 10) || null,
     llm_api_key: $acLlmKey.value.trim(),
     llm_model:   $acLlmModel.value.trim(),
+    localhost_as_ipv4: $acLocalhostIpv4.checked,
   };
 }
 
@@ -7522,6 +7536,13 @@ async function _refreshLlmLoaded() {
 }
 
 // ── プリセット選択 → フィールド自動入力 ──
+// プリセットに案内文があれば表示する（例: LM Studio Bionic のポートについて）
+function _updatePresetNote() {
+  const preset = _llmPresets.find(p => p.id === $acLlmPreset.value);
+  $acLlmPresetNote.textContent = (preset && preset.note) || '';
+}
+$acLlmPreset.addEventListener('change', _updatePresetNote);
+
 function _updateUnloadBtn() {
   const preset = _llmPresets.find(p => p.id === $acLlmPreset.value);
   $acLlmUnloadRow.style.display = (preset && preset.supports_unload) ? '' : 'none';
@@ -7645,6 +7666,7 @@ $acLlmFetchBtn.addEventListener('click', async () => {
         llm_port:    parseInt($acLlmPort.value, 10) || null,
         llm_path:    $acLlmPath.value.trim(),
         llm_api_key: $acLlmKey.value.trim(),
+        localhost_as_ipv4: $acLocalhostIpv4.checked,
       }),
     });
     const d   = await res.json();
@@ -7707,6 +7729,8 @@ async function openApiConfigModal() {
       const d = await res.json();
       // LLM
       $acLlmPreset.value = d.llm_preset || 'lm-studio';
+      _updatePresetNote();
+      $acLocalhostIpv4.checked = d.localhost_as_ipv4 !== false;
       $acLlmHost.value   = d.llm_host   || 'localhost';
       $acLlmPort.value   = d.llm_port   != null ? String(d.llm_port) : '1234';
       $acLlmPath.value   = d.llm_path   || '/v1';
@@ -7836,6 +7860,8 @@ $acResetBtn.addEventListener('click', () => {
   $acTtsPort.value = '7860';
   $acVdHost.value = 'localhost';
   $acVdPort.value = '7861';
+  $acLocalhostIpv4.checked = true;
+  _updatePresetNote();
   $acTtsVersion.value = 'auto';
 });
 
@@ -7867,6 +7893,7 @@ async function applyApiConfig() {
       tts_port:    parseInt($acTtsPort.value, 10) || 7860,
       vd_host:     $acVdHost.value.trim(),
       vd_port:     parseInt($acVdPort.value, 10) || 7861,
+      localhost_as_ipv4: $acLocalhostIpv4.checked,
     };
     const res = await fetch(`${API}/api_config`, {
       method: 'POST',
