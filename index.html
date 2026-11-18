@@ -1579,11 +1579,10 @@ body.no-bubble-blur .msg-bubble {
       <!-- ── 接続の共通設定 ── -->
       <div class="api-section-divider" style="border-top:none; padding-top:0; margin-top:0;">接続の共通設定</div>
       <div class="api-settings-group">
-        <label class="api-check-label">
+        <label class="api-check-label" title="LLM・TTS・声をデザインの接続先に共通です。Windows では localhost への接続が1回ごとに約2秒遅れることがあり、ONにすると解消します。サーバーが IPv6 だけで待ち受けていて接続できない場合は OFF にしてください。">
           <input type="checkbox" id="ac-localhost-ipv4" checked>
           <span>接続先の localhost を 127.0.0.1 に読み替える</span>
         </label>
-        <div style="font-size:12px; color:var(--muted)">LLM・TTS・声をデザインの接続先に共通です。Windows では localhost への接続が1回ごとに約2秒遅れることがあり、ONにすると解消します。サーバーが IPv6 だけで待ち受けていて接続できない場合は OFF にしてください。</div>
       </div>
 
       <!-- ── LLM サーバ設定 ── -->
@@ -1640,6 +1639,13 @@ body.no-bubble-blur .msg-bubble {
           <div style="margin-top:8px">
             <div class="api-field-label">presence_penalty（空＝サーバ既定、-2〜2）</div>
             <input class="api-field-input" id="ac-llm-presence" type="number" step="0.05" min="-2" max="2" placeholder="例: 0.4">
+          </div>
+          <div style="margin-top:8px">
+            <div class="api-field-label">LLMの思考（Thinking）</div>
+            <select class="api-field-select" id="ac-llm-thinking">
+              <option value="off">OFF（思考を止めて速く応答する）</option>
+              <option value="server">サーバの設定に従う</option>
+            </select>
           </div>
         </div>
         <label class="api-check-label" id="ac-llm-env-row">
@@ -7219,6 +7225,7 @@ const $acLlmKey      = document.getElementById('ac-llm-key');
 const $acLlmModel             = document.getElementById('ac-llm-model');
 const $acLlmTemperature       = document.getElementById('ac-llm-temperature');
 const $acLlmPresence          = document.getElementById('ac-llm-presence');
+const $acLlmThinking          = document.getElementById('ac-llm-thinking');
 const $acLlmModelSelect       = document.getElementById('ac-llm-model-select');
 const $acLlmFetchBtn          = document.getElementById('ac-llm-fetch-btn');
 const $acLlmModelNote         = document.getElementById('ac-llm-model-note');
@@ -7739,6 +7746,7 @@ async function openApiConfigModal() {
       $acLlmModel.value  = d.llm_model  || '';
       $acLlmTemperature.value = d.llm_temperature      != null ? String(d.llm_temperature) : '';
       $acLlmPresence.value    = d.llm_presence_penalty != null ? String(d.llm_presence_penalty) : '';
+      $acLlmThinking.value    = d.llm_thinking === 'server' ? 'server' : 'off';
       // モデルセレクトに現在値をセット（llama.cpp以外）
       _setLlmModelOptions(null, d.llm_model || '');
       $acLlmLoadExclusive.checked = d.llm_load_exclusive !== false;
@@ -7889,6 +7897,7 @@ async function applyApiConfig() {
       llm_model:   $acLlmModel.value.trim(),
       llm_temperature:      $acLlmTemperature.value.trim(),
       llm_presence_penalty: $acLlmPresence.value.trim(),
+      llm_thinking:         $acLlmThinking.value,
       tts_use_env: $acTtsUseEnv.checked,
       tts_host:    $acTtsHost.value.trim(),
       tts_port:    parseInt($acTtsPort.value, 10) || 7860,

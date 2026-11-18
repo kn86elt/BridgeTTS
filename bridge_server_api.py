@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from gradio_client import Client, handle_file
 from PIL import Image
 from game_mode import GameEngine, GameError
-from game_mode.llm import OpenAIGameLLM
+from game_mode.llm import OpenAIGameLLM, REASONING_OFF_BODY, strip_reasoning
 from game_mode.transcript import GameTranscriptWriter
 from game_mode.saves import GameSaveStore
 import io
@@ -67,6 +67,7 @@ DEFAULT_SETTINGS = {
     "llm_model":    "",            # モデル名 (空="local-model"フォールバック)
     "llm_temperature":      "",    # 生成温度 (空=サーバ既定, 0〜2)
     "llm_presence_penalty": "",    # 反復抑制 (空=サーバ既定, -2〜2)
+    "llm_thinking":         "off", # LLMの思考: "off"=アプリから止める / "server"=サーバの設定に従う
     "llm_load_exclusive":   True,  # True=モデルのロード前に他のロード済みモデルをアンロードする
     # TTS接続設定（永続化）
     "tts_use_env":  False,         # True=環境変数TTS_API_URLを優先使用
@@ -1432,7 +1433,7 @@ def _run_memory_update(char_name: str, transcript: list[dict]) -> None:
                 f"【前回までの印象】{mem.get('relationship_note') or '(なし)'}\n\n"
                 f"【会話ログ】\n{convo}"
             )
-            resp = client.chat.completions.create(
+            resp = _llm_create(
                 model=LLM_MODEL or "local-model",
                 messages=[
                     {"role": "system", "content": _MEMORY_EXTRACT_PROMPT},
@@ -1873,6 +1874,127 @@ def clean_for_tts(text: str) -> str:
     return s.strip()
 
 
+# ── LLM呼び出しの共通処理（思考の設定・形式エラーの送り直し・思考タグの除去）──
+# 思考を止める指示を受け付けなかった「URL|モデル」。以後その組み合わせでは指示を送らない
+_llm_reasoning_off_rejected: set[str] = set()
+_LLM_REASONING_ARG_WORDS = ("reasoning", "think", "chat_template_kwargs")
+_THINK_OPEN_RE  = re.compile(r"<(?:think|thinking|reasoning|reflection)>", re.IGNORECASE)
+_THINK_CLOSE_RE = re.compile(r"</(?:think|thinking|reasoning|reflection)>", re.IGNORECASE)
+_THINK_TAG_MAX  = len("</reflection>")
+
+
+def _is_llm_output_format_error(exc: BaseException) -> bool:
+    """モデルの出力がサーバ側の解析形式に合わなかったエラーか（例: peg-gemma4）。
+    出力は毎回変わるため、送り直せば通ることが多い"""
+    return "does not match the expected" in str(exc).lower()
+
+
+def _llm_create(*, format_retry: bool = True, **kwargs):
+    """client.chat.completions.create に「LLMの思考」の設定を加えて呼ぶ。
+    - 思考OFFなら思考を止める指示を送る。サーバが拒否したら外して送り直す
+    - format_retry=True なら出力形式のエラーを1回だけ送り直す
+    - 非ストリーミングの応答は本文から思考タグの部分を除く"""
+    key = f"{LLM_API_URL}|{LLM_MODEL}"
+    send_off = (load_settings().get("llm_thinking", "off") != "server"
+                and key not in _llm_reasoning_off_rejected)
+    while True:
+        call = dict(kwargs)
+        if send_off:
+            call["extra_body"] = {**REASONING_OFF_BODY, **(call.get("extra_body") or {})}
+        try:
+            resp = client.chat.completions.create(**call)
+        except Exception as e:
+            if send_off and any(w in str(e).lower() for w in _LLM_REASONING_ARG_WORDS):
+                print(f"[LLM] 思考を止める指示を受け付けないサーバのため、指示を外して送り直します: {e}")
+                _llm_reasoning_off_rejected.add(key)
+                send_off = False
+                continue
+            if format_retry and _is_llm_output_format_error(e):
+                print(f"[LLM] 出力形式のエラーのため送り直します: {e}")
+                format_retry = False
+                continue
+            raise
+        if not call.get("stream"):
+            for choice in getattr(resp, "choices", None) or []:
+                msg = getattr(choice, "message", None)
+                if msg is not None and msg.content:
+                    msg.content = strip_reasoning(msg.content)
+        return resp
+
+
+class _ThinkTagFilter:
+    """ストリーミングの本文から思考タグ（<think>…</think> など）の部分を取り除く。
+    タグがチャンクの境目で切れても扱えるよう、タグの途中かもしれない末尾は次まで持ち越す。
+    閉じタグだけを出すモデル（開きタグがテンプレート側にある）はストリーミングでは判別できないため対象外"""
+
+    def __init__(self):
+        self.pending = ""
+        self.inside = False
+        self.after_close = False   # 閉じタグ直後の改行・空白を落とすため
+
+    def _emit(self, text: str, out: list) -> None:
+        if self.after_close:
+            text = text.lstrip()
+            if not text:
+                return
+            self.after_close = False
+        out.append(text)
+
+    def feed(self, text: str) -> str:
+        self.pending += text
+        out: list[str] = []
+        while True:
+            m = (_THINK_CLOSE_RE if self.inside else _THINK_OPEN_RE).search(self.pending)
+            if m:
+                if not self.inside:
+                    self._emit(self.pending[:m.start()], out)
+                else:
+                    self.after_close = True
+                self.pending = self.pending[m.end():]
+                self.inside = not self.inside
+                continue
+            cut = self.pending.rfind("<")
+            if cut == -1 or len(self.pending) - cut >= _THINK_TAG_MAX:
+                cut = len(self.pending)
+            if not self.inside:
+                self._emit(self.pending[:cut], out)
+            self.pending = self.pending[cut:]
+            return "".join(out)
+
+    def flush(self) -> str:
+        rest, self.pending = self.pending, ""
+        if self.inside:
+            return ""
+        out: list[str] = []
+        self._emit(rest, out)
+        return "".join(out)
+
+
+def _llm_stream_text(**kwargs):
+    """ストリーミングで本文の差分を順に返す（思考タグの部分は除く）。
+    本文が1文字も届く前に出力形式のエラーが起きたら、1回だけ送り直す"""
+    for attempt in range(2):
+        think = _ThinkTagFilter()
+        sent = False
+        try:
+            for chunk in _llm_create(format_retry=False, stream=True, **kwargs):
+                if not chunk.choices:
+                    continue
+                text = think.feed(chunk.choices[0].delta.content or "")
+                if text:
+                    sent = True
+                    yield text
+            tail = think.flush()
+            if tail:
+                yield tail
+            return
+        except Exception as e:
+            if attempt == 0 and not sent and _is_llm_output_format_error(e):
+                print(f"[LLM] 出力形式のエラーのため送り直します: {e}")
+                continue
+            raise
+
+
 def stream_llm_with_tts(messages: list, tts_enabled: bool, memorize_user_text: str | None = None):
     req_id = f"req_{int(time.time() * 1000)}_{threading.get_ident() % 10000}"
 
@@ -1935,15 +2057,7 @@ def stream_llm_with_tts(messages: list, tts_enabled: bool, memorize_user_text: s
                     llm_kwargs[api_key_name] = float(raw)
                 except ValueError:
                     pass
-        stream = client.chat.completions.create(
-            model=model_name,
-            messages=messages,
-            stream=True,
-            **llm_kwargs,
-        )
-
-        for chunk in stream:
-            delta = chunk.choices[0].delta.content or ""
+        for delta in _llm_stream_text(model=model_name, messages=messages, **llm_kwargs):
             full_answer += delta
             llm_buffer += delta
 
@@ -2168,7 +2282,7 @@ def _user_reply_gen_reserved():
 
     try:
         model_name = LLM_MODEL or "local-model"
-        resp = client.chat.completions.create(
+        resp = _llm_create(
             model=model_name,
             messages=messages,
             stream=False,
@@ -2270,7 +2384,7 @@ def read_url(req: ReadUrlRequest):
         prompt_text  = req.summary_prompt.strip() if req.summary_prompt.strip() else _DEFAULT_SUMMARY_PROMPT
         summary_user = f"{prompt_text}\n\n【本文】\n{excerpt}"
         try:
-            resp = client.chat.completions.create(
+            resp = _llm_create(
                 model=LLM_MODEL or "local-model",
                 messages=[{"role": "user", "content": summary_user}],
                 stream=False,
@@ -2305,7 +2419,7 @@ def summarize_text_endpoint(req: SummarizeTextRequest):
     prompt_text = req.summary_prompt.strip() if req.summary_prompt.strip() else _DEFAULT_TEXT_SUMMARY_PROMPT
     summary_user = f"{prompt_text}\n\n【本文】\n{excerpt}"
     try:
-        resp = client.chat.completions.create(
+        resp = _llm_create(
             model=LLM_MODEL or "local-model",
             messages=[{"role": "user", "content": summary_user}],
             stream=False,
@@ -3120,6 +3234,7 @@ def get_api_config():
         "llm_model":       settings.get("llm_model", ""),
         "llm_temperature":      settings.get("llm_temperature", ""),
         "llm_presence_penalty": settings.get("llm_presence_penalty", ""),
+        "llm_thinking":         settings.get("llm_thinking", "off"),
         "llm_load_exclusive":   settings.get("llm_load_exclusive", True),
         "llm_api_url":     LLM_API_URL,   # 現在実際に使用中のURL
         # TTS設定
@@ -3159,7 +3274,7 @@ def post_api_config(data: dict = Body(...)):
     # ── LLM設定 ──
     llm_fields = ["llm_use_env", "llm_preset", "llm_host", "llm_port",
                   "llm_path", "llm_api_key", "llm_model",
-                  "llm_temperature", "llm_presence_penalty"]
+                  "llm_temperature", "llm_presence_penalty", "llm_thinking"]
     llm_changed = any(f in data for f in llm_fields) or conn_changed
     if llm_changed:
         for f in llm_fields:
@@ -3800,7 +3915,7 @@ def voice_design_suggest_text(data: dict = Body(...)):
     parts.append(f"場面のヒント: {scene}")
     parts.append("セリフ:")
     try:
-        resp = client.chat.completions.create(
+        resp = _llm_create(
             model=LLM_MODEL or "local-model",
             messages=[
                 {"role": "system", "content": _VD_SUGGEST_SYSTEM_PROMPT.format(length=length)},
@@ -4266,16 +4381,12 @@ def run_tuneup(idx: int):
 
     def events():
         try:
-            stream = client.chat.completions.create(
+            for delta in _llm_stream_text(
                 model=LLM_MODEL or "local-model",
                 messages=[{"role": "user", "content": tuneup_text}],
                 temperature=0.2,
-                stream=True,
-            )
-            for chunk in stream:
-                delta = chunk.choices[0].delta.content or ""
-                if delta:
-                    yield f"data: {json.dumps({'token': delta}, ensure_ascii=False)}\n\n"
+            ):
+                yield f"data: {json.dumps({'token': delta}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'done': True}, ensure_ascii=False)}\n\n"
         except Exception as e:
             print(f"[整形] LLM実行に失敗しました: {e}")
