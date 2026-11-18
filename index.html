@@ -5570,6 +5570,7 @@ setInterval(() => {
 ══════════════════════════════ */
 $input.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.isComposing || e.keyCode === 229) return;  // IME変換中の確定Enterは無視
     e.preventDefault();
     if (!isScenarioPlaying && !isFileReading) sendMessage();
   }
@@ -8529,7 +8530,7 @@ function vdBuildConvPanel(d) {
     const text = input.value.trim();
     vdConvRun(d, panel, [[text ? '入力' : '既定の挨拶', text || VD_CONV_FALLBACK_TEXT]], true);
   });
-  input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); single.click(); } });
+  input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); single.click(); } });
   inputRow.appendChild(input);
   inputRow.appendChild(single);
 
