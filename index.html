@@ -970,7 +970,7 @@ body { background: var(--body-gradient); }
 #tuneup-footer button { min-width: 96px; }
 
 /* ══════════════════════════════
-   声をデザイン モーダル
+   ボイスデザイン モーダル
 ══════════════════════════════ */
 #vd-backdrop {
   display: none;
@@ -1032,10 +1032,25 @@ body { background: var(--body-gradient); }
 }
 .vd-chip:hover { border-color: var(--accent); color: var(--text); }
 .vd-chip.active { background: var(--accent); border-color: var(--accent); color: #000; }
+.vd-chip.locked { box-shadow: 0 0 0 2px var(--text); font-weight: 700; }
+.vd-lock-btn {
+  padding: 2px 7px; border-radius: 6px; font-size: 12px; line-height: 1.4;
+  background: transparent; color: var(--muted);
+  border: 1px solid var(--border); cursor: pointer;
+}
+.vd-lock-btn:hover { border-color: var(--accent); color: var(--text); }
+.vd-lock-btn.locked { background: var(--accent); border-color: var(--accent); color: #000; }
 .vd-slider { display: flex; align-items: center; gap: 10px; }
 .vd-slider input[type=range] { flex: 1; accent-color: var(--accent); }
 .vd-slider-value { width: 84px; font-size: 12px; color: var(--text); text-align: right; }
-#vd-caption { min-height: 64px; font-family: 'Noto Sans JP', sans-serif; font-size: 13px; }
+#vd-extra-caption { min-height: 52px; font-family: 'Noto Sans JP', sans-serif; font-size: 13px; }
+.vd-caption-view {
+  padding: 8px 10px; border: 1px dashed var(--border); border-radius: 6px;
+  font-family: 'Noto Sans JP', sans-serif; font-size: 13px; line-height: 1.6;
+  color: var(--text); white-space: pre-wrap; word-break: break-word;
+}
+.vd-caption-view.empty { color: var(--muted); }
+.vd-note.vd-over { color: #f59e0b; }
 #vd-text { min-height: 110px; font-family: 'Noto Sans JP', sans-serif; font-size: 13px; }
 .vd-emoji-grid { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
 .vd-emoji-btn {
@@ -1579,7 +1594,7 @@ body.no-bubble-blur .msg-bubble {
       <!-- ── 接続の共通設定 ── -->
       <div class="api-section-divider" style="border-top:none; padding-top:0; margin-top:0;">接続の共通設定</div>
       <div class="api-settings-group">
-        <label class="api-check-label" title="LLM・TTS・声をデザインの接続先に共通です。Windows では localhost への接続が1回ごとに約2秒遅れることがあり、ONにすると解消します。サーバーが IPv6 だけで待ち受けていて接続できない場合は OFF にしてください。">
+        <label class="api-check-label" title="LLM・TTS・ボイスデザインの接続先に共通です。Windows では localhost への接続が1回ごとに約2秒遅れることがあり、ONにすると解消します。サーバーが IPv6 だけで待ち受けていて接続できない場合は OFF にしてください。">
           <input type="checkbox" id="ac-localhost-ipv4" checked>
           <span>接続先の localhost を 127.0.0.1 に読み替える</span>
         </label>
@@ -1671,7 +1686,7 @@ body.no-bubble-blur .msg-bubble {
           <span id="ac-tts-env-text">環境変数 TTS_API_URL を使用</span>
         </label>
         <div style="margin-top:10px">
-          <div class="api-field-label">声をデザイン（VoiceDesign）用の接続先</div>
+          <div class="api-field-label">ボイスデザイン（VoiceDesign）用の接続先</div>
           <div class="api-field-row">
             <span class="api-prefix-label">http://</span>
             <input class="api-field-input" id="ac-vd-host" type="text" placeholder="localhost" style="flex:3">
@@ -2020,7 +2035,7 @@ body.no-bubble-blur .msg-bubble {
 </div>
 
 <!-- ══════════════════════════════
-     声をデザイン モーダル
+     ボイスデザイン モーダル
 ══════════════════════════════ -->
 <div id="vd-backdrop">
   <div id="vd-modal">
@@ -2061,15 +2076,19 @@ body.no-bubble-blur .msg-bubble {
           <div class="vd-chips" data-vd-group="gender" data-vd-mode="single"></div>
           <span class="vd-param-name">年齢</span>
           <div class="vd-chips" data-vd-group="age" data-vd-mode="single"></div>
+          <span class="vd-param-name">キャラクター</span>
+          <div class="vd-chips" data-vd-group="archetype" data-vd-mode="single"></div>
           <span class="vd-param-name">声の高さ</span>
           <div class="vd-slider">
             <input type="range" id="vd-pitch" min="1" max="5" step="1" value="3">
             <span class="vd-slider-value" id="vd-pitch-value"></span>
+            <button type="button" class="vd-lock-btn" id="vd-pitch-lock" aria-pressed="false">🔓</button>
           </div>
           <span class="vd-param-name">話す速さ</span>
           <div class="vd-slider">
             <input type="range" id="vd-speed" min="1" max="5" step="1" value="3">
             <span class="vd-slider-value" id="vd-speed-value"></span>
+            <button type="button" class="vd-lock-btn" id="vd-speed-lock" aria-pressed="false">🔓</button>
           </div>
           <span class="vd-param-name">声質</span>
           <div class="vd-chips" data-vd-group="quality" data-vd-mode="multi"></div>
@@ -2078,15 +2097,24 @@ body.no-bubble-blur .msg-bubble {
           <span class="vd-param-name">距離感・声量</span>
           <div class="vd-chips" data-vd-group="distance" data-vd-mode="single"></div>
         </div>
+        <div class="vd-row" style="margin-top:8px">
+          <button type="button" class="ce-file-btn" id="vd-random" title="ロックした項目は残して、ほかの特徴をランダムに選び直します">🎲 ランダム</button>
+          <span class="vd-note" style="flex:1">項目はクリックするたびに 選択 → 🔒ロック → 解除 と切り替わります。ロックした項目はランダムでも変わりません。</span>
+        </div>
       </div>
 
       <div class="ce-field">
-        <label class="ce-label">caption（声の説明文）</label>
-        <textarea class="ce-textarea" id="vd-caption" maxlength="400" placeholder="声の特徴を選ぶと自動で作られます。手で書き換えることもできます。"></textarea>
+        <label class="ce-label" for="vd-extra-caption">追加キャプション（任意）</label>
+        <textarea class="ce-textarea" id="vd-extra-caption" maxlength="400" placeholder="メニューにない特徴を書き足せます（例: 語尾を少し伸ばす癖がある。）。最終キャプションの末尾に付きます。"></textarea>
         <div class="vd-row">
-          <span class="vd-note" id="vd-caption-note" style="flex:1"></span>
-          <button type="button" class="ce-file-btn" id="vd-caption-rebuild">声の特徴から作り直す</button>
+          <select class="ce-input" id="vd-extra-select"></select>
+          <button type="button" class="ce-file-btn" id="vd-extra-load" title="選択した追加キャプションを入力欄に入れます">読み込む</button>
+          <button type="button" class="ce-file-btn" id="vd-extra-save" title="今の追加キャプションを、レシピとは別に保存します">保存</button>
+          <button type="button" class="ce-file-btn" id="vd-extra-delete">削除</button>
         </div>
+        <label class="ce-label" style="margin-top:10px">最終キャプション（自動生成・この内容で生成します）</label>
+        <div class="vd-caption-view" id="vd-caption"></div>
+        <div class="vd-note" id="vd-caption-note"></div>
       </div>
 
       <div class="ce-field">
@@ -2163,7 +2191,7 @@ body.no-bubble-blur .msg-bubble {
       </div>
     </div>
     <div id="vd-footer">
-      <button type="button" class="modal-btn secondary" id="vd-reset" title="声の特徴・caption・セリフを既定値に戻します">クリア</button>
+      <button type="button" class="modal-btn secondary" id="vd-reset" title="声の特徴・追加キャプション・セリフを既定値に戻し、ロックを解除します">クリア</button>
       <button type="button" class="modal-btn secondary" id="vd-cancel">閉じる</button>
     </div>
   </div>
@@ -2325,7 +2353,7 @@ body.no-bubble-blur .msg-bubble {
       <div class="sidebar-label">キャラクター</div>
       <div id="char-list"></div>
       <button id="new-char-btn">＋ 新規キャラクター...</button>
-      <button id="voice-design-btn">🎨 声をデザイン...</button>
+      <button id="voice-design-btn">🎨 ボイスデザイン...</button>
     </div>
     <div id="char-image-area">
       <img id="char-big-img" alt="character">
@@ -7777,7 +7805,7 @@ async function openApiConfigModal() {
         $acTtsUseEnv.disabled = true;
       }
       _updateTtsEnvState();
-      // 声をデザイン（VoiceDesign）
+      // ボイスデザイン（VoiceDesign）
       $acVdHost.value = d.vd_host || 'localhost';
       $acVdPort.value = d.vd_port != null ? String(d.vd_port) : '7861';
       // CHAR_DIR 状態の表示
@@ -8255,7 +8283,7 @@ $twSaveBtn.addEventListener('click', async () => {
 document.getElementById('tw-cancel').addEventListener('click', closeTuneupWizard);
 document.getElementById('tuneup-close').addEventListener('click', closeTuneupWizard);
 
-// ── 声をデザイン（VoiceDesign）──
+// ── ボイスデザイン（VoiceDesign）──
 // 絵文字一覧は Irodori-TTS (MIT License) の irodori_tts/gradio_emoji_palette.py と同じ内容。
 const VD_EMOJIS = [
   ['👂','囁き','耳元の音'], ['😮‍💨','吐息','溜息、寝息'], ['⏸️','間','沈黙'], ['🤭','笑い','くすくす、含み笑い'],
@@ -8276,21 +8304,89 @@ const VD_EMOJIS = [
 const VD_OPTIONS = {
   gender:   [['', '指定なし', ''], ['female', '女性', '女性'], ['male', '男性', '男性']],
   age:      [['', '指定なし', ''], ['child', '子ども', '子どもの'], ['teen', '10代', '10代の'],
-             ['young', '若い', '若い'], ['adult', '大人', '大人の'], ['senior', '年配', '年配の']],
+             ['young', '若い', '若い'], ['adult', '大人', '大人の'], ['middle', '中年', '中年の'], ['senior', '年配', '年配の']],
+  // キャラクター: captionの末尾に1文として足す
+  archetype: [['', '指定なし', ''],
+             ['tsundere', 'ツンデレ', 'ツンデレな性格で、強気で素っ気ない口調の中に照れが混じる。'],
+             ['yandere', 'ヤンデレ', 'ヤンデレな性格で、甘く穏やかな口調の奥に、執着と危うさがにじむ。'],
+             ['mesugaki', 'メスガキ', 'メスガキっぽく、相手を見下してからかう、生意気で挑発的な口調。'],
+             ['seiso', '清楚', '清楚で上品な雰囲気で、控えめで丁寧な口調。'],
+             ['ojousama', 'お嬢様', 'お嬢様らしく、気品があって少し高飛車な、優雅な口調。'],
+             ['koakuma', '小悪魔', '小悪魔っぽく、甘えるようにからかう、いたずらっぽい口調。'],
+             ['tennen', '天然', '天然でマイペースな性格で、ふわふわとした少し抜けた口調。'],
+             ['cool', 'クール', 'クールな性格で、感情をあまり表に出さない淡々とした口調。'],
+             ['downer', 'ダウナー', 'ダウナーな性格で、テンションが低く、ぼそぼそとした気だるい口調。'],
+             ['passionate', '熱血', '熱血な性格で、情熱的で勢いのある、力のこもった口調。'],
+             ['gal', 'ギャル', 'ギャルっぽく、ノリが軽く明るい、くだけた口調。'],
+             ['chuuni', '中二病', '中二病っぽく、芝居がかった大げさで尊大な口調。'],
+             ['villain', '悪役', '悪役らしく、冷酷で威圧的な、凄みのある口調。'],
+             ['reliable', '兄貴・姉御肌', '面倒見がよく、さっぱりとした頼もしい兄貴・姉御肌の口調。'],
+             ['prince', '王子様', '王子様のように、爽やかで甘く、自信に満ちた紳士的な口調。'],
+             ['butler', '執事', '執事のように、落ち着いた丁寧な敬語で、恭しく仕える口調。']],
   quality:  [['soft', 'やわらかい', 'やわらかい'], ['clear', '澄んだ', '澄んだ'], ['husky', 'ハスキー', 'ハスキーな'],
              ['sweet', '甘い', '甘い'], ['dignified', '凛とした', '凛とした'], ['calm', '落ち着いた', '落ち着いた'],
-             ['bright', '明るい', '明るい'], ['cute', 'かわいらしい', 'かわいらしい']],
+             ['bright', '明るい', '明るい'], ['cute', 'かわいらしい', 'かわいらしい'],
+             ['deep', '低く響く', '低く響く'], ['mellow', '渋い', '渋い'], ['nasal', '鼻にかかった', '鼻にかかった'],
+             ['lisp', '舌足らず', '舌足らずな']],
   tone:     [['gentle', 'やさしく', 'やさしく'], ['mild', '穏やかに', '穏やかに'], ['energetic', '元気に', '元気に'],
              ['joyful', '楽しそうに', '楽しそうに'], ['cool', '冷静に', '冷静に'], ['shy', '照れながら', '照れながら'],
              ['languid', '気だるげに', '気だるげに'], ['serious', '真剣に', '真剣に'], ['sad', '悲しげに', '悲しげに'],
-             ['angry', '怒り気味に', '怒り気味に']],
+             ['angry', '怒り気味に', '怒り気味に'], ['cheeky', '生意気に', '生意気に'], ['teasing', 'からかうように', 'からかうように'],
+             ['clingy', '甘えるように', '甘えるように'], ['elegant', '上品に', '上品に'], ['grumpy', '不機嫌そうに', '不機嫌そうに'],
+             ['smug', '得意げに', '得意げに']],
   distance: [['', '指定なし', ''], ['whisper', '囁くように', '囁くように'], ['close', '近い距離感で', '近い距離感で'],
              ['loud', 'はっきり大きな声で', 'はっきりと大きな声で']],
 };
+// ランダムで選ぶときの相性: キャラクターに合う性別・年齢（ロックしていない項目を選ぶときだけ使う）
+const VD_ARCHETYPE_FIT = {
+  yandere:  { age: ['teen', 'young', 'adult'] },
+  mesugaki: { gender: ['female'], age: ['child', 'teen'] },
+  seiso:    { gender: ['female'], age: ['teen', 'young', 'adult'] },
+  ojousama: { gender: ['female'], age: ['teen', 'young', 'adult'] },
+  koakuma:  { gender: ['female'], age: ['teen', 'young', 'adult'] },
+  gal:      { gender: ['female'], age: ['teen', 'young'] },
+  chuuni:   { age: ['teen', 'young'] },
+  villain:  { age: ['young', 'adult', 'middle', 'senior'] },
+  reliable: { age: ['young', 'adult', 'middle'] },
+  prince:   { gender: ['male'], age: ['teen', 'young', 'adult'] },
+  butler:   { gender: ['male'], age: ['young', 'adult', 'middle', 'senior'] },
+};
+// ランダムで同時に選ばない組み合わせ（「グループ:値」）
+const VD_CONFLICTS = [
+  ['tone:energetic', 'tone:languid'], ['tone:energetic', 'tone:sad'], ['tone:energetic', 'tone:cool'],
+  ['tone:joyful', 'tone:sad'], ['tone:joyful', 'tone:angry'], ['tone:joyful', 'tone:grumpy'],
+  ['tone:gentle', 'tone:angry'], ['tone:gentle', 'tone:grumpy'], ['tone:mild', 'tone:angry'],
+  ['tone:mild', 'tone:energetic'], ['tone:cool', 'tone:shy'], ['tone:cool', 'tone:clingy'],
+  ['tone:elegant', 'tone:cheeky'], ['tone:serious', 'tone:teasing'], ['tone:serious', 'tone:languid'],
+  ['quality:deep', 'quality:cute'], ['quality:mellow', 'quality:cute'], ['quality:mellow', 'quality:sweet'],
+  ['quality:lisp', 'quality:dignified'], ['quality:husky', 'quality:clear'],
+  ['age:child', 'quality:mellow'], ['age:child', 'quality:deep'], ['age:child', 'quality:husky'],
+  ['age:senior', 'quality:cute'],
+  ['archetype:downer', 'tone:energetic'], ['archetype:downer', 'tone:joyful'],
+  ['archetype:passionate', 'tone:languid'], ['archetype:passionate', 'tone:cool'],
+  ['archetype:cool', 'tone:energetic'], ['archetype:cool', 'tone:shy'],
+  ['archetype:seiso', 'tone:cheeky'], ['archetype:seiso', 'tone:angry'],
+  ['archetype:butler', 'tone:cheeky'], ['archetype:villain', 'tone:shy'],
+  ['archetype:gal', 'tone:elegant'], ['archetype:tennen', 'tone:serious'],
+  ['archetype:mesugaki', 'tone:elegant'], ['archetype:mesugaki', 'quality:dignified'],
+  ['distance:whisper', 'tone:energetic'], ['distance:loud', 'tone:shy'],
+];
+const VD_CONFLICT_SET = new Set(VD_CONFLICTS.flatMap(([a, b]) => [`${a}|${b}`, `${b}|${a}`]));
+// ランダムの重み: [値, 重み]
+const VD_RANDOM_WEIGHTS = {
+  gender:     [['female', 45], ['male', 45], ['', 10]],
+  age:        [['child', 8], ['teen', 18], ['young', 30], ['adult', 22], ['middle', 10], ['senior', 7], ['', 5]],
+  pitch:      [[1, 1], [2, 2], [3, 4], [4, 2], [5, 1]],
+  speed:      [[1, 1], [2, 3], [3, 6], [4, 3], [5, 1]],
+  distance:   [['', 5], ['whisper', 1], ['close', 2], ['loud', 2]],
+  multiCount: [[0, 1], [1, 2], [2, 2]],   // 声質・感情トーンの個数（ロックした分を含めて）
+};
+const VD_RANDOM_NO_ARCHETYPE = 0.4;     // キャラクターを付けない割合
 const VD_PITCH = { 1: ['低い', '低い声'], 2: ['やや低め', 'やや低めの声'], 3: ['ふつう', ''], 4: ['やや高め', 'やや高めの声'], 5: ['高い', '高い声'] };
 const VD_SPEED = { 1: ['とてもゆっくり', 'とてもゆっくりと'], 2: ['ゆっくり', 'ゆっくりと'], 3: ['ふつう', ''], 4: ['やや早口', 'やや早口で'], 5: ['早口', '早口で'] };
 const VD_GEN_DEFAULTS = { num_steps: 40, t_schedule_mode: 'linear', sway_coeff: -1, cfg_scale_text: 3, cfg_scale_caption: 4, duration_scale: 1 };
 const VD_MAX_REF_SECONDS = 30;
+const VD_CAPTION_MAX_CHARS = 400;   // サーバー側の VD_CAPTION_MAX_CHARS と同じ
 
 const $vdBackdrop     = document.getElementById('vd-backdrop');
 const $vdStatus       = document.getElementById('vd-status');
@@ -8302,6 +8398,10 @@ const $vdSpeed        = document.getElementById('vd-speed');
 const $vdSpeedValue   = document.getElementById('vd-speed-value');
 const $vdCaption      = document.getElementById('vd-caption');
 const $vdCaptionNote  = document.getElementById('vd-caption-note');
+const $vdExtra        = document.getElementById('vd-extra-caption');
+const $vdExtraSelect  = document.getElementById('vd-extra-select');
+const $vdPitchLock    = document.getElementById('vd-pitch-lock');
+const $vdSpeedLock    = document.getElementById('vd-speed-lock');
 const $vdText         = document.getElementById('vd-text');
 const $vdTextCount    = document.getElementById('vd-text-count');
 const $vdCount        = document.getElementById('vd-count');
@@ -8554,16 +8654,22 @@ function vdBuildConvPanel(d) {
 }
 
 function vdDefaultParams() {
-  return { gender: '', age: '', pitch: 3, speed: 3, quality: [], tone: [], distance: '' };
+  return { gender: '', age: '', archetype: '', pitch: 3, speed: 3, quality: [], tone: [], distance: '' };
+}
+
+// ランダムで変えない項目（単一選択とスライダーは true/false、複数選択はロックした値の一覧）
+function vdDefaultLocks() {
+  return { gender: false, age: false, archetype: false, distance: false, pitch: false, speed: false, quality: [], tone: [] };
 }
 
 let vdParams = vdDefaultParams();
-let vdCaptionEdited = false;   // true=captionを手で編集済み（声の特徴を変えても上書きしない）
+let vdLocks = vdDefaultLocks();
 let vdAvailable = false;
 let vdModel = '';
 let vdSessionId = '';
 let vdRecipes = [];
-let vdBusy = false;            // VoiceDesignサーバーで生成中
+let vdExtras = [];             // 保存した追加キャプション
+let vdBusy = false;           // VoiceDesignサーバーで生成中
 let vdSuggesting = false;      // LLMでセリフを生成中
 let vdAbort = false;
 let vdUsedServer = false;      // この画面を開いてから生成したか（閉じるときのアンロード要否）
@@ -8582,7 +8688,7 @@ function vdOptionLabel(group, value) {
 }
 
 // 声の特徴からcaptionを組み立てる（例: 落ち着いた、やや低めの声の若い女性が、近い距離感で、やさしく話している。）
-// 何も選ばれていなければ空文字を返す。
+// キャラクターを選んでいれば、その説明を1文として末尾に足す。何も選ばれていなければ空文字を返す。
 function vdBuildCaption(p) {
   const qualities = (p.quality || []).map(v => vdOptionWord('quality', v)).filter(Boolean);
   const pitch = (VD_PITCH[p.pitch] || VD_PITCH[3])[1];
@@ -8594,23 +8700,55 @@ function vdBuildCaption(p) {
     .concat((p.tone || []).map(v => vdOptionWord('tone', v)))
     .concat([(VD_SPEED[p.speed] || VD_SPEED[3])[1]])
     .filter(Boolean);
-  if (!voice && !ageWord && !genderWord && !manner.length) return '';
-  const person = ageWord + (genderWord || '話者');
-  return `${voice ? voice + 'の' : ''}${person}が${manner.length ? '、' + manner.join('、') : ''}話している。`;
+  let base = '';
+  if (voice || ageWord || genderWord || manner.length) {
+    const person = ageWord + (genderWord || '話者');
+    base = `${voice ? voice + 'の' : ''}${person}が${manner.length ? '、' + manner.join('、') : ''}話している。`;
+  }
+  return base + vdOptionWord('archetype', p.archetype);
 }
 
-// レシピ名を声の特徴から作る（例: 若い女性・やや低め・落ち着いた）
+// 最終キャプション = 声の特徴から作った文 + 追加キャプション（画面では直接編集しない）
+function vdCurrentCaption() {
+  return vdBuildCaption(vdParams) + $vdExtra.value.trim();
+}
+
+function vdUpdateCaption() {
+  const caption = vdCurrentCaption();
+  $vdCaption.textContent = caption || '（声の特徴も追加キャプションも空です。captionなしで生成します）';
+  $vdCaption.classList.toggle('empty', !caption);
+  const over = caption.length > VD_CAPTION_MAX_CHARS;
+  $vdCaptionNote.textContent = `${caption.length} / ${VD_CAPTION_MAX_CHARS}文字`
+    + (over ? ' ⚠ 長すぎます。追加キャプションを短くするか、選ぶ特徴を減らしてください' : '');
+  $vdCaptionNote.classList.toggle('vd-over', over);
+  vdUpdateRecipeNameHint();
+}
+
+// 最終キャプションが長すぎるときは知らせて false を返す
+function vdCheckCaptionLength() {
+  if (vdCurrentCaption().length <= VD_CAPTION_MAX_CHARS) return true;
+  showErrorToast(`最終キャプションが${VD_CAPTION_MAX_CHARS}文字を超えています。追加キャプションを短くしてください`);
+  return false;
+}
+
+// 候補を作ったときの声の特徴と追加キャプション（「この設定に戻す」用）
+function vdSnapshot() {
+  return { params: JSON.parse(JSON.stringify(vdParams)), extra: $vdExtra.value };
+}
+
+// レシピ名を声の特徴から作る（例: 若い女性・ツンデレ・やや低め・落ち着いた）。追加キャプションは使わない。
 function vdAutoRecipeName() {
   const p = vdParams;
   const parts = [];
   if (p.gender) parts.push(vdOptionWord('age', p.age) + vdOptionLabel('gender', p.gender));
   else if (p.age) parts.push(vdOptionLabel('age', p.age));
+  if (p.archetype) parts.push(vdOptionLabel('archetype', p.archetype));
   if (p.pitch !== 3) parts.push((VD_PITCH[p.pitch] || VD_PITCH[3])[0]);
   p.quality.slice(0, 2).forEach(v => parts.push(vdOptionLabel('quality', v)));
   p.tone.slice(0, 2).forEach(v => parts.push(vdOptionLabel('tone', v)));
   if (p.distance) parts.push(vdOptionLabel('distance', p.distance));
   let name = parts.filter(Boolean).join('・');
-  if (!name) name = $vdCaption.value.trim().slice(0, 24);
+  if (!name) name = $vdExtra.value.trim().slice(0, 24);
   return (name || 'レシピ').slice(0, 54);
 }
 
@@ -8635,26 +8773,125 @@ function vdRenderParams() {
     const multi = box.dataset.vdMode === 'multi';
     box.querySelectorAll('.vd-chip').forEach(chip => {
       const value = chip.dataset.value;
-      chip.classList.toggle('active', multi ? vdParams[group].includes(value) : vdParams[group] === value);
+      const active = multi ? vdParams[group].includes(value) : vdParams[group] === value;
+      const locked = active && (multi ? vdLocks[group].includes(value) : vdLocks[group]);
+      chip.classList.toggle('active', active);
+      chip.classList.toggle('locked', locked);
+      chip.textContent = (locked ? '🔒 ' : '') + chip.dataset.label;
+      chip.title = locked ? 'ロック中（ランダムでも変わりません）。クリックで解除' : (active ? 'もう一度クリックでロック' : '');
     });
   });
   $vdPitch.value = String(vdParams.pitch);
   $vdSpeed.value = String(vdParams.speed);
   $vdPitchValue.textContent = (VD_PITCH[vdParams.pitch] || VD_PITCH[3])[0];
   $vdSpeedValue.textContent = (VD_SPEED[vdParams.speed] || VD_SPEED[3])[0];
-}
-
-function vdUpdateCaptionNote() {
-  $vdCaptionNote.textContent = vdCaptionEdited
-    ? 'captionを手で編集済みです。声の特徴を変えても自動では書き換わりません。'
-    : '声の特徴を変えると自動で書き換わります。';
+  [[$vdPitchLock, vdLocks.pitch], [$vdSpeedLock, vdLocks.speed]].forEach(([btn, locked]) => {
+    btn.classList.toggle('locked', locked);
+    btn.textContent = locked ? '🔒' : '🔓';
+    btn.title = locked ? 'ロック中（ランダムでも変わりません）。クリックで解除' : 'クリックでロック（ランダムで変えないようにします）';
+    btn.setAttribute('aria-pressed', locked ? 'true' : 'false');
+  });
 }
 
 function vdParamsChanged() {
   vdRenderParams();
-  if (!vdCaptionEdited) $vdCaption.value = vdBuildCaption(vdParams);
-  vdUpdateCaptionNote();
-  vdUpdateRecipeNameHint();
+  vdUpdateCaption();
+}
+
+// チップのクリック: 選択 → 🔒ロック → 解除 の順に切り替える
+function vdClickChip(group, multi, value) {
+  if (multi) {
+    const list = vdParams[group];
+    const locks = vdLocks[group];
+    if (!list.includes(value)) {
+      vdParams[group] = list.concat([value]);
+    } else if (!locks.includes(value)) {
+      vdLocks[group] = locks.concat([value]);
+    } else {
+      vdParams[group] = list.filter(v => v !== value);
+      vdLocks[group] = locks.filter(v => v !== value);
+    }
+  } else if (vdParams[group] !== value) {
+    vdParams[group] = value;      // 別の項目を選んだら、前の項目のロックは外れる
+    vdLocks[group] = false;
+  } else if (!vdLocks[group]) {
+    vdLocks[group] = true;
+  } else {
+    vdLocks[group] = false;
+    vdParams[group] = '';         // 解除すると「指定なし」に戻る
+  }
+  vdParamsChanged();
+}
+
+function vdPickWeighted(pairs) {
+  const total = pairs.reduce((sum, [, w]) => sum + w, 0);
+  let r = Math.random() * total;
+  for (const [value, w] of pairs) { r -= w; if (r < 0) return value; }
+  return pairs[pairs.length - 1][0];
+}
+
+function vdConflictsWith(key, chosen) {
+  return chosen.some(k => VD_CONFLICT_SET.has(`${key}|${k}`));
+}
+
+// ランダム: ロックした項目は残し、ほかの特徴を選び直す（追加キャプションは変えない）
+function vdRandomize() {
+  const cur = vdParams;
+  const lk = vdLocks;
+  const next = vdDefaultParams();
+  const chosen = [];   // 決まった「グループ:値」（組み合わせの確認用）
+  const take = (group, value) => { next[group] = value; if (value) chosen.push(`${group}:${value}`); };
+  // 1) ロックした項目はそのまま
+  ['gender', 'age', 'archetype', 'distance'].forEach(g => { if (lk[g]) take(g, cur[g]); });
+  if (lk.pitch) next.pitch = cur.pitch;
+  if (lk.speed) next.speed = cur.speed;
+  ['quality', 'tone'].forEach(g => {
+    next[g] = cur[g].filter(v => lk[g].includes(v));
+    next[g].forEach(v => chosen.push(`${g}:${v}`));
+  });
+  // 2) キャラクター（ロックした性別・年齢・特徴と合うものから）
+  if (!lk.archetype) {
+    const fits = VD_OPTIONS.archetype.map(o => o[0]).filter(v => {
+      if (!v) return false;
+      const fit = VD_ARCHETYPE_FIT[v] || {};
+      if (lk.gender && next.gender && fit.gender && !fit.gender.includes(next.gender)) return false;
+      if (lk.age && next.age && fit.age && !fit.age.includes(next.age)) return false;
+      return !vdConflictsWith(`archetype:${v}`, chosen);
+    });
+    take('archetype', fits.length && Math.random() >= VD_RANDOM_NO_ARCHETYPE
+      ? fits[Math.floor(Math.random() * fits.length)] : '');
+  }
+  // 3) 性別・年齢（キャラクターに合う範囲から）
+  const fit = VD_ARCHETYPE_FIT[next.archetype] || {};
+  ['gender', 'age'].forEach(g => {
+    if (lk[g]) return;
+    let pairs = VD_RANDOM_WEIGHTS[g];
+    if (fit[g]) pairs = pairs.filter(([v]) => fit[g].includes(v));
+    pairs = pairs.filter(([v]) => !v || !vdConflictsWith(`${g}:${v}`, chosen));
+    take(g, pairs.length ? vdPickWeighted(pairs) : '');
+  });
+  // 4) 声の高さ・話す速さ
+  if (!lk.pitch) next.pitch = vdPickWeighted(VD_RANDOM_WEIGHTS.pitch);
+  if (!lk.speed) next.speed = vdPickWeighted(VD_RANDOM_WEIGHTS.speed);
+  // 5) 声質・感情トーン（ロックした分と合わせて0〜2個。合わない組み合わせは避ける）
+  ['quality', 'tone'].forEach(g => {
+    const want = Math.max(next[g].length, vdPickWeighted(VD_RANDOM_WEIGHTS.multiCount));
+    while (next[g].length < want) {
+      const ok = VD_OPTIONS[g].map(o => o[0])
+        .filter(v => !next[g].includes(v) && !vdConflictsWith(`${g}:${v}`, chosen));
+      if (!ok.length) break;
+      const v = ok[Math.floor(Math.random() * ok.length)];
+      next[g].push(v);
+      chosen.push(`${g}:${v}`);
+    }
+  });
+  // 6) 距離感・声量
+  if (!lk.distance) {
+    take('distance', vdPickWeighted(VD_RANDOM_WEIGHTS.distance
+      .filter(([v]) => !v || !vdConflictsWith(`distance:${v}`, chosen))));
+  }
+  vdParams = next;
+  vdParamsChanged();
 }
 
 function vdUpdateTextCount() {
@@ -8717,16 +8954,9 @@ function vdInit() {
       chip.type = 'button';
       chip.className = 'vd-chip';
       chip.dataset.value = value;
+      chip.dataset.label = label;
       chip.textContent = label;
-      chip.addEventListener('click', () => {
-        if (multi) {
-          const list = vdParams[group];
-          vdParams[group] = list.includes(value) ? list.filter(v => v !== value) : list.concat([value]);
-        } else {
-          vdParams[group] = value;
-        }
-        vdParamsChanged();
-      });
+      chip.addEventListener('click', () => vdClickChip(group, multi, value));
       box.appendChild(chip);
     });
   });
@@ -8781,6 +9011,79 @@ async function vdCheckStatus() {
   vdUpdateButtons();
 }
 
+// ── 追加キャプションの保存（レシピとは別のライブラリ）──
+function vdExtraLabel(text) {
+  const t = String(text || '').replace(/\s+/g, ' ');
+  return t.length > 40 ? t.slice(0, 40) + '…' : t;
+}
+
+async function vdLoadExtras(selectId) {
+  try {
+    const res = await fetch(`${API}/voice_design/extra_captions`);
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.detail || `通信エラー（HTTP ${res.status}）`);
+    vdExtras = d.items || [];
+  } catch (error) {
+    vdExtras = [];
+    showErrorToast('保存した追加キャプションを読み込めませんでした: ' + error.message);
+  }
+  $vdExtraSelect.innerHTML = '';
+  const empty = document.createElement('option');
+  empty.value = '';
+  empty.textContent = vdExtras.length ? '（保存した追加キャプションを選択）' : '（保存した追加キャプションはありません）';
+  $vdExtraSelect.appendChild(empty);
+  vdExtras.forEach(item => {
+    const opt = document.createElement('option');
+    opt.value = item.id;
+    opt.textContent = vdExtraLabel(item.text);
+    opt.title = item.text;
+    $vdExtraSelect.appendChild(opt);
+  });
+  if (selectId && vdExtras.some(item => item.id === selectId)) $vdExtraSelect.value = selectId;
+}
+
+async function vdSaveExtra() {
+  const text = $vdExtra.value.trim();
+  if (!text) { showErrorToast('保存する追加キャプションを入力してください'); $vdExtra.focus(); return; }
+  try {
+    const res = await fetch(`${API}/voice_design/extra_captions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.detail || `通信エラー（HTTP ${res.status}）`);
+    await vdLoadExtras(d.item && d.item.id);
+    showErrorToast('✓ 追加キャプションを保存しました', 'success');
+  } catch (error) {
+    showErrorToast('追加キャプションを保存できませんでした: ' + error.message);
+  }
+}
+
+function vdUseExtra() {
+  const item = vdExtras.find(x => x.id === $vdExtraSelect.value);
+  if (!item) { showErrorToast('読み込む追加キャプションを選択してください'); return; }
+  const current = $vdExtra.value.trim();
+  if (current && current !== item.text && !confirm('今の追加キャプションを置き換えます。よろしいですか？')) return;
+  $vdExtra.value = item.text;
+  vdUpdateCaption();
+}
+
+async function vdDeleteExtra() {
+  const item = vdExtras.find(x => x.id === $vdExtraSelect.value);
+  if (!item) { showErrorToast('削除する追加キャプションを選択してください'); return; }
+  if (!confirm(`追加キャプション「${vdExtraLabel(item.text)}」を削除します。よろしいですか？`)) return;
+  try {
+    const res = await fetch(`${API}/voice_design/extra_captions/${encodeURIComponent(item.id)}`, { method: 'DELETE' });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.detail || `通信エラー（HTTP ${res.status}）`);
+    await vdLoadExtras();
+    showErrorToast('✓ 追加キャプションを削除しました', 'success');
+  } catch (error) {
+    showErrorToast('追加キャプションを削除できませんでした: ' + error.message);
+  }
+}
+
 async function vdLoadRecipes(selectId) {
   try {
     const res = await fetch(`${API}/voice_design/recipes`);
@@ -8814,13 +9117,22 @@ function vdApplyRecipe(r) {
   const level = n => { const v = parseInt(n, 10); return v >= 1 && v <= 5 ? v : 3; };
   const many = (group, list) => (Array.isArray(list) ? list : []).filter(v => VD_OPTIONS[group].some(o => o[0] === v));
   vdParams = {
-    gender: pick('gender', p.gender), age: pick('age', p.age),
+    gender: pick('gender', p.gender), age: pick('age', p.age), archetype: pick('archetype', p.archetype),
     pitch: level(p.pitch), speed: level(p.speed),
     quality: many('quality', p.quality), tone: many('tone', p.tone),
     distance: pick('distance', p.distance),
   };
-  vdCaptionEdited = !!r.caption_edited;
-  $vdCaption.value = r.caption || vdBuildCaption(vdParams);
+  vdLocks = vdDefaultLocks();
+  // 追加キャプション: 新しいレシピは別項目で保存されている。
+  // 古いレシピでcaptionを手で編集していた場合は、声の特徴から作った文を除いた残り（その文で始まらなければ全文）を入れる。
+  if (typeof r.extra_caption === 'string') {
+    $vdExtra.value = r.extra_caption;
+  } else if (r.caption_edited && r.caption) {
+    const auto = vdBuildCaption(vdParams);
+    $vdExtra.value = auto && r.caption.startsWith(auto) ? r.caption.slice(auto.length).trim() : r.caption;
+  } else {
+    $vdExtra.value = '';
+  }
   // セリフ: 新しいレシピはタブごとに保存されている（保存されたとおりに戻す）。
   // 古いレシピは1本だけなので「語り」に入れ、他のタブは既定のセリフにする。
   if (r.texts && typeof r.texts === 'object') {
@@ -8835,13 +9147,12 @@ function vdApplyRecipe(r) {
   $vdSeed.value = r.seed == null ? '' : String(r.seed);
   vdSetGeneration(r.generation);
   $vdRecipeName.value = r.name || '';
-  vdRenderParams();
-  vdUpdateCaptionNote();
+  vdParamsChanged();
   vdUpdateTextCount();
-  vdUpdateRecipeNameHint();
 }
 
 async function vdSaveRecipe() {
+  if (!vdCheckCaptionLength()) return;
   // 名前が空欄なら声の特徴から自動で付ける（既存の名前と重ならないよう番号を足す）
   const typed = $vdRecipeName.value.trim();
   const name = typed || vdUniqueRecipeName(vdAutoRecipeName());
@@ -8858,8 +9169,8 @@ async function vdSaveRecipe() {
         id: same ? same.id : '',
         name,
         params: vdParams,
-        caption: $vdCaption.value.trim(),
-        caption_edited: vdCaptionEdited,
+        caption: vdCurrentCaption(),
+        extra_caption: $vdExtra.value.trim(),
         text: $vdText.value.trim(),
         texts,
         text_category: vdTextCategory,
@@ -8893,7 +9204,7 @@ async function vdDeleteRecipe() {
 }
 
 // 候補を1本生成する。失敗したら例外を投げる。
-async function vdRequestGenerate(text, caption, generation, seed) {
+async function vdRequestGenerate(text, caption, generation, seed, source) {
   const category = vdTextCategory;   // 生成を頼んだ時点のタブ（「この設定に戻す」で同じタブに戻すため）
   const res = await fetch(`${API}/voice_design/generate`, {
     method: 'POST',
@@ -8905,6 +9216,7 @@ async function vdRequestGenerate(text, caption, generation, seed) {
   vdSessionId = d.session_id || vdSessionId;
   vdUsedServer = true;
   d.category = category;
+  d.source = source || null;   // 作ったときの声の特徴と追加キャプション（「この設定に戻す」用）
   return d;
 }
 
@@ -8930,13 +9242,15 @@ async function vdTest() {
   if (!vdAvailable) { showErrorToast('VoiceDesignを利用できません。接続を確認してください'); return; }
   const text = $vdText.value.trim();
   if (!text) { showErrorToast('セリフを入力してください'); $vdText.focus(); return; }
-  const caption = $vdCaption.value.trim();
+  if (!vdCheckCaptionLength()) return;
+  const caption = vdCurrentCaption();
+  const source = vdSnapshot();
   const generation = vdGetGeneration();
   vdSetBusy(true);
   $vdTestRow.style.display = '';
   $vdTestNote.textContent = 'テスト音声を生成中...';
   try {
-    const d = await vdRequestGenerate(text, caption, generation, vdGetSeed());
+    const d = await vdRequestGenerate(text, caption, generation, vdGetSeed(), source);
     vdLastTest = { key: vdInputKey(text, caption, generation), result: d };
     vdShowPlayer($vdTestRow, $vdTestAudio, $vdTestNote, d);
   } catch (error) {
@@ -9009,19 +9323,21 @@ function vdAddCandidate(d, container, fromTest) {
   reuse.type = 'button';
   reuse.className = 'ce-file-btn';
   reuse.textContent = 'この設定に戻す';
-  reuse.title = 'この候補を作ったときのcaption・セリフ・生成設定・seedを入力欄に戻します';
+  reuse.title = 'この候補を作ったときの声の特徴・追加キャプション・セリフ・生成設定・seedを入力欄に戻します';
   reuse.addEventListener('click', () => {
-    $vdCaption.value = d.caption || '';
-    vdCaptionEdited = true;
+    if (d.source) {
+      vdParams = JSON.parse(JSON.stringify(d.source.params));
+      vdLocks = vdDefaultLocks();
+      $vdExtra.value = d.source.extra || '';
+    }
     vdTexts[vdTextCategory] = $vdText.value;
     if (VD_TEXT_CATEGORIES.some(([key]) => key === d.category)) vdTextCategory = d.category;
     $vdText.value = d.text || '';
     $vdSeed.value = String(d.seed);
     $vdCount.value = '1';
     vdSetGeneration(d.generation);
-    vdUpdateCaptionNote();
+    vdParamsChanged();
     vdUpdateTextCount();
-    vdUpdateRecipeNameHint();
     showErrorToast('✓ この候補の設定を入力欄に戻しました', 'success');
   });
   const panel = vdBuildConvPanel(d);
@@ -9055,7 +9371,9 @@ async function vdGenerateCandidates() {
   if (!vdAvailable) { showErrorToast('VoiceDesignを利用できません。接続を確認してください'); return; }
   const text = $vdText.value.trim();
   if (!text) { showErrorToast('セリフを入力してください'); $vdText.focus(); return; }
-  const caption = $vdCaption.value.trim();
+  if (!vdCheckCaptionLength()) return;
+  const caption = vdCurrentCaption();
+  const source = vdSnapshot();
   const generation = vdGetGeneration();
   const fieldSeed = vdGetSeed();
   const count = Math.max(1, Math.min(6, parseInt($vdCount.value, 10) || 1));
@@ -9082,7 +9400,7 @@ async function vdGenerateCandidates() {
       }
       $vdProgress.textContent = `生成中... (${i + 1}/${count})`;
       const seed = baseSeed === null ? null : (baseSeed + i) % 2147483648;
-      vdAddCandidate(await vdRequestGenerate(text, caption, generation, seed), batch, false);
+      vdAddCandidate(await vdRequestGenerate(text, caption, generation, seed, source), batch, false);
       made += 1;
     }
     $vdProgress.textContent = vdAbort ? `中止しました（${made}本）` : `${made}本の候補を用意しました`;
@@ -9111,7 +9429,7 @@ async function vdSuggestText() {
     const res = await fetch(`${API}/voice_design/suggest_text`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ caption: $vdCaption.value.trim(), category }),
+      body: JSON.stringify({ caption: vdCurrentCaption().slice(0, VD_CAPTION_MAX_CHARS), category }),
     });
     const d = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(d.detail || `通信エラー（HTTP ${res.status}）`);
@@ -9128,11 +9446,12 @@ async function vdSuggestText() {
   }
 }
 
-// クリア: 声の特徴・caption・セリフを既定値に戻す（生成設定・seed・候補・レシピは残す）
+// クリア: 声の特徴・追加キャプション・セリフを既定値に戻し、ロックを解除する（生成設定・seed・候補・レシピは残す）
 function vdResetInputs() {
-  if (!confirm('声の特徴・caption・セリフ（すべてのタブ）を既定値に戻します。よろしいですか？')) return;
+  if (!confirm('声の特徴・追加キャプション・セリフ（すべてのタブ）を既定値に戻し、ロックを解除します。よろしいですか？')) return;
   vdParams = vdDefaultParams();
-  vdCaptionEdited = false;
+  vdLocks = vdDefaultLocks();
+  $vdExtra.value = '';
   vdTexts = vdDefaultTexts();
   vdTextCategory = VD_TEXT_DEFAULT_CATEGORY;
   $vdText.value = vdTexts[vdTextCategory];
@@ -9152,6 +9471,7 @@ function openVoiceDesignModal() {
   $vdBackdrop.classList.add('open');
   vdCheckStatus();
   vdLoadRecipes($vdRecipeSelect.value);
+  vdLoadExtras($vdExtraSelect.value);
 }
 
 function closeVoiceDesignModal() {
@@ -9180,10 +9500,6 @@ document.getElementById('vd-recipe-load').addEventListener('click', () => {
 });
 $vdRecipePreview.addEventListener('click', vdPreviewRecipe);
 $vdRecipeSelect.addEventListener('change', vdUpdateRecipeTitle);
-document.getElementById('vd-caption-rebuild').addEventListener('click', () => {
-  vdCaptionEdited = false;
-  vdParamsChanged();
-});
 document.getElementById('vd-gen-reset').addEventListener('click', () => vdSetGeneration(null));
 document.getElementById('vd-clear').addEventListener('click', () => {
   $vdCandidates.querySelectorAll('audio').forEach(a => a.pause());
@@ -9192,7 +9508,13 @@ document.getElementById('vd-clear').addEventListener('click', () => {
 });
 $vdPitch.addEventListener('input', () => { vdParams.pitch = parseInt($vdPitch.value, 10) || 3; vdParamsChanged(); });
 $vdSpeed.addEventListener('input', () => { vdParams.speed = parseInt($vdSpeed.value, 10) || 3; vdParamsChanged(); });
-$vdCaption.addEventListener('input', () => { vdCaptionEdited = true; vdUpdateCaptionNote(); vdUpdateRecipeNameHint(); });
+$vdExtra.addEventListener('input', vdUpdateCaption);
+document.getElementById('vd-extra-load').addEventListener('click', vdUseExtra);
+document.getElementById('vd-extra-save').addEventListener('click', vdSaveExtra);
+document.getElementById('vd-extra-delete').addEventListener('click', vdDeleteExtra);
+document.getElementById('vd-random').addEventListener('click', vdRandomize);
+$vdPitchLock.addEventListener('click', () => { vdLocks.pitch = !vdLocks.pitch; vdRenderParams(); });
+$vdSpeedLock.addEventListener('click', () => { vdLocks.speed = !vdLocks.speed; vdRenderParams(); });
 $vdText.addEventListener('input', vdUpdateTextCount);
 $vdTest.addEventListener('click', vdTest);
 $vdSuggest.addEventListener('click', vdSuggestText);

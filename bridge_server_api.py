@@ -73,7 +73,7 @@ DEFAULT_SETTINGS = {
     "tts_use_env":  False,         # True=環境変数TTS_API_URLを優先使用
     "tts_host":     "localhost",   # TTSサーバのホスト/IP
     "tts_port":     7860,          # TTSサーバのポート
-    # 声をデザイン（VoiceDesign）接続設定（永続化）
+    # ボイスデザイン（VoiceDesign）接続設定（永続化）
     "vd_host":      "localhost",   # VoiceDesign用Gradioアプリのホスト/IP
     "vd_port":      7861,          # VoiceDesign用Gradioアプリのポート（Irodori-TTSの推奨値）
     # 接続の共通設定
@@ -3242,7 +3242,7 @@ def get_api_config():
         "tts_host":        settings.get("tts_host", "localhost"),
         "tts_port":        settings.get("tts_port", 7860),
         "tts_api_url":     TTS_API_URL,   # 現在実際に使用中のURL
-        # 声をデザイン（VoiceDesign）設定
+        # ボイスデザイン（VoiceDesign）設定
         "vd_host":         settings.get("vd_host", "localhost"),
         "vd_port":         settings.get("vd_port", 7861),
         "vd_api_url":      VD_API_URL,
@@ -3265,7 +3265,7 @@ def post_api_config(data: dict = Body(...)):
     settings = load_settings()
     changed  = []
 
-    # ── 接続の共通設定（変わったら LLM / TTS / 声をデザイン のURLをすべて作り直す）──
+    # ── 接続の共通設定（変わったら LLM / TTS / ボイスデザイン のURLをすべて作り直す）──
     conn_changed = "localhost_as_ipv4" in data
     if conn_changed:
         settings["localhost_as_ipv4"] = bool(data["localhost_as_ipv4"])
@@ -3303,7 +3303,7 @@ def post_api_config(data: dict = Body(...)):
         changed.append("tts")
         print(f"[API Config] TTS -> {TTS_API_URL}")
 
-    # ── 声をデザイン（VoiceDesign）設定 ──
+    # ── ボイスデザイン（VoiceDesign）設定 ──
     vd_fields = ["vd_host", "vd_port"]
     if any(f in data for f in vd_fields) or conn_changed:
         for f in vd_fields:
@@ -3603,7 +3603,7 @@ def llm_unload(target: LlmAdminTarget | None = None):
 
 
 # ══════════════════════════════════════════════════════
-#  声をデザイン (VoiceDesign) API
+#  ボイスデザイン (VoiceDesign) API
 #  Irodori-TTS の gradio_app_voicedesign.py（caption入力あり）に接続する。
 #  会話用TTS (tts_client) とは別のクライアント・別のロックで動かす。
 #  参照音声 (ref_wavs) は常に空で送る: 生成音声を参照にした再生成は品質が落ちるため。
@@ -3611,10 +3611,12 @@ def llm_unload(target: LlmAdminTarget | None = None):
 
 VD_WORK_DIR     = "voice_design_work"    # 候補音声の一時置き場
 VD_RECIPES_FILE = "voice_designs.json"   # 保存したレシピ（共通ライブラリ）
+VD_EXTRA_CAPTIONS_FILE = "voice_design_captions.json"   # 保存した追加キャプション（レシピとは別）
 VD_ENDPOINT     = "/_run_generation"
 VD_TEXT_MAX_CHARS    = 400
 VD_CAPTION_MAX_CHARS = 400
 VD_RECIPE_MAX        = 200
+VD_EXTRA_CAPTION_MAX = 200   # 保存できる追加キャプションの件数
 _VD_SESSION_RE = re.compile(r"[0-9a-f]{32}")
 _VD_FILE_RE    = re.compile(r"[0-9a-z_]{1,48}\.wav")
 
@@ -3622,6 +3624,7 @@ vd_client = None
 vd_client_url = ""
 vd_generate_lock = threading.Lock()   # Gradio Client はスレッドセーフでないため排他制御
 _vd_recipes_lock = threading.Lock()
+_vd_extras_lock = threading.Lock()
 
 
 def get_vd_client(refresh: bool = False):
@@ -4031,20 +4034,25 @@ def _vd_load_recipes() -> list:
         raise HTTPException(500, "レシピファイルを読み込めませんでした（voice_designs.json を確認してください）")
 
 
-def _vd_save_recipes(recipes: list) -> None:
+def _vd_write_json_atomic(path: str, payload: dict) -> None:
     """アトミック書き込み（一時ファイルに書いてからリネーム）。"""
-    dir_name = os.path.dirname(os.path.abspath(VD_RECIPES_FILE))
-    fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp", prefix="voice_designs_")
+    dir_name = os.path.dirname(os.path.abspath(path))
+    prefix = os.path.splitext(os.path.basename(path))[0] + "_"
+    fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp", prefix=prefix)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump({"recipes": recipes}, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, VD_RECIPES_FILE)
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, path)
     except Exception:
         try:
             os.unlink(tmp_path)
         except OSError:
             pass
         raise
+
+
+def _vd_save_recipes(recipes: list) -> None:
+    _vd_write_json_atomic(VD_RECIPES_FILE, {"recipes": recipes})
 
 
 def _vd_clean_recipe(data: dict) -> dict:
@@ -4055,8 +4063,10 @@ def _vd_clean_recipe(data: dict) -> dict:
     if not 1 <= len(name) <= 60:
         raise HTTPException(400, "レシピ名は1〜60文字で入力してください")
     caption = str(data.get("caption") or "").strip()
+    extra_caption = str(data.get("extra_caption") or "").strip()
     text    = str(data.get("text") or "").strip()
-    if len(caption) > VD_CAPTION_MAX_CHARS or len(text) > VD_TEXT_MAX_CHARS:
+    if (len(caption) > VD_CAPTION_MAX_CHARS or len(extra_caption) > VD_CAPTION_MAX_CHARS
+            or len(text) > VD_TEXT_MAX_CHARS):
         raise HTTPException(400, "captionまたはセリフが長すぎます")
     params = data.get("params")
     if not isinstance(params, dict) or len(json.dumps(params, ensure_ascii=False)) > 4000:
@@ -4069,7 +4079,7 @@ def _vd_clean_recipe(data: dict) -> dict:
         "name":           name,
         "params":         params,
         "caption":        caption,
-        "caption_edited": bool(data.get("caption_edited")),
+        "extra_caption":  extra_caption,
         "text":           text,
         "texts":          texts,
         "text_category":  category if category in VD_TEXT_CATEGORIES else VD_TEXT_DEFAULT_CATEGORY,
@@ -4099,6 +4109,7 @@ def voice_design_save_recipe(data: dict = Body(...)):
         if any(r.get("name") == recipe["name"] and r is not existing for r in recipes):
             raise HTTPException(409, "同じ名前のレシピがあります")
         if existing is not None:
+            existing.pop("caption_edited", None)   # 旧形式の項目（追加キャプションに置き換え）
             existing.update(recipe)
             existing["updated_at"] = now
             saved = existing
@@ -4119,6 +4130,63 @@ def voice_design_delete_recipe(recipe_id: str):
         if len(remaining) == len(recipes):
             raise HTTPException(404, "レシピが見つかりません")
         _vd_save_recipes(remaining)
+    return {"ok": True}
+
+
+# ── 追加キャプション（レシピとは別に保存し、呼び出せるようにする）─────────────
+
+def _vd_load_extra_captions() -> list:
+    if not os.path.exists(VD_EXTRA_CAPTIONS_FILE):
+        return []
+    try:
+        with open(VD_EXTRA_CAPTIONS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        items = data.get("items", []) if isinstance(data, dict) else []
+        return [x for x in items if isinstance(x, dict) and x.get("id") and isinstance(x.get("text"), str)]
+    except Exception as e:
+        print(f"[VoiceDesign] 追加キャプションの読み込みに失敗しました: {e}")
+        raise HTTPException(500, "追加キャプションを読み込めませんでした（voice_design_captions.json を確認してください）")
+
+
+@app.get("/voice_design/extra_captions")
+def voice_design_extra_captions():
+    with _vd_extras_lock:
+        items = _vd_load_extra_captions()
+    items.sort(key=lambda x: str(x.get("updated_at") or ""), reverse=True)
+    return {"items": items}
+
+
+@app.post("/voice_design/extra_captions")
+def voice_design_save_extra_caption(data: dict = Body(...)):
+    """追加キャプションを保存する。同じ本文がすでにあれば、更新日時だけ新しくする。"""
+    text = str(data.get("text") or "").strip()
+    if not text:
+        raise HTTPException(400, "追加キャプションが空です")
+    if len(text) > VD_CAPTION_MAX_CHARS:
+        raise HTTPException(400, f"追加キャプションは{VD_CAPTION_MAX_CHARS}文字以内にしてください")
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    with _vd_extras_lock:
+        items = _vd_load_extra_captions()
+        saved = next((x for x in items if x.get("text") == text), None)
+        if saved is not None:
+            saved["updated_at"] = now
+        else:
+            if len(items) >= VD_EXTRA_CAPTION_MAX:
+                raise HTTPException(400, f"追加キャプションは{VD_EXTRA_CAPTION_MAX}件まで保存できます")
+            saved = {"id": uuid.uuid4().hex, "text": text, "created_at": now, "updated_at": now}
+            items.append(saved)
+        _vd_write_json_atomic(VD_EXTRA_CAPTIONS_FILE, {"items": items})
+    return {"item": saved}
+
+
+@app.delete("/voice_design/extra_captions/{item_id}")
+def voice_design_delete_extra_caption(item_id: str):
+    with _vd_extras_lock:
+        items = _vd_load_extra_captions()
+        remaining = [x for x in items if x.get("id") != item_id]
+        if len(remaining) == len(items):
+            raise HTTPException(404, "追加キャプションが見つかりません")
+        _vd_write_json_atomic(VD_EXTRA_CAPTIONS_FILE, {"items": remaining})
     return {"ok": True}
 
 
