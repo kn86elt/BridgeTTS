@@ -982,7 +982,7 @@ body { background: var(--body-gradient); }
 #vd-backdrop.open { display: flex; }
 #vd-modal {
   width: min(760px, 95vw);
-  max-height: 92vh;
+  height: 92vh; max-height: 92vh;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -1008,9 +1008,27 @@ body { background: var(--body-gradient); }
 }
 #vd-close:hover { color: var(--text); }
 #vd-body {
-  flex: 1; overflow-y: auto; padding: 18px;
+  flex: 1; min-height: 0; overflow: hidden;
+  display: flex; flex-direction: column;
+}
+.vd-pane {
+  min-height: 0; overflow-y: auto; padding: 18px;
   display: flex; flex-direction: column; gap: 16px;
 }
+#vd-pane-top { flex: 0 0 auto; height: 50%; }
+#vd-pane-bottom { flex: 1 1 0; }
+#vd-splitter {
+  flex: 0 0 9px; position: relative; cursor: row-resize; touch-action: none;
+  background: var(--header-bg);
+  border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+}
+#vd-splitter::after {
+  content: ''; position: absolute; left: 50%; top: 50%;
+  width: 44px; height: 3px; border-radius: 2px;
+  background: var(--muted); transform: translate(-50%, -50%);
+}
+#vd-splitter:hover::after, #vd-splitter:focus-visible::after, #vd-splitter.dragging::after { background: var(--accent); }
+#vd-splitter:focus-visible { outline: none; }
 #vd-footer {
   display: flex; justify-content: flex-end; gap: 8px;
   padding: 12px 18px; border-top: 1px solid var(--border); flex-shrink: 0;
@@ -1029,6 +1047,7 @@ body { background: var(--body-gradient); }
   font-family: 'Noto Sans JP', sans-serif; font-size: 12px;
   background: transparent; color: var(--muted);
   border: 1px solid var(--border); cursor: pointer; transition: all .15s;
+  user-select: none;
 }
 .vd-chip:hover { border-color: var(--accent); color: var(--text); }
 .vd-chip.active { background: var(--accent); border-color: var(--accent); color: #000; }
@@ -1051,6 +1070,8 @@ body { background: var(--body-gradient); }
 }
 .vd-caption-view.empty { color: var(--muted); }
 .vd-note.vd-over { color: #f59e0b; }
+.vd-check { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
+.vd-check input { margin: 0; accent-color: var(--accent); }
 #vd-text { min-height: 110px; font-family: 'Noto Sans JP', sans-serif; font-size: 13px; }
 .vd-emoji-grid { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
 .vd-emoji-btn {
@@ -2044,6 +2065,7 @@ body.no-bubble-blur .msg-bubble {
       <button type="button" id="vd-close">✕</button>
     </div>
     <div id="vd-body">
+      <div class="vd-pane" id="vd-pane-top">
       <div class="ce-field">
         <div class="vd-row">
           <span class="vd-status" id="vd-status" role="status" style="flex:1">接続を確認中...</span>
@@ -2097,10 +2119,6 @@ body.no-bubble-blur .msg-bubble {
           <span class="vd-param-name">距離感・声量</span>
           <div class="vd-chips" data-vd-group="distance" data-vd-mode="single"></div>
         </div>
-        <div class="vd-row" style="margin-top:8px">
-          <button type="button" class="ce-file-btn" id="vd-random" title="ロックした項目は残して、ほかの特徴をランダムに選び直します">🎲 ランダム</button>
-          <span class="vd-note" style="flex:1">項目はクリックするたびに 選択 → 🔒ロック → 解除 と切り替わります。ロックした項目はランダムでも変わりません。</span>
-        </div>
       </div>
 
       <div class="ce-field">
@@ -2116,6 +2134,10 @@ body.no-bubble-blur .msg-bubble {
         <div class="vd-caption-view" id="vd-caption"></div>
         <div class="vd-note" id="vd-caption-note"></div>
       </div>
+      </div>
+      <div id="vd-splitter" role="separator" aria-orientation="horizontal" tabindex="0"
+           title="ドラッグで上下の広さを変えられます（↑↓キーでも動かせます）"></div>
+      <div class="vd-pane" id="vd-pane-bottom">
 
       <div class="ce-field">
         <label class="ce-label">セリフ</label>
@@ -2124,6 +2146,8 @@ body.no-bubble-blur .msg-bubble {
         <textarea class="ce-textarea" id="vd-text" maxlength="400" placeholder="声の特徴に合った長めのセリフを入力します（目安: 読み上げて20〜30秒、100〜130文字程度）。"></textarea>
         <div class="vd-row">
           <button type="button" class="ce-file-btn" id="vd-test" title="今の内容で1本だけ生成して試聴します">▶ テスト</button>
+          <button type="button" class="ce-file-btn" id="vd-random" title="声の特徴をランダムに選び直します（追加キャプションは変わりません）。&#10;項目をダブルクリックすると🔒ロックでき、ロックした項目はランダムでも変わりません。もう一度ダブルクリックするか、クリックしてOFFにすると解除されます。&#10;声の高さ・話す速さは、スライダー横の🔓ボタンでロックします。">🎲 ランダム</button>
+          <label class="vd-note vd-check" title="チェックすると、ランダムで選び直すたびにテスト音声を生成します"><input type="checkbox" id="vd-random-autotest">自動テスト</label>
           <button type="button" class="ce-file-btn" id="vd-suggest" title="接続中のLLMに、captionに合うセリフを作らせます">✨ セリフ自動生成</button>
           <span class="vd-note" id="vd-text-count" style="flex:1; text-align:right"></span>
         </div>
@@ -2188,6 +2212,7 @@ body.no-bubble-blur .msg-bubble {
         </div>
         <div id="vd-candidates"></div>
         <div class="vd-note">「参照音声としてテスト」で、会話用サーバーでの聞こえ方を確かめられます。気に入った候補は「WAVを保存」で保存し、キャラクターの編集画面で音声ファイルとして選択してください。</div>
+      </div>
       </div>
     </div>
     <div id="vd-footer">
@@ -8778,7 +8803,7 @@ function vdRenderParams() {
       chip.classList.toggle('active', active);
       chip.classList.toggle('locked', locked);
       chip.textContent = (locked ? '🔒 ' : '') + chip.dataset.label;
-      chip.title = locked ? 'ロック中（ランダムでも変わりません）。クリックで解除' : (active ? 'もう一度クリックでロック' : '');
+      chip.title = locked ? 'ロック中（ランダムでも変わりません）。ダブルクリックで解除' : '';
     });
   });
   $vdPitch.value = String(vdParams.pitch);
@@ -8798,27 +8823,45 @@ function vdParamsChanged() {
   vdUpdateCaption();
 }
 
-// チップのクリック: 選択 → 🔒ロック → 解除 の順に切り替える
-function vdClickChip(group, multi, value) {
+let vdChipBefore = null;   // ダブルクリック判定用: 1回目のクリック前の状態 { group, value, param, lock }
+
+// チップのクリック: 選択/解除だけを切り替える（ロックはダブルクリック）。解除するとロックも外れる。
+function vdClickChip(group, multi, value, e) {
+  if (e && e.detail >= 2) return;   // ダブルクリックの2回目のクリックは無視（結果は dblclick で決める）
+  vdChipBefore = {
+    group, value,
+    param: JSON.parse(JSON.stringify(vdParams[group])),
+    lock: JSON.parse(JSON.stringify(vdLocks[group])),
+  };
   if (multi) {
     const list = vdParams[group];
-    const locks = vdLocks[group];
-    if (!list.includes(value)) {
-      vdParams[group] = list.concat([value]);
-    } else if (!locks.includes(value)) {
-      vdLocks[group] = locks.concat([value]);
-    } else {
+    if (list.includes(value)) {
       vdParams[group] = list.filter(v => v !== value);
-      vdLocks[group] = locks.filter(v => v !== value);
+      vdLocks[group] = vdLocks[group].filter(v => v !== value);
+    } else {
+      vdParams[group] = list.concat([value]);
     }
-  } else if (vdParams[group] !== value) {
-    vdParams[group] = value;      // 別の項目を選んだら、前の項目のロックは外れる
-    vdLocks[group] = false;
-  } else if (!vdLocks[group]) {
-    vdLocks[group] = true;
   } else {
+    vdParams[group] = vdParams[group] === value ? '' : value;   // 選択中の項目を押すと「指定なし」に戻る
     vdLocks[group] = false;
-    vdParams[group] = '';         // 解除すると「指定なし」に戻る
+  }
+  vdParamsChanged();
+}
+
+// チップのダブルクリック: 1回目のクリックを取り消してから、ロックしていなければ選択してロック、ロック中なら解除（選択は残す）
+function vdDblClickChip(group, multi, value) {
+  const before = vdChipBefore && vdChipBefore.group === group && vdChipBefore.value === value ? vdChipBefore : null;
+  vdChipBefore = null;
+  if (before) { vdParams[group] = before.param; vdLocks[group] = before.lock; }
+  if (multi) {
+    const locks = vdLocks[group].filter(v => v !== value);
+    const wasLocked = locks.length !== vdLocks[group].length;
+    if (!vdParams[group].includes(value)) vdParams[group] = vdParams[group].concat([value]);
+    vdLocks[group] = wasLocked ? locks : locks.concat([value]);
+  } else {
+    const wasLocked = vdParams[group] === value && vdLocks[group];
+    vdParams[group] = value;
+    vdLocks[group] = !wasLocked;
   }
   vdParamsChanged();
 }
@@ -8956,7 +8999,8 @@ function vdInit() {
       chip.dataset.value = value;
       chip.dataset.label = label;
       chip.textContent = label;
-      chip.addEventListener('click', () => vdClickChip(group, multi, value));
+      chip.addEventListener('click', e => vdClickChip(group, multi, value, e));
+      chip.addEventListener('dblclick', () => vdDblClickChip(group, multi, value));
       box.appendChild(chip);
     });
   });
@@ -9459,6 +9503,63 @@ function vdResetInputs() {
   vdUpdateTextCount();
 }
 
+// ── 上下分割: 分割線をドラッグ（または↑↓キー）して、上段（声の特徴）と下段（セリフ・候補）の広さを変える ──
+const VD_SPLIT_KEY = 'bridgetts_vd_split';   // 分割位置（上段の割合）。このブラウザだけの保存
+const VD_PANE_MIN = 120;
+const $vdBody     = document.getElementById('vd-body');
+const $vdPaneTop  = document.getElementById('vd-pane-top');
+const $vdSplitter = document.getElementById('vd-splitter');
+let vdSplitRatio = 0.5;
+try {
+  const saved = parseFloat(localStorage.getItem(VD_SPLIT_KEY));
+  if (saved > 0 && saved < 1) vdSplitRatio = saved;
+} catch (_) { /* 保存できない環境では半分ずつ */ }
+
+function vdApplySplit() {
+  const total = $vdBody.clientHeight - $vdSplitter.offsetHeight;
+  if (total <= 0) return;
+  const max = Math.max(VD_PANE_MIN, total - VD_PANE_MIN);
+  $vdPaneTop.style.height = `${Math.min(max, Math.max(VD_PANE_MIN, Math.round(total * vdSplitRatio)))}px`;
+}
+
+function vdSetSplit(topHeight) {
+  const total = $vdBody.clientHeight - $vdSplitter.offsetHeight;
+  if (total <= 0) return;
+  vdSplitRatio = Math.min(1, Math.max(0, topHeight / total));
+  vdApplySplit();
+}
+
+function vdSaveSplit() {
+  try { localStorage.setItem(VD_SPLIT_KEY, String(vdSplitRatio)); } catch (_) { /* 保存できなくても動作は続ける */ }
+}
+
+$vdSplitter.addEventListener('pointerdown', e => {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  const startY = e.clientY;
+  const startH = $vdPaneTop.offsetHeight;
+  $vdSplitter.setPointerCapture(e.pointerId);
+  $vdSplitter.classList.add('dragging');
+  const move = ev => vdSetSplit(startH + ev.clientY - startY);
+  const up = () => {
+    $vdSplitter.removeEventListener('pointermove', move);
+    $vdSplitter.removeEventListener('pointerup', up);
+    $vdSplitter.removeEventListener('pointercancel', up);
+    $vdSplitter.classList.remove('dragging');
+    vdSaveSplit();
+  };
+  $vdSplitter.addEventListener('pointermove', move);
+  $vdSplitter.addEventListener('pointerup', up);
+  $vdSplitter.addEventListener('pointercancel', up);
+});
+$vdSplitter.addEventListener('keydown', e => {
+  if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+  e.preventDefault();
+  vdSetSplit($vdPaneTop.offsetHeight + (e.key === 'ArrowUp' ? -40 : 40));
+  vdSaveSplit();
+});
+window.addEventListener('resize', () => { if ($vdBackdrop.classList.contains('open')) vdApplySplit(); });
+
 function vdStopAudio() {
   document.querySelectorAll('#vd-modal audio').forEach(a => a.pause());
 }
@@ -9469,6 +9570,7 @@ function openVoiceDesignModal() {
   vdUsedServer = false;
   $vdProgress.textContent = '';
   $vdBackdrop.classList.add('open');
+  vdApplySplit();
   vdCheckStatus();
   vdLoadRecipes($vdRecipeSelect.value);
   vdLoadExtras($vdExtraSelect.value);
@@ -9512,7 +9614,14 @@ $vdExtra.addEventListener('input', vdUpdateCaption);
 document.getElementById('vd-extra-load').addEventListener('click', vdUseExtra);
 document.getElementById('vd-extra-save').addEventListener('click', vdSaveExtra);
 document.getElementById('vd-extra-delete').addEventListener('click', vdDeleteExtra);
-document.getElementById('vd-random').addEventListener('click', vdRandomize);
+const $vdRandomAutoTest = document.getElementById('vd-random-autotest');
+// ランダム: 選び直したあと、「自動テスト」がオンならテスト音声を生成する（自動テストはランダムボタンだけが対象）
+document.getElementById('vd-random').addEventListener('click', () => {
+  vdRandomize();
+  if (!$vdRandomAutoTest.checked) return;
+  if (vdBusy) { showErrorToast('生成中のため、自動テストは行いませんでした'); return; }
+  vdTest();
+});
 $vdPitchLock.addEventListener('click', () => { vdLocks.pitch = !vdLocks.pitch; vdRenderParams(); });
 $vdSpeedLock.addEventListener('click', () => { vdLocks.speed = !vdLocks.speed; vdRenderParams(); });
 $vdText.addEventListener('input', vdUpdateTextCount);
