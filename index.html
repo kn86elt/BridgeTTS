@@ -6759,10 +6759,21 @@ function _ttsReadPlayAndWait(dataUrl) {
    ・PC / その他: window.innerHeight は正確。CSS 100dvh に任せれば十分なので
                   inline style 上書きは行わず、CSS 変数のみ更新する。
                   visualViewport.scroll はキーボード開閉対応のため iOS 限定。
+   ・iOS Safari はキーボード表示時にページ全体を上へスクロールして入力欄を見せる。
+     #app はすでに見えている高さに縮めているので、そのスクロールが残ると
+     ヘッダーとメッセージ欄が画面の上へ押し出される。そのため #app 内の入力中は
+     ページのスクロールを先頭に戻す（モーダルの入力欄では Safari の動きに任せる）。
 ══════════════════════════════ */
 (function _fixAppHeight() {
   const _isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+  function resetIOSScroll() {
+    const active = document.activeElement;
+    // モーダル（#app の外）の入力欄では、Safari のスクロールで入力欄を見せたままにする
+    if (active && active !== document.body && !active.closest('#app')) return;
+    if (window.scrollY || window.scrollX) window.scrollTo(0, 0);
+  }
 
   function update() {
     const vv = window.visualViewport;
@@ -6773,6 +6784,7 @@ function _ttsReadPlayAndWait(dataUrl) {
     if (_isIOS) {
       const app = document.getElementById('app');
       if (app) app.style.height = h + 'px';
+      resetIOSScroll();
     }
   }
 
@@ -6784,6 +6796,17 @@ function _ttsReadPlayAndWait(dataUrl) {
     if (_isIOS) {
       window.visualViewport.addEventListener('scroll', update);
     }
+  }
+  if (_isIOS) {
+    // 入力欄をタップした直後はキーボードが出てくる途中なので、少し待ってからもう一度合わせる
+    document.addEventListener('focusin', e => {
+      const t = e.target;
+      if (!t || !t.matches || !t.matches('input, textarea, select, [contenteditable]')) return;
+      setTimeout(update, 300);
+      setTimeout(update, 600);
+    });
+    // キーボードを閉じたあとも合わせ直す
+    document.addEventListener('focusout', () => setTimeout(update, 300));
   }
 })();
 
