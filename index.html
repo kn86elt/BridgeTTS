@@ -982,7 +982,13 @@ body { background: var(--body-gradient); }
 #vd-backdrop.open { display: flex; }
 #vd-modal {
   width: min(760px, 95vw);
-  height: 92vh; max-height: 92vh;
+  /* 実際に見えている高さに合わせる（スマホでタイトルバー・フッターがはみ出さないように）。
+     --app-h は iOS 補正込みの 1% 高さ。更新が遅れても 92dvh を超えないよう小さい方を使う（dvh 非対応なら前の行が効く） */
+  height: 92vh;
+  height: calc(var(--app-h, 1vh) * 92);
+  height: min(calc(var(--app-h, 1vh) * 92), 92dvh);
+  max-height: 92vh;
+  max-height: min(calc(var(--app-h, 1vh) * 92), 92dvh);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -9559,6 +9565,10 @@ $vdSplitter.addEventListener('keydown', e => {
   vdSaveSplit();
 });
 window.addEventListener('resize', () => { if ($vdBackdrop.classList.contains('open')) vdApplySplit(); });
+// スマホのキーボード開閉などで見えている高さが変わったときも分割を合わせ直す
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', () => { if ($vdBackdrop.classList.contains('open')) vdApplySplit(); });
+}
 
 function vdStopAudio() {
   document.querySelectorAll('#vd-modal audio').forEach(a => a.pause());
